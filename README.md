@@ -30,26 +30,27 @@ Effect を 1 つ追加すれば、質感の選択肢が 1 つ増える。
 
 Framework の骨格と最初の表現が動いている。
 
-| レイヤー | 内容 |
-|---|---|
-| **Core** | Canvas, Renderer, Scene, Camera, AnimationLoop, App |
-| **Generator** | `Line`, `SineWave` |
-| **Modifier** | 設計済み（未実装） |
-| **Effect** | インターフェース定義済み |
-| **Composition** | `SineWaveBasic` — ゆっくり動く正弦波 |
-| **Audio** | スタブ（NullAudioEngine） |
+| レイヤー        | 内容                                                                               |
+| --------------- | ---------------------------------------------------------------------------------- |
+| **Core**        | Canvas, Renderer, Scene, Camera, AnimationLoop, App                                |
+| **Generator**   | `Line`, `SineWave`, `Waveform`                                                     |
+| **Modifier**    | 設計済み（未実装）                                                                 |
+| **Effect**      | `Grain`, `Blur`, `PaletteMap`, `RGBSplit`, `Glitch`, `Warp`, `ScanDrift`, `Repeat` |
+| **Composition** | `SineWaveBasic` — ゆっくり動く正弦波                                               |
+| **Audio**       | MP3 / WAV再生、周波数帯・Beat・波形解析                                            |
+| **GUI**         | Generator、音反応量、Effect Pipelineをリアルタイム操作                             |
 
 ---
 
 ## 設計思想
 
-| 原則 | 内容 |
-|---|---|
-| **分離** | Generator は素材、Modifier は形、Effect は質感 — 各レイヤーは 1 つの責務 |
-| **組み合わせ** | 部品を増やし、Composition で創発させる |
-| **Audio-ready** | すべてのパラメータは Audio から上書き可能（統合は後から） |
-| **小さく実験** | 1 部品ずつ追加し、RESEARCH.md に記録する |
-| **数学的美しさ** | 意図的な波形・パターンを優先する |
+| 原則             | 内容                                                                     |
+| ---------------- | ------------------------------------------------------------------------ |
+| **分離**         | Generator は素材、Modifier は形、Effect は質感 — 各レイヤーは 1 つの責務 |
+| **組み合わせ**   | 部品を増やし、Composition で創発させる                                   |
+| **Audio-ready**  | すべてのパラメータは Audio から上書き可能（統合は後から）                |
+| **小さく実験**   | 1 部品ずつ追加し、RESEARCH.md に記録する                                 |
+| **数学的美しさ** | 意図的な波形・パターンを優先する                                         |
 
 詳細は [PROJECT.md](./PROJECT.md) を参照。
 
@@ -57,12 +58,12 @@ Framework の骨格と最初の表現が動いている。
 
 ## ドキュメント
 
-| ファイル | 内容 |
-|---|---|
-| [PROJECT.md](./PROJECT.md) | プロジェクトの目的・設計思想・ビジョン |
-| [ROADMAP.md](./ROADMAP.md) | 表現ライブラリの育成計画 |
-| [RESEARCH.md](./RESEARCH.md) | 表現研究ノート（参考作品の分析） |
-| [AI_RULES.md](./AI_RULES.md) | AI 開発ルール |
+| ファイル                     | 内容                                   |
+| ---------------------------- | -------------------------------------- |
+| [PROJECT.md](./PROJECT.md)   | プロジェクトの目的・設計思想・ビジョン |
+| [ROADMAP.md](./ROADMAP.md)   | 表現ライブラリの育成計画               |
+| [RESEARCH.md](./RESEARCH.md) | 表現研究ノート（参考作品の分析）       |
+| [AI_RULES.md](./AI_RULES.md) | AI 開発ルール                          |
 
 ---
 

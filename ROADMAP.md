@@ -33,15 +33,15 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 
 - [x] 全体音量を解析する
 - [x] Bass / Mid / Treble を解析する
-- [ ] 波形データを取得する
+- [x] 波形データを取得する
 - [x] Beat を検出する
 - [x] 解析値を確認できるモニターを追加する
 
 ## Phase 3 — SineWave 音楽連携
 
-- [ ] SineWave のパラメーター API を追加する
+- [x] SineWave のパラメーター API を追加する
 - [x] 音声特徴を SineWave へマッピングする
-- [ ] 反応量、範囲、スムージングを調整可能にする
+- [x] 反応量、範囲、スムージングを調整可能にする
 - [x] 無音・停止時の動作を整える
 
 ここまでを最初の MVP とする。
@@ -50,18 +50,18 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 
 ## Phase 4 — GUI
 
-- [ ] 開閉可能な GUI 基盤を追加する
-- [ ] Audio パネルを作る
-- [ ] Generator パネルを作る
+- [x] 開閉可能な GUI 基盤を追加する
+- [x] Audio パネルを作る
+- [x] Generator パネルを作る
 - [ ] Modifier パネルを作る
-- [ ] Effect パネルを作る
+- [x] Effect パネルを作る
 - [ ] プリセットを保存・復元する
 
 ## Phase 5 — 表現ライブラリ
 
 ### Generator
 
-- [ ] Waveform
+- [x] Waveform
 - [ ] Grid
 - [ ] Bitmap
 - [ ] Mosaic
@@ -78,23 +78,26 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 
 ### Effect
 
-- [ ] Grain
-- [ ] Blur
-- [ ] PaletteMap
-- [ ] Glitch
+- [x] Grain
+- [x] Blur
+- [x] PaletteMap
+- [x] Glitch
 - [ ] Halftone
 - [ ] Glass
-- [ ] RGBSplit
+- [x] RGBSplit
 - [ ] Bloom
+- [x] Warp
+- [x] ScanDrift
+- [x] Repeat
 
 表現の実装優先度は `Grain → Blur → PaletteMap → Repeat → Warp → ScanDrift → Glitch → PixelStretch → Glass` とする。
 
 ## Phase 6 — Effect Pipeline
 
-- [ ] EffectComposer を導入する
-- [ ] Effect をリアルタイムに有効・無効化する
-- [ ] Effect の適用順序を変更可能にする
-- [ ] Effect パラメーターへ音声値を接続する
+- [x] EffectComposer を導入する
+- [x] Effect をリアルタイムに有効・無効化する
+- [x] Effect の適用順序を変更可能にする
+- [x] Effect パラメーターへ音声値を接続する
 
 ## Phase 7 — Composition
 
