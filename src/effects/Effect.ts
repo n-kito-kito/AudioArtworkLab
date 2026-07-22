@@ -1,29 +1,14 @@
-import type * as THREE from 'three';
+import type { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import type { AudioParameters } from '../audio/AudioEngine';
 
-export interface EffectContext {
-  scene: THREE.Scene;
-  camera: THREE.Camera;
-  renderer: THREE.WebGLRenderer;
-}
+export type AudioSource = 'none' | 'volume' | 'bass' | 'mid' | 'treble' | 'beat';
 
 export interface Effect {
-  enable(): void;
-  disable(): void;
-  render(): void;
+  readonly name: string;
+  readonly pass: ShaderPass;
+  enabled: boolean;
+  intensity: number;
+  audioSource: AudioSource;
+  update(audio: AudioParameters, elapsed: number): void;
   dispose(): void;
-}
-
-export abstract class BaseEffect implements Effect {
-  protected enabled = false;
-
-  enable(): void {
-    this.enabled = true;
-  }
-
-  disable(): void {
-    this.enabled = false;
-  }
-
-  abstract render(): void;
-  abstract dispose(): void;
 }

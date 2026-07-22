@@ -1,6 +1,7 @@
 import type * as THREE from 'three';
 import type { AudioEngine } from '../audio/AudioEngine';
 import type { Effect } from '../effects/Effect';
+import { EffectPipeline } from '../effects/EffectPipeline';
 import type { Generator } from '../generators/Generator';
 
 export interface CompositionContext {
@@ -16,6 +17,7 @@ export interface Composition {
   setup(context: CompositionContext): void;
   update(elapsed: number): void;
   render(): void;
+  resize(): void;
   dispose(): void;
 }
 
@@ -26,6 +28,7 @@ export abstract class BaseComposition implements Composition {
   protected context: CompositionContext | null = null;
   protected generators: Generator[] = [];
   protected effects: Effect[] = [];
+  private pipeline: EffectPipeline | null = null;
 
   setup(context: CompositionContext): void {
     this.context = context;
@@ -36,23 +39,39 @@ export abstract class BaseComposition implements Composition {
         audioEngine: context.audioEngine,
       });
     }
+
+    this.pipeline = new EffectPipeline(
+      context.renderer,
+      context.scene,
+      context.camera,
+      this.effects,
+    );
   }
 
   update(elapsed: number): void {
     for (const generator of this.generators) {
       generator.update(elapsed);
     }
+
+    this.pipeline?.update(this.context?.audioEngine.getParameters() ?? {}, elapsed);
   }
 
   render(): void {
     if (!this.context) return;
 
-    const { scene, camera, renderer } = this.context;
-    renderer.render(scene, camera);
+    this.pipeline?.render();
+  }
 
-    for (const effect of this.effects) {
-      effect.render();
-    }
+  resize(): void {
+    this.pipeline?.resize();
+  }
+
+  getEffects(): readonly Effect[] {
+    return this.effects;
+  }
+
+  moveEffect(effect: Effect, direction: -1 | 1): void {
+    this.pipeline?.move(effect, direction);
   }
 
   dispose(): void {
@@ -60,12 +79,11 @@ export abstract class BaseComposition implements Composition {
       generator.dispose();
     }
 
-    for (const effect of this.effects) {
-      effect.dispose();
-    }
+    this.pipeline?.dispose();
 
     this.generators = [];
     this.effects = [];
+    this.pipeline = null;
     this.context = null;
   }
 }

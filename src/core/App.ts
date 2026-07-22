@@ -47,6 +47,7 @@ export class App {
   private onResize = (): void => {
     this.camera.resize();
     this.renderer.resize();
+    this.composition.resize();
 
     if (!this.composition.animated) {
       this.composition.render();
