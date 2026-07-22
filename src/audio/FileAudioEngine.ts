@@ -15,6 +15,8 @@ export class FileAudioEngine implements AudioEngine {
   private objectUrl: string | null = null;
   private previousVolume = 0;
   private beat = 0;
+  private beatSensitivity = 0.08;
+  private waveform = new Float32Array(FFT_SIZE);
 
   constructor() {
     this.audio.preload = 'metadata';
@@ -72,6 +74,14 @@ export class FileAudioEngine implements AudioEngine {
     this.audio.volume = Math.min(Math.max(volume, 0), 1);
   }
 
+  setBeatSensitivity(value: number): void {
+    this.beatSensitivity = Math.min(Math.max(value, 0.01), 0.3);
+  }
+
+  setAnalysisSmoothing(value: number): void {
+    if (this.analyser) this.analyser.smoothingTimeConstant = Math.min(Math.max(value, 0), 0.99);
+  }
+
   get isLoaded(): boolean {
     return this.objectUrl !== null;
   }
@@ -105,7 +115,7 @@ export class FileAudioEngine implements AudioEngine {
 
     const volume = Math.min(Math.sqrt(sumSquares / this.timeData.length) * 2.5, 1);
     const onset = volume - this.previousVolume;
-    this.beat = onset > 0.08 && volume > 0.12 ? 1 : this.beat * 0.88;
+    this.beat = onset > this.beatSensitivity && volume > 0.12 ? 1 : this.beat * 0.88;
     this.previousVolume = volume;
 
     return {
@@ -116,6 +126,16 @@ export class FileAudioEngine implements AudioEngine {
       treble: this.getBandEnergy(...TREBLE_RANGE),
       beat: this.beat,
     };
+  }
+
+  getWaveform(): Float32Array {
+    if (!this.timeData) return this.waveform;
+
+    for (let index = 0; index < this.timeData.length; index++) {
+      this.waveform[index] = ((this.timeData[index] ?? 128) - 128) / 128;
+    }
+
+    return this.waveform;
   }
 
   dispose(): void {
@@ -130,6 +150,7 @@ export class FileAudioEngine implements AudioEngine {
     this.context = null;
     this.frequencyData = null;
     this.timeData = null;
+    this.waveform = new Float32Array(FFT_SIZE);
     this.releaseObjectUrl();
   }
 

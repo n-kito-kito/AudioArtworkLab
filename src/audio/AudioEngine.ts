@@ -12,5 +12,6 @@ export interface AudioParameters {
 
 export interface AudioEngine {
   getParameters(): AudioParameters;
+  getWaveform(): Float32Array;
   dispose(): void;
 }
