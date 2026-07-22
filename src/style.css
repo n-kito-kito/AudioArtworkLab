@@ -10,6 +10,8 @@ body {
   height: 100%;
   overflow: hidden;
   background: #000;
+  color: #f5f5f2;
+  font-family: 'SFMono-Regular', 'Roboto Mono', 'Courier New', monospace;
 }
 
 #app {
@@ -19,4 +21,179 @@ body {
 
 canvas {
   display: block;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.audio-panel {
+  --panel-border: rgb(255 255 255 / 18%);
+  position: fixed;
+  z-index: 10;
+  top: 24px;
+  left: 24px;
+  width: min(560px, calc(100vw - 48px));
+  padding: 14px 16px 16px;
+  border: 1px solid var(--panel-border);
+  background: rgb(8 8 10 / 76%);
+  backdrop-filter: blur(18px);
+  transition:
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.audio-panel.is-dragging {
+  border-color: #78d9ff;
+  background: rgb(14 35 44 / 88%);
+}
+
+.audio-panel__header,
+.audio-panel__transport,
+.audio-panel__lower,
+.audio-panel__meters {
+  display: flex;
+  align-items: center;
+}
+
+.audio-panel__header {
+  justify-content: space-between;
+  margin-bottom: 14px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+.audio-panel__status {
+  color: #8fdcff;
+}
+
+.audio-panel__status.is-error {
+  color: #ff8c8c;
+}
+
+.audio-panel__transport {
+  min-width: 0;
+  gap: 8px;
+}
+
+.audio-panel button,
+.audio-panel__file {
+  min-width: 62px;
+  padding: 7px 10px;
+  border: 1px solid var(--panel-border);
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.audio-panel button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.audio-panel__file input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.audio-panel__track {
+  flex: 1;
+  overflow: hidden;
+  color: rgb(255 255 255 / 68%);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-panel__time {
+  color: rgb(255 255 255 / 48%);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.audio-panel input[type='range'] {
+  height: 2px;
+  accent-color: #8fdcff;
+}
+
+.audio-panel__seek {
+  width: 100%;
+  margin: 14px 0 16px;
+}
+
+.audio-panel__lower {
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.audio-panel__volume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgb(255 255 255 / 55%);
+  font-size: 10px;
+}
+
+.audio-panel__volume input {
+  width: 80px;
+}
+
+.audio-panel__meters {
+  flex: 1;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.audio-panel__meters span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: rgb(255 255 255 / 45%);
+  font-size: 9px;
+}
+
+.audio-panel__meters i {
+  position: relative;
+  display: block;
+  width: 38px;
+  height: 3px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 12%);
+}
+
+.audio-panel__meters i::after {
+  position: absolute;
+  inset: 0;
+  background: #8fdcff;
+  content: '';
+  transform: scaleX(var(--level, 0));
+  transform-origin: left;
+}
+
+@media (width <= 640px) {
+  .audio-panel {
+    top: 12px;
+    left: 12px;
+    width: calc(100vw - 24px);
+  }
+
+  .audio-panel__meters span {
+    gap: 3px;
+  }
+
+  .audio-panel__meters i {
+    width: 22px;
+  }
+
+  .audio-panel__time,
+  .audio-panel__track {
+    display: none;
+  }
 }

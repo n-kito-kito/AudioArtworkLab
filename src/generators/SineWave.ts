@@ -7,6 +7,7 @@ const X_MAX = 1;
 
 export class SineWave implements Generator {
   private line: THREE.Line | null = null;
+  private material: THREE.LineBasicMaterial | null = null;
   private positions: Float32Array | null = null;
   private audioEngine: GeneratorContext['audioEngine'] | null = null;
 
@@ -20,9 +21,9 @@ export class SineWave implements Generator {
     const geometry = new THREE.BufferGeometry().setFromPoints(this.buildPoints(0));
     this.positions = geometry.attributes.position.array as Float32Array;
 
-    const material = new THREE.LineBasicMaterial({ color: 0xffffff });
+    this.material = new THREE.LineBasicMaterial({ color: 0xffffff });
 
-    this.line = new THREE.Line(geometry, material);
+    this.line = new THREE.Line(geometry, this.material);
     scene.add(this.line);
   }
 
@@ -30,9 +31,20 @@ export class SineWave implements Generator {
     if (!this.positions || !this.line) return;
 
     const audio = this.audioEngine?.getParameters();
-    const amplitude = audio?.amplitude ?? this.amplitude;
-    const frequency = audio?.frequency ?? this.frequency;
-    const speed = audio?.speed ?? this.speed;
+    const isAudioReactive = audio?.active === 1;
+    const amplitude = isAudioReactive
+      ? 0.18 + (audio.bass ?? 0) * 0.6 + (audio.beat ?? 0) * 0.12
+      : (audio?.amplitude ?? this.amplitude);
+    const frequency = isAudioReactive
+      ? 2 + (audio.mid ?? 0) * 8
+      : (audio?.frequency ?? this.frequency);
+    const speed = isAudioReactive ? 0.35 + (audio.volume ?? 0) * 2.5 : (audio?.speed ?? this.speed);
+
+    if (this.material) {
+      const hue = 0.55 + (audio?.treble ?? 0) * 0.28;
+      const lightness = isAudioReactive ? 0.62 + (audio.volume ?? 0) * 0.3 : 1;
+      this.material.color.setHSL(hue, isAudioReactive ? 0.85 : 0, lightness);
+    }
 
     const phase = elapsed * speed;
     const pointCount = SEGMENT_COUNT + 1;
@@ -72,5 +84,6 @@ export class SineWave implements Generator {
     this.line = null;
     this.positions = null;
     this.audioEngine = null;
+    this.material = null;
   }
 }

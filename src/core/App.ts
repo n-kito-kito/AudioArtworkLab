@@ -57,6 +57,7 @@ export class App {
     this.loop?.stop();
     window.removeEventListener('resize', this.onResize);
     this.composition.dispose();
+    this.audioEngine.dispose();
     this.renderer.dispose();
   }
 }
