@@ -43,6 +43,10 @@ export class AudioControls {
     this.root.remove();
   }
 
+  setVisible(visible: boolean): void {
+    this.root.hidden = !visible;
+  }
+
   private build(): void {
     const header = document.createElement('div');
     header.className = 'audio-panel__header';
