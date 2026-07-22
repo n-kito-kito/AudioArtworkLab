@@ -4,8 +4,9 @@ import { FileAudioEngine } from '../audio/FileAudioEngine';
 const formatTime = (seconds: number): string => {
   if (!Number.isFinite(seconds)) return '0:00';
   const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.floor(seconds % 60);
-  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+  return `${minutes}:${Math.floor(seconds % 60)
+    .toString()
+    .padStart(2, '0')}`;
 };
 
 export class AudioControls {
@@ -23,7 +24,7 @@ export class AudioControls {
 
   constructor(container: HTMLElement, engine: FileAudioEngine) {
     this.engine = engine;
-    this.root.className = 'audio-panel';
+    this.root.className = 'panel-section audio-panel';
     this.root.setAttribute('aria-label', 'Audio controls');
     this.build();
     container.appendChild(this.root);
@@ -43,45 +44,40 @@ export class AudioControls {
     this.root.remove();
   }
 
-  setVisible(visible: boolean): void {
-    this.root.hidden = !visible;
-  }
-
   private build(): void {
-    const header = document.createElement('div');
-    header.className = 'audio-panel__header';
-
-    const title = document.createElement('strong');
-    title.textContent = 'AUDIO ARTWORK LAB';
+    const heading = document.createElement('h2');
+    const icon = document.createElement('i');
+    icon.className = 'ph ph-speaker-high';
+    const title = document.createElement('span');
+    title.textContent = 'AUDIO';
     this.status.className = 'audio-panel__status';
     this.status.textContent = 'DROP MP3 / WAV';
-    header.append(title, this.status);
-
-    const transport = document.createElement('div');
-    transport.className = 'audio-panel__transport';
+    heading.append(icon, title, this.status);
 
     const fileLabel = document.createElement('label');
-    fileLabel.className = 'audio-panel__file';
-    fileLabel.textContent = 'LOAD';
+    fileLabel.className = 'audio-dropzone';
+    const uploadIcon = document.createElement('i');
+    uploadIcon.className = 'ph ph-upload-simple';
+    const uploadText = document.createElement('span');
+    uploadText.textContent = 'LOAD AUDIO FILE';
     this.fileInput.type = 'file';
     this.fileInput.accept = 'audio/*,.mp3,.wav';
     this.fileInput.addEventListener('change', this.onFileChange);
-    fileLabel.appendChild(this.fileInput);
-
-    this.playButton.type = 'button';
-    this.playButton.textContent = 'PLAY';
-    this.playButton.disabled = true;
-    this.playButton.addEventListener('click', this.onPlayToggle);
+    fileLabel.append(uploadIcon, uploadText, this.fileInput);
 
     this.trackName.className = 'audio-panel__track';
-    this.trackName.textContent = 'NO TRACK';
-
-    this.time.className = 'audio-panel__time';
+    this.trackName.textContent = 'NO TRACK LOADED';
+    const transport = document.createElement('div');
+    transport.className = 'audio-transport';
+    this.playButton.type = 'button';
+    this.playButton.className = 'transport-button';
+    this.playButton.setAttribute('aria-label', 'Play audio');
+    this.playButton.innerHTML = '<i class="ph ph-play"></i><span>PLAY</span>';
+    this.playButton.disabled = true;
+    this.playButton.addEventListener('click', this.onPlayToggle);
     this.time.textContent = '0:00 / 0:00';
+    transport.append(this.playButton, this.time);
 
-    transport.append(fileLabel, this.playButton, this.trackName, this.time);
-
-    this.seekInput.className = 'audio-panel__seek';
     this.seekInput.type = 'range';
     this.seekInput.min = '0';
     this.seekInput.max = '1';
@@ -89,47 +85,48 @@ export class AudioControls {
     this.seekInput.value = '0';
     this.seekInput.disabled = true;
     this.seekInput.setAttribute('aria-label', 'Playback position');
-    this.seekInput.addEventListener('input', this.onSeek);
+    this.seekInput.addEventListener('input', () => this.engine.seek(Number(this.seekInput.value)));
 
-    const lower = document.createElement('div');
-    lower.className = 'audio-panel__lower';
-    lower.appendChild(this.buildVolume());
-    lower.appendChild(this.buildMeters());
-
-    this.root.append(header, transport, this.seekInput, lower);
-  }
-
-  private buildVolume(): HTMLElement {
-    const label = document.createElement('label');
-    label.className = 'audio-panel__volume';
-    label.textContent = 'VOL';
-
-    const input = document.createElement('input');
-    input.type = 'range';
-    input.min = '0';
-    input.max = '1';
-    input.step = '0.01';
-    input.value = '0.8';
-    input.setAttribute('aria-label', 'Volume');
-    input.addEventListener('input', () => this.engine.setVolume(Number(input.value)));
-    this.engine.setVolume(Number(input.value));
-    label.appendChild(input);
-    return label;
+    const volume = document.createElement('label');
+    volume.className = 'control-row control-row--range';
+    volume.innerHTML = '<span>Volume</span><output>80%</output>';
+    const volumeInput = document.createElement('input');
+    volumeInput.type = 'range';
+    volumeInput.min = '0';
+    volumeInput.max = '1';
+    volumeInput.step = '0.01';
+    volumeInput.value = '0.8';
+    volumeInput.setAttribute('aria-label', 'Volume');
+    volumeInput.addEventListener('input', () => {
+      this.engine.setVolume(Number(volumeInput.value));
+      volume.querySelector('output')!.textContent =
+        `${Math.round(Number(volumeInput.value) * 100)}%`;
+    });
+    this.engine.setVolume(0.8);
+    volume.append(volumeInput);
+    this.root.append(
+      heading,
+      fileLabel,
+      this.trackName,
+      transport,
+      this.seekInput,
+      volume,
+      this.buildMeters(),
+    );
   }
 
   private buildMeters(): HTMLElement {
     const group = document.createElement('div');
-    group.className = 'audio-panel__meters';
-
-    for (const key of ['volume', 'bass', 'mid', 'treble'] as const) {
-      const meter = document.createElement('span');
-      const value = document.createElement('i');
-      meter.textContent = key === 'volume' ? 'LEVEL' : key.toUpperCase();
-      meter.appendChild(value);
-      group.appendChild(meter);
-      this.meters.set(key, value);
+    group.className = 'audio-meters';
+    for (const key of ['bass', 'mid', 'treble'] as const) {
+      const meter = document.createElement('div');
+      const label = document.createElement('span');
+      label.textContent = key.toUpperCase();
+      const track = document.createElement('i');
+      meter.append(label, track);
+      group.append(meter);
+      this.meters.set(key, track);
     }
-
     return group;
   }
 
@@ -139,18 +136,8 @@ export class AudioControls {
   };
 
   private readonly onPlayToggle = (): void => {
-    if (this.engine.isPlaying) {
-      this.engine.pause();
-      return;
-    }
-
-    void this.engine.play().catch((error: unknown) => {
-      this.setError(error);
-    });
-  };
-
-  private readonly onSeek = (): void => {
-    this.engine.seek(Number(this.seekInput.value));
+    if (this.engine.isPlaying) this.engine.pause();
+    else void this.engine.play().catch((error: unknown) => this.setError(error));
   };
 
   private readonly onDragEnter = (event: DragEvent): void => {
@@ -169,9 +156,7 @@ export class AudioControls {
     }
   };
 
-  private readonly onDragOver = (event: DragEvent): void => {
-    event.preventDefault();
-  };
+  private readonly onDragOver = (event: DragEvent): void => event.preventDefault();
 
   private readonly onDrop = (event: DragEvent): void => {
     event.preventDefault();
@@ -202,15 +187,16 @@ export class AudioControls {
   }
 
   private readonly update = (): void => {
-    this.playButton.textContent = this.engine.isPlaying ? 'PAUSE' : 'PLAY';
+    const playing = this.engine.isPlaying;
+    this.playButton.innerHTML = playing
+      ? '<i class="ph ph-pause"></i><span>PAUSE</span>'
+      : '<i class="ph ph-play"></i><span>PLAY</span>';
     this.seekInput.value = String(this.engine.currentTime);
     this.time.textContent = `${formatTime(this.engine.currentTime)} / ${formatTime(this.engine.duration)}`;
-
     const parameters = this.engine.getParameters();
     for (const [key, element] of this.meters) {
       element.style.setProperty('--level', String(parameters[key] ?? 0));
     }
-
     this.animationId = requestAnimationFrame(this.update);
   };
 }

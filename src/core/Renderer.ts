@@ -3,11 +3,13 @@ import type { Canvas } from './Canvas';
 
 export class Renderer {
   readonly three: THREE.WebGLRenderer;
+  private readonly canvas: Canvas;
 
   constructor(canvas: Canvas) {
-    this.three = new THREE.WebGLRenderer({ antialias: true });
-    this.three.setPixelRatio(window.devicePixelRatio);
-    this.three.setSize(window.innerWidth, window.innerHeight);
+    this.canvas = canvas;
+    this.three = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    this.three.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.three.setSize(canvas.width, canvas.height, false);
     canvas.element.appendChild(this.three.domElement);
   }
 
@@ -16,7 +18,14 @@ export class Renderer {
   }
 
   resize(): void {
-    this.three.setSize(window.innerWidth, window.innerHeight);
+    this.three.setSize(this.canvas.width, this.canvas.height, false);
+  }
+
+  exportPng(filename: string): void {
+    const link = document.createElement('a');
+    link.download = filename;
+    link.href = this.three.domElement.toDataURL('image/png');
+    link.click();
   }
 
   dispose(): void {

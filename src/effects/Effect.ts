@@ -10,5 +10,6 @@ export interface Effect {
   intensity: number;
   audioSource: AudioSource;
   update(audio: AudioParameters, elapsed: number): void;
+  resize(width: number, height: number): void;
   dispose(): void;
 }

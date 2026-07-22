@@ -4,6 +4,7 @@ import { App } from './core/App';
 import { SineWaveBasic } from './compositions/SineWaveBasic';
 import { AudioControls } from './ui/AudioControls';
 import { StudioControls } from './ui/StudioControls';
+import { StudioShell } from './ui/StudioShell';
 
 const container = document.querySelector<HTMLDivElement>('#app');
 
@@ -13,11 +14,10 @@ if (!container) {
 
 const audioEngine = new FileAudioEngine();
 const composition = new SineWaveBasic();
-const app = new App(container, composition, audioEngine);
-const audioControls = new AudioControls(container, audioEngine);
-const studioControls = new StudioControls(container, composition, audioEngine, (visible) => {
-  audioControls.setVisible(visible);
-});
+const shell = new StudioShell(container);
+const app = new App(shell.canvasHost, composition, audioEngine);
+const audioControls = new AudioControls(shell.leftPanel, audioEngine);
+const studioControls = new StudioControls(shell, composition, audioEngine, app);
 let disposed = false;
 
 const dispose = (): void => {
@@ -26,6 +26,7 @@ const dispose = (): void => {
   audioControls.dispose();
   studioControls.dispose();
   app.dispose();
+  shell.dispose();
 };
 
 window.addEventListener('beforeunload', dispose, { once: true });

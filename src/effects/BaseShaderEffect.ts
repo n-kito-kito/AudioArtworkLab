@@ -35,6 +35,11 @@ export abstract class BaseShaderEffect implements Effect {
     if (uniforms.uTime) uniforms.uTime.value = elapsed;
   }
 
+  resize(width: number, height: number): void {
+    const resolution = this.pass.uniforms.uResolution;
+    if (resolution?.value?.set) resolution.value.set(width, height);
+  }
+
   dispose(): void {
     this.pass.material.dispose();
   }

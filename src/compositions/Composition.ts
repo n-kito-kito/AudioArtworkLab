@@ -17,7 +17,7 @@ export interface Composition {
   setup(context: CompositionContext): void;
   update(elapsed: number): void;
   render(): void;
-  resize(): void;
+  resize(width: number, height: number): void;
   dispose(): void;
 }
 
@@ -62,8 +62,8 @@ export abstract class BaseComposition implements Composition {
     this.pipeline?.render();
   }
 
-  resize(): void {
-    this.pipeline?.resize();
+  resize(width: number, height: number): void {
+    this.pipeline?.resize(width, height);
   }
 
   getEffects(): readonly Effect[] {

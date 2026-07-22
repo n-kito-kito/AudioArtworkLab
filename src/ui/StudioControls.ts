@@ -1,184 +1,259 @@
 import type { FileAudioEngine } from '../audio/FileAudioEngine';
 import type { SineWaveBasic } from '../compositions/SineWaveBasic';
+import type { App } from '../core/App';
 import type { AudioSource, Effect } from '../effects/Effect';
 import type { AudioReactionParameters, SineWaveParameters } from '../generators/SineWave';
+import type { StudioShell } from './StudioShell';
 
 type NumericKey<T> = { [K in keyof T]: T[K] extends number ? K : never }[keyof T];
 
+const EFFECT_MAX: Record<string, number> = {
+  Blur: 0.1,
+  'RGB Split': 0.1,
+  Glitch: 0.1,
+  Warp: 0.1,
+  'Scan Drift': 0.1,
+};
+
 export class StudioControls {
-  private readonly root = document.createElement('aside');
-  private readonly revealButton = document.createElement('button');
+  private readonly shell: StudioShell;
   private readonly composition: SineWaveBasic;
   private readonly audioEngine: FileAudioEngine;
-  private readonly onVisibilityChange: (visible: boolean) => void;
-  private guiVisible = true;
+  private readonly app: App;
+  private readonly toolbarActions = document.createElement('div');
+  private readonly chainTrack = document.createElement('div');
+  private selectedEffect: Effect;
+  private seed = Math.floor(Math.random() * 99999);
 
   constructor(
-    container: HTMLElement,
+    shell: StudioShell,
     composition: SineWaveBasic,
     audioEngine: FileAudioEngine,
-    onVisibilityChange: (visible: boolean) => void,
+    app: App,
   ) {
+    this.shell = shell;
     this.composition = composition;
     this.audioEngine = audioEngine;
-    this.onVisibilityChange = onVisibilityChange;
-    this.root.className = 'studio-panel';
-    this.root.setAttribute('aria-label', 'Visual controls');
-    this.revealButton.className = 'studio-reveal';
-    this.revealButton.type = 'button';
-    this.revealButton.textContent = 'GUI';
-    this.revealButton.hidden = true;
-    this.revealButton.addEventListener('click', this.toggleGui);
-    this.build();
-    container.append(this.root, this.revealButton);
+    this.app = app;
+    this.selectedEffect = composition.getEffects()[0]!;
+    this.buildToolbar();
+    this.buildLeftPanel();
+    this.buildInspector();
+    this.buildChain();
   }
 
   dispose(): void {
-    this.root.remove();
-    this.revealButton.remove();
+    this.toolbarActions.remove();
+    this.chainTrack.remove();
+    this.shell.leftPanel.querySelectorAll('.visual-section').forEach((element) => element.remove());
+    this.shell.rightPanel.replaceChildren();
   }
 
-  private build(): void {
-    const header = document.createElement('header');
-    const title = document.createElement('strong');
-    title.textContent = 'VISUAL LAB';
-    const collapse = this.button(
-      '−',
-      () => this.root.classList.toggle('is-collapsed'),
-      'Toggle side panel',
+  private buildToolbar(): void {
+    this.toolbarActions.className = 'topbar__actions';
+    const seed = document.createElement('span');
+    seed.className = 'seed-label';
+    seed.textContent = `SEED ${this.seed.toString().padStart(5, '0')}`;
+    this.toolbarActions.append(
+      seed,
+      this.iconButton('ph-shuffle', 'Randomize', () => {
+        this.seed = Math.floor(Math.random() * 99999);
+        seed.textContent = `SEED ${this.seed.toString().padStart(5, '0')}`;
+        this.randomize();
+      }),
+      this.iconButton('ph-grid-four', 'Grid', () => this.shell.root.classList.toggle('show-grid')),
+      this.iconButton('ph-sidebar-simple', 'Controls', () =>
+        this.shell.root.classList.toggle('left-open'),
+      ),
+      this.iconButton('ph-sliders-horizontal', 'Inspector', () =>
+        this.shell.root.classList.toggle('right-open'),
+      ),
+      this.iconButton('ph-corners-out', 'Fullscreen', () => void this.toggleFullscreen()),
+      this.iconButton('ph-export', 'Export PNG', () => this.app.exportPng(), true),
     );
-    const hide = this.button('HIDE', this.toggleGui, 'Hide GUI');
-    const fullscreen = this.button('FULL', () => void this.toggleFullscreen(), 'Toggle fullscreen');
-    header.append(title, collapse, hide, fullscreen);
-
-    const body = document.createElement('div');
-    body.className = 'studio-panel__body';
-    body.append(
-      this.buildGeneratorSection(),
-      this.buildReactionSection(),
-      this.buildEffectSection(),
-    );
-    this.root.append(header, body);
+    this.shell.toolbar.append(this.toolbarActions);
   }
 
-  private buildGeneratorSection(): HTMLElement {
-    const section = this.section('GENERATOR');
-    const settings = this.composition.sineWave.getParameters();
-    section.append(
-      this.range('Amplitude', settings.amplitude, 0.02, 1, 0.01, (value) =>
+  private buildLeftPanel(): void {
+    this.shell.leftPanel.querySelectorAll('.visual-section').forEach((element) => element.remove());
+    const motion = this.section('MOTION', 'ph-wave-sine');
+    const sine = this.composition.sineWave.getParameters();
+    motion.append(
+      this.range('Speed', sine.speed, 0, 4, 0.01, (value) => this.setSine('speed', value), 'x'),
+    );
+
+    const generator = this.section('GENERATOR', 'ph-bezier-curve');
+    generator.append(
+      this.segmented('Source', ['Sine', 'Waveform'], 'Sine', (value) =>
+        this.composition.waveform.setVisible(value === 'Waveform'),
+      ),
+      this.range('Amplitude', sine.amplitude, 0.02, 1, 0.01, (value) =>
         this.setSine('amplitude', value),
       ),
-      this.range('Frequency', settings.frequency, 0.5, 16, 0.1, (value) =>
+      this.range('Frequency', sine.frequency, 0.5, 16, 0.1, (value) =>
         this.setSine('frequency', value),
       ),
-      this.range('Speed', settings.speed, 0, 4, 0.01, (value) => this.setSine('speed', value)),
-      this.range('Opacity', settings.opacity, 0.05, 1, 0.01, (value) =>
-        this.setSine('opacity', value),
-      ),
+      this.range('Opacity', sine.opacity, 0.05, 1, 0.01, (value) => this.setSine('opacity', value)),
+      this.colorControl('Line color', sine.color),
     );
 
-    const color = document.createElement('label');
-    color.textContent = 'Color';
-    const input = document.createElement('input');
-    input.type = 'color';
-    input.value = settings.color;
-    input.addEventListener('input', () =>
-      this.composition.sineWave.setParameters({ color: input.value }),
-    );
-    color.append(input);
-    section.append(
-      color,
-      this.toggle('Waveform', false, (value) => this.composition.waveform.setVisible(value)),
-    );
-    return section;
-  }
-
-  private buildReactionSection(): HTMLElement {
-    const section = this.section('AUDIO REACTION');
-    const reaction = this.composition.sineWave.getAudioReaction();
-    section.append(
-      this.range('Bass → Amp', reaction.bassStrength, 0, 2, 0.01, (value) =>
+    const reaction = this.section('AUDIO MAPPING', 'ph-equalizer');
+    const values = this.composition.sineWave.getAudioReaction();
+    reaction.append(
+      this.range('Bass → amplitude', values.bassStrength, 0, 2, 0.01, (value) =>
         this.setReaction('bassStrength', value),
       ),
-      this.range('Mid → Freq', reaction.midStrength, 0, 2, 0.01, (value) =>
+      this.range('Mid → frequency', values.midStrength, 0, 2, 0.01, (value) =>
         this.setReaction('midStrength', value),
       ),
-      this.range('Treble → Color', reaction.trebleStrength, 0, 2, 0.01, (value) =>
+      this.range('Treble → color', values.trebleStrength, 0, 2, 0.01, (value) =>
         this.setReaction('trebleStrength', value),
       ),
       this.range('Beat sensitivity', 0.08, 0.01, 0.3, 0.01, (value) =>
         this.audioEngine.setBeatSensitivity(value),
       ),
-      this.range('Amp min', reaction.amplitudeMin, 0, 0.8, 0.01, (value) =>
-        this.setReaction('amplitudeMin', value),
-      ),
-      this.range('Amp max', reaction.amplitudeMax, 0.1, 1.2, 0.01, (value) =>
-        this.setReaction('amplitudeMax', value),
-      ),
-      this.range('Freq min', reaction.frequencyMin, 0.5, 10, 0.1, (value) =>
-        this.setReaction('frequencyMin', value),
-      ),
-      this.range('Freq max', reaction.frequencyMax, 2, 20, 0.1, (value) =>
-        this.setReaction('frequencyMax', value),
-      ),
-      this.range('Smoothing', reaction.smoothing, 0, 0.98, 0.01, (value) => {
+      this.range('Smoothing', values.smoothing, 0, 0.98, 0.01, (value) => {
         this.setReaction('smoothing', value);
         this.audioEngine.setAnalysisSmoothing(value);
       }),
     );
-    return section;
+
+    const range = this.section('OUTPUT RANGE', 'ph-arrows-out-line-vertical');
+    range.append(
+      this.range('Amplitude min', values.amplitudeMin, 0, 0.8, 0.01, (value) =>
+        this.setReaction('amplitudeMin', value),
+      ),
+      this.range('Amplitude max', values.amplitudeMax, 0.1, 1.2, 0.01, (value) =>
+        this.setReaction('amplitudeMax', value),
+      ),
+      this.range('Frequency min', values.frequencyMin, 0.5, 10, 0.1, (value) =>
+        this.setReaction('frequencyMin', value),
+      ),
+      this.range('Frequency max', values.frequencyMax, 2, 20, 0.1, (value) =>
+        this.setReaction('frequencyMax', value),
+      ),
+    );
+    this.shell.leftPanel.prepend(motion);
+    this.shell.leftPanel.append(generator, reaction, range);
   }
 
-  private buildEffectSection(): HTMLElement {
-    const section = this.section('EFFECT PIPELINE');
-    for (const effect of this.composition.getEffects()) section.append(this.effectRow(effect));
-    return section;
-  }
+  private buildInspector(): void {
+    this.shell.rightPanel.replaceChildren();
+    const header = document.createElement('div');
+    header.className = 'inspector-header';
+    const eyebrow = document.createElement('span');
+    eyebrow.textContent = 'SELECTED EFFECT';
+    const title = document.createElement('strong');
+    title.textContent = this.selectedEffect.name;
+    header.append(eyebrow, title);
 
-  private effectRow(effect: Effect): HTMLElement {
-    const row = document.createElement('div');
-    row.className = 'effect-row';
-    const top = document.createElement('div');
-    top.append(
-      this.toggle(effect.name, effect.enabled, (value) => {
-        effect.enabled = value;
+    const controls = this.section('PARAMETERS', 'ph-sliders');
+    controls.append(
+      this.toggle('Enabled', this.selectedEffect.enabled, (value) => {
+        this.selectedEffect.enabled = value;
+        this.buildChain();
       }),
-      this.button('↑', () => this.moveEffect(effect, row, -1), `Move ${effect.name} up`),
-      this.button('↓', () => this.moveEffect(effect, row, 1), `Move ${effect.name} down`),
-    );
-    const intensityMax = ['Blur', 'RGB Split', 'Glitch', 'Warp', 'Scan Drift'].includes(effect.name)
-      ? 0.1
-      : 1;
-    top.className = 'effect-row__top';
-    row.append(
-      top,
-      this.range('Amount', effect.intensity, 0, intensityMax, 0.001, (value) => {
-        effect.intensity = value;
-      }),
+      this.range(
+        'Intensity',
+        this.selectedEffect.intensity,
+        0,
+        EFFECT_MAX[this.selectedEffect.name] ?? 1,
+        0.001,
+        (value) => {
+          this.selectedEffect.intensity = value;
+        },
+      ),
+      this.selectControl(
+        'React to',
+        ['none', 'volume', 'bass', 'mid', 'treble', 'beat'],
+        this.selectedEffect.audioSource,
+        (value) => {
+          this.selectedEffect.audioSource = value as AudioSource;
+        },
+      ),
     );
 
-    const audio = document.createElement('label');
-    audio.textContent = 'React to';
-    const select = document.createElement('select');
-    for (const source of ['none', 'volume', 'bass', 'mid', 'treble', 'beat'] as AudioSource[]) {
-      const option = document.createElement('option');
-      option.value = source;
-      option.textContent = source.toUpperCase();
-      select.append(option);
+    const order = this.section('CHAIN POSITION', 'ph-path');
+    const orderActions = document.createElement('div');
+    orderActions.className = 'button-row';
+    orderActions.append(
+      this.iconButton('ph-arrow-left', 'Move earlier', () => this.moveSelected(-1)),
+      this.iconButton('ph-arrow-right', 'Move later', () => this.moveSelected(1)),
+    );
+    order.append(orderActions);
+
+    const looks = this.section('QUICK LOOKS', 'ph-sparkle');
+    const lookGrid = document.createElement('div');
+    lookGrid.className = 'look-grid';
+    for (const [name, amount, source] of [
+      ['SUBTLE', 0.18, 'none'],
+      ['BASS HIT', 0.5, 'bass'],
+      ['AIR', 0.35, 'treble'],
+      ['BROKEN', 0.8, 'beat'],
+    ] as const) {
+      const button = this.textButton(name, () => {
+        const max = EFFECT_MAX[this.selectedEffect.name] ?? 1;
+        this.selectedEffect.intensity = amount * max;
+        this.selectedEffect.audioSource = source;
+        this.selectedEffect.enabled = true;
+        this.buildInspector();
+        this.buildChain();
+      });
+      lookGrid.append(button);
     }
-    select.addEventListener('change', () => {
-      effect.audioSource = select.value as AudioSource;
-    });
-    audio.append(select);
-    row.append(audio);
-    return row;
+    looks.append(lookGrid);
+    this.shell.rightPanel.append(header, controls, order, looks);
   }
 
-  private section(title: string): HTMLElement {
+  private buildChain(): void {
+    this.chainTrack.replaceChildren();
+    this.chainTrack.className = 'effect-chain__track';
+    const label = document.createElement('span');
+    label.className = 'effect-chain__label';
+    label.textContent = 'CHAIN';
+    const source = document.createElement('button');
+    source.type = 'button';
+    source.className = 'chain-node chain-node--source';
+    source.textContent = 'SOURCE';
+    this.chainTrack.append(label, source);
+
+    for (const effect of this.composition.getEffects()) {
+      const node = document.createElement('button');
+      node.type = 'button';
+      node.className = 'chain-node';
+      node.classList.toggle('is-active', effect.enabled);
+      node.classList.toggle('is-selected', effect === this.selectedEffect);
+      const state = document.createElement('i');
+      state.className = 'chain-node__state';
+      const name = document.createElement('span');
+      name.textContent = effect.name;
+      node.append(state, name);
+      node.addEventListener('click', () => {
+        this.selectedEffect = effect;
+        this.buildInspector();
+        this.buildChain();
+        this.shell.root.classList.add('right-open');
+      });
+      this.chainTrack.append(node);
+    }
+    this.shell.chain.replaceChildren(this.chainTrack);
+  }
+
+  private section(titleText: string, iconClass: string): HTMLElement {
     const section = document.createElement('section');
-    const heading = document.createElement('h2');
-    heading.textContent = title;
-    section.append(heading);
+    section.className = 'panel-section visual-section';
+    const title = document.createElement('h2');
+    const icon = document.createElement('i');
+    icon.className = `ph ${iconClass}`;
+    const text = document.createElement('span');
+    text.textContent = titleText;
+    const collapse = this.iconButton('ph-caret-up', `Collapse ${titleText}`, () => {
+      section.classList.toggle('is-collapsed');
+      collapse.classList.toggle('is-rotated');
+    });
+    collapse.classList.add('section-collapse');
+    title.append(icon, text, collapse);
+    section.append(title);
     return section;
   }
 
@@ -189,24 +264,43 @@ export class StudioControls {
     max: number,
     step: number,
     onInput: (value: number) => void,
+    suffix = '',
   ): HTMLElement {
     const label = document.createElement('label');
+    label.className = 'control-row control-row--range';
     const name = document.createElement('span');
     const output = document.createElement('output');
     name.textContent = labelText;
-    output.textContent = String(value);
+    output.textContent = `${Number(value.toFixed(3))}${suffix}`;
     const input = document.createElement('input');
     input.type = 'range';
     input.min = String(min);
     input.max = String(max);
     input.step = String(step);
     input.value = String(value);
+    input.setAttribute('aria-label', labelText);
     input.addEventListener('input', () => {
       const next = Number(input.value);
-      output.textContent = String(next);
+      output.textContent = `${Number(next.toFixed(3))}${suffix}`;
       onInput(next);
     });
     label.append(name, output, input);
+    return label;
+  }
+
+  private colorControl(labelText: string, value: string): HTMLElement {
+    const label = document.createElement('label');
+    label.className = 'control-row control-row--inline';
+    const text = document.createElement('span');
+    text.textContent = labelText;
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = value;
+    input.setAttribute('aria-label', labelText);
+    input.addEventListener('input', () =>
+      this.composition.sineWave.setParameters({ color: input.value }),
+    );
+    label.append(text, input);
     return label;
   }
 
@@ -216,22 +310,93 @@ export class StudioControls {
     onChange: (value: boolean) => void,
   ): HTMLElement {
     const label = document.createElement('label');
-    label.className = 'toggle';
+    label.className = 'control-row control-row--inline switch-row';
+    const text = document.createElement('span');
+    text.textContent = labelText;
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = checked;
+    input.setAttribute('aria-label', labelText);
     input.addEventListener('change', () => onChange(input.checked));
-    const text = document.createElement('span');
-    text.textContent = labelText;
-    label.append(input, text);
+    label.append(text, input);
     return label;
   }
 
-  private button(text: string, action: () => void, ariaLabel: string): HTMLButtonElement {
+  private selectControl(
+    labelText: string,
+    options: string[],
+    selected: string,
+    onChange: (value: string) => void,
+  ): HTMLElement {
+    const label = document.createElement('label');
+    label.className = 'control-row control-row--inline';
+    const text = document.createElement('span');
+    text.textContent = labelText;
+    const select = document.createElement('select');
+    select.setAttribute('aria-label', labelText);
+    for (const value of options) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value.toUpperCase();
+      option.selected = value === selected;
+      select.append(option);
+    }
+    select.addEventListener('change', () => onChange(select.value));
+    label.append(text, select);
+    return label;
+  }
+
+  private segmented(
+    labelText: string,
+    options: string[],
+    selected: string,
+    onChange: (value: string) => void,
+  ): HTMLElement {
+    const fieldset = document.createElement('fieldset');
+    fieldset.className = 'segmented-control';
+    const legend = document.createElement('legend');
+    legend.textContent = labelText;
+    fieldset.append(legend);
+    for (const value of options) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'generator-source';
+      input.value = value;
+      input.checked = value === selected;
+      input.addEventListener('change', () => onChange(value));
+      const text = document.createElement('span');
+      text.textContent = value;
+      label.append(input, text);
+      fieldset.append(label);
+    }
+    return fieldset;
+  }
+
+  private iconButton(
+    iconClass: string,
+    label: string,
+    action: () => void,
+    primary = false,
+  ): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
+    button.className = primary ? 'ui-button is-primary' : 'ui-button';
+    button.setAttribute('aria-label', label);
+    const icon = document.createElement('i');
+    icon.className = `ph ${iconClass}`;
+    const text = document.createElement('span');
+    text.textContent = label;
+    button.append(icon, text);
+    button.addEventListener('click', action);
+    return button;
+  }
+
+  private textButton(text: string, action: () => void): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'look-button';
     button.textContent = text;
-    button.setAttribute('aria-label', ariaLabel);
     button.addEventListener('click', action);
     return button;
   }
@@ -244,20 +409,32 @@ export class StudioControls {
     this.composition.sineWave.setAudioReaction({ [key]: value });
   }
 
-  private moveEffect(effect: Effect, row: HTMLElement, direction: -1 | 1): void {
-    const sibling = direction === -1 ? row.previousElementSibling : row.nextElementSibling;
-    if (!(sibling instanceof HTMLElement)) return;
-    this.composition.moveEffect(effect, direction);
-    if (direction === -1) sibling.before(row);
-    else sibling.after(row);
+  private moveSelected(direction: -1 | 1): void {
+    this.composition.moveEffect(this.selectedEffect, direction);
+    this.buildChain();
   }
 
-  private readonly toggleGui = (): void => {
-    this.guiVisible = !this.guiVisible;
-    this.root.hidden = !this.guiVisible;
-    this.revealButton.hidden = this.guiVisible;
-    this.onVisibilityChange(this.guiVisible);
-  };
+  private randomize(): void {
+    const color = `#${Math.floor(Math.random() * 0xffffff)
+      .toString(16)
+      .padStart(6, "0")}`;
+    this.composition.sineWave.setParameters({
+      amplitude: 0.12 + Math.random() * 0.48,
+      frequency: 1.5 + Math.random() * 8,
+      speed: 0.18 + Math.random() * 1.8,
+      color,
+      opacity: 0.68 + Math.random() * 0.32,
+    });
+    for (const effect of this.composition.getEffects()) {
+      effect.enabled = Math.random() > 0.52;
+      effect.audioSource = ['none', 'bass', 'mid', 'treble', 'beat'][
+        Math.floor(Math.random() * 5)
+      ] as AudioSource;
+    }
+    this.buildLeftPanel();
+    this.buildInspector();
+    this.buildChain();
+  }
 
   private async toggleFullscreen(): Promise<void> {
     if (document.fullscreenElement) await document.exitFullscreen();

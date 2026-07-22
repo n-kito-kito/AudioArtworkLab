@@ -14,13 +14,14 @@ export class App {
   private readonly camera: Camera;
   private readonly composition: Composition;
   private readonly audioEngine: AudioEngine;
+  private readonly resizeObserver: ResizeObserver;
   private loop: AnimationLoop | null = null;
 
   constructor(container: HTMLElement, composition: Composition, audioEngine?: AudioEngine) {
     this.canvas = new Canvas(container);
     this.renderer = new Renderer(this.canvas);
     this.scene = new Scene();
-    this.camera = new Camera();
+    this.camera = new Camera(this.canvas.aspect);
     this.composition = composition;
     this.audioEngine = audioEngine ?? new NullAudioEngine();
 
@@ -41,13 +42,20 @@ export class App {
       this.composition.render();
     }
 
-    window.addEventListener('resize', this.onResize);
+    this.resizeObserver = new ResizeObserver(this.onResize);
+    this.resizeObserver.observe(container);
+    this.onResize();
+  }
+
+  exportPng(): void {
+    this.composition.render();
+    this.renderer.exportPng(`audio-artwork-${Date.now()}.png`);
   }
 
   private onResize = (): void => {
-    this.camera.resize();
+    this.camera.resize(this.canvas.aspect);
     this.renderer.resize();
-    this.composition.resize();
+    this.composition.resize(this.canvas.width, this.canvas.height);
 
     if (!this.composition.animated) {
       this.composition.render();
@@ -56,7 +64,7 @@ export class App {
 
   dispose(): void {
     this.loop?.stop();
-    window.removeEventListener('resize', this.onResize);
+    this.resizeObserver.disconnect();
     this.composition.dispose();
     this.audioEngine.dispose();
     this.renderer.dispose();

@@ -35,8 +35,9 @@ export class EffectPipeline {
   render(): void {
     this.composer.render();
   }
-  resize(): void {
-    this.composer.setSize(innerWidth, innerHeight);
+  resize(width: number, height: number): void {
+    this.composer.setSize(width, height);
+    for (const effect of this.effects) effect.resize(width, height);
   }
 
   dispose(): void {
