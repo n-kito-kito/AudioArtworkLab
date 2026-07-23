@@ -670,7 +670,7 @@ export class LayerEditor {
     layer: DesignLayer,
     size: number,
     audioValue: number,
-  ): void {
+  ): boolean {
     const x = (layer.x / 100) * size;
     const y = (layer.y / 100) * size;
     const width = (layer.baseWidth / 100) * size;
@@ -685,7 +685,7 @@ export class LayerEditor {
       const image = layer.element;
       if (!image.complete || image.naturalWidth === 0 || image.naturalHeight === 0) {
         context.restore();
-        return;
+        return false;
       }
       const sourceRatio = image.naturalWidth / image.naturalHeight;
       const targetRatio = width / size;
@@ -771,6 +771,7 @@ export class LayerEditor {
       context.stroke(new Path2D(layer.path));
     }
     context.restore();
+    return true;
   }
 
   private renderComposite(audio: AudioParameters): void {
@@ -794,17 +795,23 @@ export class LayerEditor {
         return context;
       });
       const generatorIndex = this.layers.findIndex((layer) => layer.kind === 'generator');
+      let allLayersDrawn = true;
       this.layers.forEach((layer, index) => {
         if (layer.kind === 'generator') return;
         const context = contexts[generatorIndex >= 0 && index < generatorIndex ? 0 : 1];
         if (context) {
-          this.drawLayer(context, layer, size, this.audioValue(audio, layer.reactTo));
+          allLayersDrawn =
+            this.drawLayer(context, layer, size, this.audioValue(audio, layer.reactTo)) &&
+            allLayersDrawn;
         }
       });
       this.app.updateDesignLayerCanvases();
-      if (!this.compositeReady) {
+      if (allLayersDrawn && !this.compositeReady) {
         this.compositeReady = true;
         this.surface.classList.add('is-composited');
+      } else if (!allLayersDrawn && this.compositeReady) {
+        this.compositeReady = false;
+        this.surface.classList.remove('is-composited');
       }
     } catch (error) {
       this.compositeFailed = true;
