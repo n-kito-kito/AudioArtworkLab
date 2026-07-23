@@ -84,7 +84,7 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 - [x] PaletteMap
 - [x] Glitch
 - [x] Halftone
-- [ ] Glass
+- [x] Glass
 - [x] RGBSplit
 - [ ] Bloom
 - [x] Warp

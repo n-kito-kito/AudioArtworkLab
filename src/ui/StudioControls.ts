@@ -22,6 +22,7 @@ const EFFECT_MAX: Record<string, number> = {
   'Pixel Stretch': 0.4,
   'Grid Reveal': 1,
   Halftone: 1,
+  Glass: 0.08,
 };
 
 const MODIFIER_NAMES = [

@@ -17,6 +17,7 @@ import { RepeatEffect } from '../effects/RepeatEffect';
 import { PixelStretchModifier } from '../modifiers/PixelStretchModifier';
 import { GridRevealModifier } from '../modifiers/GridRevealModifier';
 import { HalftoneEffect } from '../effects/HalftoneEffect';
+import { GlassEffect } from '../effects/GlassEffect';
 
 export class SineWaveBasic extends BaseComposition {
   readonly name = 'SineWaveBasic';
@@ -52,6 +53,7 @@ export class SineWaveBasic extends BaseComposition {
       new PixelStretchModifier(),
       new GridRevealModifier(),
       new HalftoneEffect(),
+      new GlassEffect(),
     ];
     this.effects[0]!.enabled = true;
   }
