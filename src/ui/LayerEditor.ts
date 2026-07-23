@@ -84,6 +84,8 @@ export class LayerEditor {
   private frame = 0;
   private compositeReady = false;
   private compositeFailed = false;
+  private compositeTexturesReady = false;
+  private compositeRefreshPending = true;
   private drag: { layer: DesignLayer; startX: number; startY: number; x: number; y: number } | null =
     null;
 
@@ -101,7 +103,6 @@ export class LayerEditor {
     this.buildPanel();
     this.surface.append(this.selectionOutline);
     this.shell.canvasHost.append(this.surface);
-    this.app.setDesignLayerCanvases([this.backCanvas, this.frontCanvas]);
     this.registerDefaultGenerator();
     this.shell.leftPanel.prepend(this.section);
     this.bindDrag();
@@ -220,11 +221,21 @@ export class LayerEditor {
       lineHeight: 1,
     };
     element.dataset.layerId = layer.id;
+    if (element instanceof HTMLImageElement) {
+      element.addEventListener('load', () => {
+        this.compositeRefreshPending = true;
+      });
+      element.addEventListener('error', () => {
+        this.compositeReady = false;
+        this.surface.classList.remove('is-composited');
+      });
+    }
     element.addEventListener('pointerdown', (event) => {
       event.stopPropagation();
       this.select(layer, event instanceof PointerEvent && event.shiftKey);
     });
     this.layers.push(layer);
+    this.compositeRefreshPending = true;
     this.surface.append(element);
     this.syncStack();
     this.applyLayer(layer, 0);
@@ -492,6 +503,7 @@ export class LayerEditor {
     else layer.element.remove();
     if (layer.objectUrl?.startsWith('blob:')) URL.revokeObjectURL(layer.objectUrl);
     this.layers.splice(index, 1);
+    this.compositeRefreshPending = true;
     this.syncStack();
     this.selected = null; this.renderList(); this.shell.root.dispatchEvent(new CustomEvent('studio:restore-effect'));
     this.selection.delete(layer);
@@ -532,6 +544,7 @@ export class LayerEditor {
   }
 
   restoreSnapshot(snapshot: LayerEditorSnapshot): void {
+    this.compositeRefreshPending = true;
     for (const layer of [...this.layers]) {
       if (layer.kind !== 'generator') layer.element.remove();
       if (layer.objectUrl?.startsWith('blob:')) URL.revokeObjectURL(layer.objectUrl);
@@ -785,10 +798,12 @@ export class LayerEditor {
         1600,
       );
       const canvases = [this.backCanvas, this.frontCanvas];
+      let canvasResized = false;
       const contexts = canvases.map((canvas) => {
         if (canvas.width !== size || canvas.height !== size) {
           canvas.width = size;
           canvas.height = size;
+          canvasResized = true;
         }
         const context = canvas.getContext('2d');
         context?.clearRect(0, 0, size, size);
@@ -802,10 +817,20 @@ export class LayerEditor {
         if (context) {
           allLayersDrawn =
             this.drawLayer(context, layer, size, this.audioValue(audio, layer.reactTo)) &&
-            allLayersDrawn;
+          allLayersDrawn;
         }
       });
-      this.app.updateDesignLayerCanvases();
+      if (
+        !this.compositeTexturesReady ||
+        this.compositeRefreshPending ||
+        canvasResized
+      ) {
+        this.app.setDesignLayerCanvases([this.backCanvas, this.frontCanvas]);
+        this.compositeTexturesReady = true;
+        this.compositeRefreshPending = false;
+      } else {
+        this.app.updateDesignLayerCanvases();
+      }
       if (allLayersDrawn && !this.compositeReady) {
         this.compositeReady = true;
         this.surface.classList.add('is-composited');
