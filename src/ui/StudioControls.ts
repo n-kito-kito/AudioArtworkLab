@@ -23,6 +23,7 @@ const EFFECT_MAX: Record<string, number> = {
   'Grid Reveal': 1,
   Halftone: 1,
   Glass: 0.08,
+  Bloom: 1,
 };
 
 const MODIFIER_NAMES = [
