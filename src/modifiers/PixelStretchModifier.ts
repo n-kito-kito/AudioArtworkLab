@@ -25,11 +25,12 @@ export class PixelStretchModifier extends BaseShaderEffect {
         void main() {
           float band = floor(vUv.y * 28.0);
           float phase = floor(uTime * 5.0);
-          float active = step(0.68, hash(band + phase * 17.0));
+          float activeBand = step(0.68, hash(band + phase * 17.0));
           float anchor = hash(band * 7.3 + phase) * 0.8 + 0.1;
-          float reach = uIntensity * active;
+          float reach = uIntensity * activeBand;
           float distanceToAnchor = abs(vUv.x - anchor);
-          float weight = (1.0 - smoothstep(0.0, max(reach, 0.0001), distanceToAnchor)) * active;
+          float weight =
+            (1.0 - smoothstep(0.0, max(reach, 0.0001), distanceToAnchor)) * activeBand;
           float stretchedX = mix(vUv.x, anchor, weight);
           gl_FragColor = texture2D(tDiffuse, vec2(stretchedX, vUv.y));
         }
