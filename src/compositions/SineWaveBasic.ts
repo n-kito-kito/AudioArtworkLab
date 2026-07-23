@@ -10,6 +10,7 @@ import { WarpEffect } from '../effects/WarpEffect';
 import { ScanDriftEffect } from '../effects/ScanDriftEffect';
 import { RepeatEffect } from '../effects/RepeatEffect';
 import { PixelStretchModifier } from '../modifiers/PixelStretchModifier';
+import { GridRevealModifier } from '../modifiers/GridRevealModifier';
 
 export class SineWaveBasic extends BaseComposition {
   readonly name = 'SineWaveBasic';
@@ -31,6 +32,7 @@ export class SineWaveBasic extends BaseComposition {
       new ScanDriftEffect(),
       new RepeatEffect(),
       new PixelStretchModifier(),
+      new GridRevealModifier(),
     ];
     this.effects[0]!.enabled = true;
   }

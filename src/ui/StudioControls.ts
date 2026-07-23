@@ -20,9 +20,16 @@ const EFFECT_MAX: Record<string, number> = {
   Warp: 0.1,
   'Scan Drift': 0.1,
   'Pixel Stretch': 0.4,
+  'Grid Reveal': 1,
 };
 
-const MODIFIER_NAMES = ['Warp', 'Repeat', 'Scan Drift', 'Pixel Stretch'] as const;
+const MODIFIER_NAMES = [
+  'Warp',
+  'Repeat',
+  'Scan Drift',
+  'Pixel Stretch',
+  'Grid Reveal',
+] as const;
 const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble', 'beat'];
 
 export class StudioControls {
