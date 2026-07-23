@@ -42,10 +42,12 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
 - Added a Figma-style color popover for Fill, Stroke, and text color.
 - Added synchronized native palette, Hex code, RGB channel, and reusable swatch inputs.
 - Added per-layer Apply effects routing and a clean overlay pass after the global effect chain.
-- New text layers bypass global effects by default while retaining their own style and audio settings.
-- Added free-form font-family entry with Local / Adobe and Google Fonts sources.
-- Added Google Fonts loading, common font suggestions, local font availability feedback, and preset
-  persistence for font source and effect routing.
+- New text layers use the global effect stack by default and can opt out independently with
+  Apply global effects.
+- Replaced the font source/free-form pair with one grouped font selector containing a broad set of
+  Google Fonts and common system fonts.
+- Retained Custom font as a fallback for exact local font-family names, with availability feedback
+  and preset persistence for font source and effect routing.
 - Added automatic migration from legacy percentage-based layer presets to pixel coordinates.
 - Replaced the fluorescent green UI accent with a Figma-like blue selection color.
 - Kept Export PNG as the visually prominent blue primary action.

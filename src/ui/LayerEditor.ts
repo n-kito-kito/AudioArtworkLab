@@ -19,17 +19,60 @@ const DESIGN_SIZE = 1600;
 const GOOGLE_FONTS = [
   'Inter',
   'Roboto',
+  'Roboto Condensed',
+  'Roboto Mono',
   'Open Sans',
   'Montserrat',
   'Lato',
   'Poppins',
   'DM Sans',
   'Space Grotesk',
+  'Manrope',
+  'Nunito',
+  'Raleway',
+  'Rubik',
+  'Work Sans',
+  'Ubuntu',
+  'Barlow',
+  'Archivo',
+  'Source Sans 3',
+  'Source Code Pro',
+  'IBM Plex Sans',
+  'IBM Plex Mono',
+  'Fira Sans',
   'Oswald',
+  'Anton',
+  'Josefin Sans',
   'Playfair Display',
+  'Merriweather',
+  'Libre Baskerville',
+  'Cormorant Garamond',
+  'Crimson Pro',
+  'Abril Fatface',
   'Bebas Neue',
+  'Caveat',
+  'Pacifico',
   'Noto Sans JP',
   'Noto Serif JP',
+  'Zen Kaku Gothic New',
+  'M PLUS 1p',
+  'Shippori Mincho',
+] as const;
+const SYSTEM_FONTS = [
+  'Arial',
+  'Arial Black',
+  'Helvetica Neue',
+  'Verdana',
+  'Tahoma',
+  'Trebuchet MS',
+  'Georgia',
+  'Times New Roman',
+  'Courier New',
+  'Menlo',
+  'Hiragino Sans',
+  'Hiragino Mincho ProN',
+  'Yu Gothic',
+  'Yu Mincho',
 ] as const;
 
 interface DesignLayer {
@@ -329,7 +372,7 @@ export class LayerEditor {
       strokeEnabled: kind !== 'image' && kind !== 'text',
       strokeColor: color,
       strokeWidth: kind === 'line' || kind === 'wave' || kind === 'freehand' ? 6 : 8,
-      effectsEnabled: kind !== 'text',
+      effectsEnabled: true,
       blur: 0,
       contrast: 1,
       reactTo: kind === 'circle' ? 'bass' : kind === 'wave' ? 'mid' : 'none',
@@ -536,7 +579,7 @@ export class LayerEditor {
     }
     const style = this.inspectorSection('Style & audio', 'ph-sparkle');
     style.append(
-      this.checkboxControl('Apply effects', layer.effectsEnabled, (enabled) =>
+      this.checkboxControl('Apply global effects', layer.effectsEnabled, (enabled) =>
         this.changeLayer(layer, () => (layer.effectsEnabled = enabled)),
       ),
     );
@@ -679,78 +722,85 @@ export class LayerEditor {
   private fontControl(layer: DesignLayer): HTMLElement {
     const root = document.createElement('div');
     root.className = 'font-control';
-    const sourceLabel = document.createElement('label');
-    const sourceName = document.createElement('span');
-    sourceName.textContent = 'Font source';
-    const source = document.createElement('select');
-    for (const [value, label] of [
-      ['local', 'Local / Adobe'],
-      ['google', 'Google Fonts'],
-    ] as const) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = label;
-      option.selected = value === (layer.fontSource ?? 'local');
-      source.append(option);
-    }
-    sourceLabel.append(sourceName, source);
-
     const familyLabel = document.createElement('label');
     const familyName = document.createElement('span');
     familyName.textContent = 'Font family';
-    const family = document.createElement('input');
-    family.type = 'text';
-    family.value = layer.fontFamily ?? 'Inter';
-    family.placeholder = 'Enter exact font family name';
-    const listId = `font-list-${layer.id}`;
-    family.setAttribute('list', listId);
-    const list = document.createElement('datalist');
-    list.id = listId;
-    for (const name of [
-      ...GOOGLE_FONTS,
-      'Arial',
-      'Helvetica Neue',
-      'Georgia',
-      'Courier New',
-      'Times New Roman',
-      'Hiragino Sans',
-      'Hiragino Mincho ProN',
-      'Yu Gothic',
-      'Yu Mincho',
-    ]) {
+    const family = document.createElement('select');
+    const googleGroup = document.createElement('optgroup');
+    googleGroup.label = 'Google Fonts';
+    for (const name of GOOGLE_FONTS) {
       const option = document.createElement('option');
       option.value = name;
-      list.append(option);
+      option.textContent = name;
+      googleGroup.append(option);
     }
-    const status = document.createElement('small');
-    status.textContent =
-      (layer.fontSource ?? 'local') === 'google'
-        ? 'Loaded from Google Fonts'
-        : 'Uses an activated local font';
-    familyLabel.append(familyName, family, list, status);
-    root.append(sourceLabel, familyLabel);
+    const systemGroup = document.createElement('optgroup');
+    systemGroup.label = 'System fonts';
+    for (const name of SYSTEM_FONTS) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      systemGroup.append(option);
+    }
+    const customOption = document.createElement('option');
+    customOption.value = '__custom__';
+    customOption.textContent = 'Custom font…';
+    family.append(googleGroup, systemGroup, customOption);
 
-    const applyFont = (): void => {
-      const fontName = family.value.trim();
+    const currentFamily = layer.fontFamily ?? 'Inter';
+    const listed = [...GOOGLE_FONTS, ...SYSTEM_FONTS].includes(
+      currentFamily as (typeof GOOGLE_FONTS)[number],
+    );
+    family.value = listed ? currentFamily : '__custom__';
+
+    const custom = document.createElement('input');
+    custom.type = 'text';
+    custom.value = listed ? '' : currentFamily;
+    custom.placeholder = 'Enter exact font family name';
+    custom.hidden = listed;
+    const status = document.createElement('small');
+    status.textContent = GOOGLE_FONTS.includes(
+      currentFamily as (typeof GOOGLE_FONTS)[number],
+    )
+      ? 'Google Font'
+      : 'System / custom font';
+    familyLabel.append(familyName, family, custom, status);
+    root.append(familyLabel);
+
+    const applyFont = (fontName: string): void => {
       if (!fontName) return;
+      const source: FontSource = GOOGLE_FONTS.includes(
+        fontName as (typeof GOOGLE_FONTS)[number],
+      )
+        ? 'google'
+        : 'local';
       this.changeLayer(layer, () => {
         layer.fontFamily = fontName;
-        layer.fontSource = source.value as FontSource;
+        layer.fontSource = source;
       });
-      void this.loadFont(fontName, layer.fontSource ?? 'local').then((available) => {
+      void this.loadFont(fontName, source).then((available) => {
         status.textContent = available
-          ? layer.fontSource === 'google'
+          ? source === 'google'
             ? 'Google Font loaded'
-            : 'Local font available'
+            : 'System / custom font available'
           : 'Font not found — using fallback';
         status.classList.toggle('is-error', !available);
       });
     };
-    family.addEventListener('input', () => {
-      this.changeLayer(layer, () => (layer.fontFamily = family.value.trim() || 'Inter'));
+    family.addEventListener('change', () => {
+      const isCustom = family.value === '__custom__';
+      custom.hidden = !isCustom;
+      if (isCustom) {
+        custom.focus();
+        return;
+      }
+      applyFont(family.value);
     });
-    family.addEventListener('change', applyFont);
-    source.addEventListener('change', applyFont);
+    custom.addEventListener('input', () => {
+      const name = custom.value.trim();
+      if (name) this.changeLayer(layer, () => (layer.fontFamily = name));
+    });
+    custom.addEventListener('change', () => applyFont(custom.value.trim()));
     void this.loadFont(layer.fontFamily ?? 'Inter', layer.fontSource ?? 'local');
     return root;
   }
@@ -1078,7 +1128,7 @@ export class LayerEditor {
         saved.strokeEnabled ?? !['generator', 'image', 'text'].includes(saved.kind),
       strokeColor: saved.strokeColor ?? color,
       strokeWidth: saved.strokeWidth ?? (['line', 'wave', 'freehand'].includes(saved.kind) ? 6 : 8),
-      effectsEnabled: saved.effectsEnabled ?? saved.kind !== 'text',
+      effectsEnabled: saved.effectsEnabled ?? true,
       fontSource: saved.fontSource ?? 'local',
     };
   }
