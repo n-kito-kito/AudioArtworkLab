@@ -4,6 +4,12 @@ import type { Effect } from '../effects/Effect';
 import { EffectPipeline } from '../effects/EffectPipeline';
 import type { Generator } from '../generators/Generator';
 
+export type DesignLayerCanvases = [
+  HTMLCanvasElement,
+  HTMLCanvasElement,
+  HTMLCanvasElement,
+];
+
 export interface CompositionContext {
   scene: THREE.Scene;
   camera: THREE.Camera;
@@ -19,7 +25,7 @@ export interface Composition {
   render(): void;
   resize(width: number, height: number): void;
   setGeneratorsVisible(visible: boolean): void;
-  setDesignLayerCanvases(canvases: [HTMLCanvasElement, HTMLCanvasElement]): void;
+  setDesignLayerCanvases(canvases: DesignLayerCanvases): void;
   updateDesignLayerCanvases(): void;
   dispose(): void;
 }
@@ -77,7 +83,7 @@ export abstract class BaseComposition implements Composition {
     }
   }
 
-  setDesignLayerCanvases(canvases: [HTMLCanvasElement, HTMLCanvasElement]): void {
+  setDesignLayerCanvases(canvases: DesignLayerCanvases): void {
     this.pipeline?.setOverlayCanvases(canvases);
   }
 

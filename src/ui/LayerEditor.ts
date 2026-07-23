@@ -14,7 +14,23 @@ type LayerKind =
   | 'freehand';
 type ReactSource = 'none' | 'volume' | 'bass' | 'mid' | 'treble' | 'beat';
 type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+type FontSource = 'local' | 'google';
 const DESIGN_SIZE = 1600;
+const GOOGLE_FONTS = [
+  'Inter',
+  'Roboto',
+  'Open Sans',
+  'Montserrat',
+  'Lato',
+  'Poppins',
+  'DM Sans',
+  'Space Grotesk',
+  'Oswald',
+  'Playfair Display',
+  'Bebas Neue',
+  'Noto Sans JP',
+  'Noto Serif JP',
+] as const;
 
 interface DesignLayer {
   id: string;
@@ -33,6 +49,7 @@ interface DesignLayer {
   strokeEnabled: boolean;
   strokeColor: string;
   strokeWidth: number;
+  effectsEnabled: boolean;
   blur: number;
   contrast: number;
   reactTo: ReactSource;
@@ -40,6 +57,7 @@ interface DesignLayer {
   text?: string;
   objectUrl?: string;
   fontFamily?: string;
+  fontSource?: FontSource;
   fontWeight?: number;
   lineHeight?: number;
   path?: string;
@@ -63,6 +81,7 @@ export interface LayerSnapshot {
   strokeEnabled?: boolean;
   strokeColor?: string;
   strokeWidth?: number;
+  effectsEnabled?: boolean;
   blur: number;
   contrast: number;
   reactTo: ReactSource;
@@ -71,6 +90,7 @@ export interface LayerSnapshot {
   text?: string;
   imageData?: string;
   fontFamily?: string;
+  fontSource?: FontSource;
   fontWeight?: number;
   lineHeight?: number;
   path?: string;
@@ -88,6 +108,7 @@ export class LayerEditor {
   private readonly surface = document.createElement('div');
   private readonly backCanvas = document.createElement('canvas');
   private readonly frontCanvas = document.createElement('canvas');
+  private readonly cleanCanvas = document.createElement('canvas');
   private readonly selectionOutline = document.createElement('div');
   private readonly section = document.createElement('section');
   private readonly list = document.createElement('div');
@@ -102,6 +123,7 @@ export class LayerEditor {
   private compositeTexturesReady = false;
   private compositeRefreshPending = true;
   private closeColorPopover: (() => void) | null = null;
+  private readonly loadedGoogleFonts = new Set<string>();
   private drag: { layer: DesignLayer; startX: number; startY: number; x: number; y: number } | null =
     null;
   private directManipulation:
@@ -172,6 +194,7 @@ export class LayerEditor {
       strokeEnabled: false,
       strokeColor: '#ffffff',
       strokeWidth: 0,
+      effectsEnabled: true,
       blur: 0,
       contrast: 1,
       reactTo: 'none',
@@ -306,6 +329,7 @@ export class LayerEditor {
       strokeEnabled: kind !== 'image' && kind !== 'text',
       strokeColor: color,
       strokeWidth: kind === 'line' || kind === 'wave' || kind === 'freehand' ? 6 : 8,
+      effectsEnabled: kind !== 'text',
       blur: 0,
       contrast: 1,
       reactTo: kind === 'circle' ? 'bass' : kind === 'wave' ? 'mid' : 'none',
@@ -313,6 +337,7 @@ export class LayerEditor {
       text: kind === 'text' ? 'AUDIO / FORM' : undefined,
       objectUrl: kind === 'image' ? url : undefined,
       fontFamily: 'Inter',
+      fontSource: 'google',
       fontWeight: 800,
       lineHeight: 1,
     };
@@ -491,12 +516,7 @@ export class LayerEditor {
     if (layer.kind === 'text') {
       transform.prepend(
         this.textInput(layer),
-        this.selectControl(
-          'Font',
-          ['Inter', 'Arial', 'Georgia', 'Courier New', 'Times New Roman'],
-          layer.fontFamily ?? 'Inter',
-          (value) => this.changeLayer(layer, () => (layer.fontFamily = value)),
-        ),
+        this.fontControl(layer),
         this.selectControl(
           'Weight',
           ['300', '400', '500', '600', '700', '800', '900'],
@@ -515,6 +535,11 @@ export class LayerEditor {
       );
     }
     const style = this.inspectorSection('Style & audio', 'ph-sparkle');
+    style.append(
+      this.checkboxControl('Apply effects', layer.effectsEnabled, (enabled) =>
+        this.changeLayer(layer, () => (layer.effectsEnabled = enabled)),
+      ),
+    );
     const supportsFill = ['circle', 'rectangle', 'polygon'].includes(layer.kind);
     const supportsStroke = ['circle', 'wave', 'rectangle', 'line', 'polygon', 'freehand'].includes(
       layer.kind,
@@ -632,6 +657,125 @@ export class LayerEditor {
     unit.textContent = suffix;
     label.append(prefix, input, unit);
     return label;
+  }
+
+  private checkboxControl(
+    labelText: string,
+    checked: boolean,
+    change: (checked: boolean) => void,
+  ): HTMLElement {
+    const label = document.createElement('label');
+    label.className = 'checkbox-control';
+    const name = document.createElement('span');
+    name.textContent = labelText;
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = checked;
+    input.addEventListener('change', () => change(input.checked));
+    label.append(name, input);
+    return label;
+  }
+
+  private fontControl(layer: DesignLayer): HTMLElement {
+    const root = document.createElement('div');
+    root.className = 'font-control';
+    const sourceLabel = document.createElement('label');
+    const sourceName = document.createElement('span');
+    sourceName.textContent = 'Font source';
+    const source = document.createElement('select');
+    for (const [value, label] of [
+      ['local', 'Local / Adobe'],
+      ['google', 'Google Fonts'],
+    ] as const) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      option.selected = value === (layer.fontSource ?? 'local');
+      source.append(option);
+    }
+    sourceLabel.append(sourceName, source);
+
+    const familyLabel = document.createElement('label');
+    const familyName = document.createElement('span');
+    familyName.textContent = 'Font family';
+    const family = document.createElement('input');
+    family.type = 'text';
+    family.value = layer.fontFamily ?? 'Inter';
+    family.placeholder = 'Enter exact font family name';
+    const listId = `font-list-${layer.id}`;
+    family.setAttribute('list', listId);
+    const list = document.createElement('datalist');
+    list.id = listId;
+    for (const name of [
+      ...GOOGLE_FONTS,
+      'Arial',
+      'Helvetica Neue',
+      'Georgia',
+      'Courier New',
+      'Times New Roman',
+      'Hiragino Sans',
+      'Hiragino Mincho ProN',
+      'Yu Gothic',
+      'Yu Mincho',
+    ]) {
+      const option = document.createElement('option');
+      option.value = name;
+      list.append(option);
+    }
+    const status = document.createElement('small');
+    status.textContent =
+      (layer.fontSource ?? 'local') === 'google'
+        ? 'Loaded from Google Fonts'
+        : 'Uses an activated local font';
+    familyLabel.append(familyName, family, list, status);
+    root.append(sourceLabel, familyLabel);
+
+    const applyFont = (): void => {
+      const fontName = family.value.trim();
+      if (!fontName) return;
+      this.changeLayer(layer, () => {
+        layer.fontFamily = fontName;
+        layer.fontSource = source.value as FontSource;
+      });
+      void this.loadFont(fontName, layer.fontSource ?? 'local').then((available) => {
+        status.textContent = available
+          ? layer.fontSource === 'google'
+            ? 'Google Font loaded'
+            : 'Local font available'
+          : 'Font not found — using fallback';
+        status.classList.toggle('is-error', !available);
+      });
+    };
+    family.addEventListener('input', () => {
+      this.changeLayer(layer, () => (layer.fontFamily = family.value.trim() || 'Inter'));
+    });
+    family.addEventListener('change', applyFont);
+    source.addEventListener('change', applyFont);
+    void this.loadFont(layer.fontFamily ?? 'Inter', layer.fontSource ?? 'local');
+    return root;
+  }
+
+  private async loadFont(family: string, source: FontSource): Promise<boolean> {
+    if (source === 'google' && !this.loadedGoogleFonts.has(family)) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family).replace(/%20/g, '+')}&display=swap`;
+      link.dataset.googleFont = family;
+      const loaded = new Promise<void>((resolve) => {
+        link.addEventListener('load', () => resolve(), { once: true });
+        link.addEventListener('error', () => resolve(), { once: true });
+      });
+      document.head.append(link);
+      await loaded;
+      this.loadedGoogleFonts.add(family);
+    }
+    try {
+      await document.fonts.load(`16px "${family}"`);
+      this.compositeRefreshPending = true;
+      return document.fonts.check(`16px "${family}"`);
+    } catch {
+      return false;
+    }
   }
 
   private paintControl(
@@ -847,7 +991,7 @@ export class LayerEditor {
   private duplicate(layer: DesignLayer): void {
     if (layer.kind === 'generator') return;
     if (layer.kind === 'image' && layer.objectUrl) this.addLayer('image', layer.objectUrl); else this.addLayer(layer.kind);
-    const copy = this.layers.at(-1)!; Object.assign(copy, { x: layer.x + 32, y: layer.y + 32, width: layer.width, height: layer.height, rotation: layer.rotation, opacity: layer.opacity, color: layer.color, fillEnabled: layer.fillEnabled, fillColor: layer.fillColor, strokeEnabled: layer.strokeEnabled, strokeColor: layer.strokeColor, strokeWidth: layer.strokeWidth, blur: layer.blur, contrast: layer.contrast, reactTo: layer.reactTo, reactAmount: layer.reactAmount, text: layer.text });
+    const copy = this.layers.at(-1)!; Object.assign(copy, { x: layer.x + 32, y: layer.y + 32, width: layer.width, height: layer.height, rotation: layer.rotation, opacity: layer.opacity, color: layer.color, fillEnabled: layer.fillEnabled, fillColor: layer.fillColor, strokeEnabled: layer.strokeEnabled, strokeColor: layer.strokeColor, strokeWidth: layer.strokeWidth, effectsEnabled: layer.effectsEnabled, blur: layer.blur, contrast: layer.contrast, reactTo: layer.reactTo, reactAmount: layer.reactAmount, text: layer.text, fontFamily: layer.fontFamily, fontSource: layer.fontSource });
     if (copy.kind === 'text') copy.element.textContent = copy.text ?? '';
     this.compositeRefreshPending = true;
   }
@@ -889,6 +1033,7 @@ export class LayerEditor {
         strokeEnabled: layer.strokeEnabled,
         strokeColor: layer.strokeColor,
         strokeWidth: layer.strokeWidth,
+        effectsEnabled: layer.effectsEnabled,
         blur: layer.blur,
         contrast: layer.contrast,
         reactTo: layer.reactTo,
@@ -896,6 +1041,7 @@ export class LayerEditor {
         text: layer.text,
         imageData: layer.kind === 'image' ? layer.objectUrl : undefined,
         fontFamily: layer.fontFamily,
+        fontSource: layer.fontSource,
         fontWeight: layer.fontWeight,
         lineHeight: layer.lineHeight,
         path: layer.path,
@@ -932,6 +1078,8 @@ export class LayerEditor {
         saved.strokeEnabled ?? !['generator', 'image', 'text'].includes(saved.kind),
       strokeColor: saved.strokeColor ?? color,
       strokeWidth: saved.strokeWidth ?? (['line', 'wave', 'freehand'].includes(saved.kind) ? 6 : 8),
+      effectsEnabled: saved.effectsEnabled ?? saved.kind !== 'text',
+      fontSource: saved.fontSource ?? 'local',
     };
   }
 
@@ -958,7 +1106,10 @@ export class LayerEditor {
       this.addLayer(saved.kind, saved.imageData);
       const layer = this.layers.at(-1)!;
       Object.assign(layer, this.normalizeSnapshot(saved), { objectUrl: saved.imageData });
-      if (layer.kind === 'text') layer.element.textContent = layer.text ?? '';
+      if (layer.kind === 'text') {
+        layer.element.textContent = layer.text ?? '';
+        void this.loadFont(layer.fontFamily ?? 'Inter', layer.fontSource ?? 'local');
+      }
       this.applyLayer(layer, 0);
     }
     this.selected = null;
@@ -1306,7 +1457,7 @@ export class LayerEditor {
         ),
         1600,
       );
-      const canvases = [this.backCanvas, this.frontCanvas];
+      const canvases = [this.backCanvas, this.frontCanvas, this.cleanCanvas];
       let canvasResized = false;
       const contexts = canvases.map((canvas) => {
         if (canvas.width !== size || canvas.height !== size) {
@@ -1322,7 +1473,9 @@ export class LayerEditor {
       let allLayersDrawn = true;
       this.layers.forEach((layer, index) => {
         if (layer.kind === 'generator') return;
-        const context = contexts[generatorIndex >= 0 && index < generatorIndex ? 0 : 1];
+        const context = layer.effectsEnabled
+          ? contexts[generatorIndex >= 0 && index < generatorIndex ? 0 : 1]
+          : contexts[2];
         if (context) {
           allLayersDrawn =
             this.drawLayer(context, layer, size, this.audioValue(audio, layer.reactTo)) &&
@@ -1334,7 +1487,11 @@ export class LayerEditor {
         this.compositeRefreshPending ||
         canvasResized
       ) {
-        this.app.setDesignLayerCanvases([this.backCanvas, this.frontCanvas]);
+        this.app.setDesignLayerCanvases([
+          this.backCanvas,
+          this.frontCanvas,
+          this.cleanCanvas,
+        ]);
         this.compositeTexturesReady = true;
         this.compositeRefreshPending = false;
       } else {

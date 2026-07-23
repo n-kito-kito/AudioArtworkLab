@@ -1,4 +1,4 @@
-import type { Composition } from '../compositions/Composition';
+import type { Composition, DesignLayerCanvases } from '../compositions/Composition';
 import type { AudioEngine } from '../audio/AudioEngine';
 import { NullAudioEngine } from '../audio/NullAudioEngine';
 import { AnimationLoop } from './AnimationLoop';
@@ -18,7 +18,7 @@ export class App {
   private loop: AnimationLoop | null = null;
   private contextLost = false;
   private generatorLayerVisible = true;
-  private designLayerCanvases: [HTMLCanvasElement, HTMLCanvasElement] | null = null;
+  private designLayerCanvases: DesignLayerCanvases | null = null;
 
   constructor(container: HTMLElement, composition: Composition, audioEngine?: AudioEngine) {
     this.canvas = new Canvas(container);
@@ -77,7 +77,7 @@ export class App {
     this.composition.resize(this.canvas.width, this.canvas.height);
   }
 
-  setDesignLayerCanvases(canvases: [HTMLCanvasElement, HTMLCanvasElement]): void {
+  setDesignLayerCanvases(canvases: DesignLayerCanvases): void {
     this.designLayerCanvases = canvases;
     this.composition.setDesignLayerCanvases(canvases);
     this.renderNow();

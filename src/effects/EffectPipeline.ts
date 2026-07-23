@@ -4,11 +4,13 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import type { AudioParameters } from '../audio/AudioEngine';
 import type { Effect } from './Effect';
+import type { DesignLayerCanvases } from '../compositions/Composition';
 
 export class EffectPipeline {
   private readonly composer: EffectComposer;
   readonly effects: Effect[];
   private overlayPass: ShaderPass | null = null;
+  private cleanOverlayPass: ShaderPass | null = null;
   private overlayTextures: THREE.CanvasTexture[] = [];
 
   constructor(
@@ -49,7 +51,7 @@ export class EffectPipeline {
     this.composer.render();
   }
 
-  setOverlayCanvases(canvases: [HTMLCanvasElement, HTMLCanvasElement]): void {
+  setOverlayCanvases(canvases: DesignLayerCanvases): void {
     this.disposeOverlay();
     this.overlayTextures = canvases.map((canvas) => {
       const texture = new THREE.CanvasTexture(canvas);
@@ -92,6 +94,37 @@ export class EffectPipeline {
         }
       `,
     });
+    this.cleanOverlayPass = new ShaderPass({
+      uniforms: {
+        tDiffuse: { value: null },
+        tClean: { value: this.overlayTextures[2] },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D tDiffuse;
+        uniform sampler2D tClean;
+        varying vec2 vUv;
+
+        void main() {
+          vec4 base = texture2D(tDiffuse, vUv);
+          vec4 clean = texture2D(tClean, vUv);
+          float alpha = clean.a + base.a * (1.0 - clean.a);
+          if (alpha <= 0.0001) {
+            gl_FragColor = vec4(0.0);
+            return;
+          }
+          vec3 color =
+            (clean.rgb * clean.a + base.rgb * base.a * (1.0 - clean.a)) / alpha;
+          gl_FragColor = vec4(color, alpha);
+        }
+      `,
+    });
     this.rebuild();
   }
 
@@ -113,6 +146,7 @@ export class EffectPipeline {
     while (this.composer.passes.length > 1) this.composer.removePass(this.composer.passes[1]!);
     if (this.overlayPass) this.composer.addPass(this.overlayPass);
     for (const effect of this.effects) this.composer.addPass(effect.pass);
+    if (this.cleanOverlayPass) this.composer.addPass(this.cleanOverlayPass);
   }
 
   private disposeOverlay(): void {
@@ -120,6 +154,11 @@ export class EffectPipeline {
       this.composer.removePass(this.overlayPass);
       this.overlayPass.material.dispose();
       this.overlayPass = null;
+    }
+    if (this.cleanOverlayPass) {
+      this.composer.removePass(this.cleanOverlayPass);
+      this.cleanOverlayPass.material.dispose();
+      this.cleanOverlayPass = null;
     }
     this.overlayTextures.forEach((texture) => texture.dispose());
     this.overlayTextures = [];
