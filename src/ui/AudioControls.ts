@@ -141,9 +141,23 @@ export class AudioControls {
   };
 
   private readonly onPlayToggle = (): void => {
-    if (this.engine.isInputActive) this.engine.stopInput();
-    else if (this.engine.isPlaying) this.engine.pause();
-    else void this.engine.play().catch((error: unknown) => this.setError(error));
+    if (this.engine.isInputActive) {
+      this.engine.stopInput();
+      this.setPlayButtonState(false);
+      return;
+    }
+    if (this.engine.isPlaying) {
+      this.engine.pause();
+      this.setPlayButtonState(false);
+      this.status.textContent = 'Paused';
+      return;
+    }
+    this.setPlayButtonState(true);
+    this.status.textContent = 'Playing';
+    void this.engine.play().catch((error: unknown) => {
+      this.setPlayButtonState(false);
+      this.setError(error);
+    });
   };
 
   private readonly onInputToggle = (): void => {
@@ -208,11 +222,16 @@ export class AudioControls {
     this.status.classList.add('is-error');
   }
 
-  private readonly update = (): void => {
-    const playing = this.engine.isPlaying;
+  private setPlayButtonState(playing: boolean): void {
     this.playButton.innerHTML = playing
       ? '<i class="ph ph-pause"></i><span>Pause</span>'
       : '<i class="ph ph-play"></i><span>Play</span>';
+    this.playButton.setAttribute('aria-label', playing ? 'Pause audio' : 'Play audio');
+  }
+
+  private readonly update = (): void => {
+    const playing = this.engine.isPlaying;
+    this.setPlayButtonState(playing);
     this.inputButton.classList.toggle('is-active', this.engine.isInputActive);
     this.seekInput.value = String(this.engine.currentTime);
     this.time.textContent = `${formatTime(this.engine.currentTime)} / ${formatTime(this.engine.duration)}`;

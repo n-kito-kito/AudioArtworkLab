@@ -22,7 +22,7 @@ export class FileAudioEngine implements AudioEngine {
   private waveform = new Float32Array(FFT_SIZE);
 
   constructor() {
-    this.audio.preload = 'metadata';
+    this.audio.preload = 'auto';
   }
 
   async load(file: File): Promise<void> {
@@ -36,10 +36,9 @@ export class FileAudioEngine implements AudioEngine {
     this.releaseObjectUrl();
     this.objectUrl = URL.createObjectURL(file);
     this.audio.src = this.objectUrl;
-    this.audio.load();
 
     await new Promise<void>((resolve, reject) => {
-      const onLoaded = (): void => {
+      const onReady = (): void => {
         cleanup();
         resolve();
       };
@@ -48,21 +47,23 @@ export class FileAudioEngine implements AudioEngine {
         reject(new Error('音声ファイルを読み込めませんでした。'));
       };
       const cleanup = (): void => {
-        this.audio.removeEventListener('loadedmetadata', onLoaded);
+        this.audio.removeEventListener('canplay', onReady);
         this.audio.removeEventListener('error', onError);
       };
 
-      this.audio.addEventListener('loadedmetadata', onLoaded);
+      this.audio.addEventListener('canplay', onReady);
       this.audio.addEventListener('error', onError);
+      this.audio.load();
     });
+    this.ensureAudioGraph();
   }
 
   async play(): Promise<void> {
     if (!this.objectUrl) return;
 
     this.ensureAudioGraph();
-    await this.context?.resume();
-    await this.audio.play();
+    const resume = this.context?.state === 'suspended' ? this.context.resume() : Promise.resolve();
+    await Promise.all([resume, this.audio.play()]);
   }
 
   async startInput(): Promise<void> {
