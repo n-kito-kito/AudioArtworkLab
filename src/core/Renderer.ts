@@ -7,7 +7,12 @@ export class Renderer {
 
   constructor(canvas: Canvas) {
     this.canvas = canvas;
-    this.three = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    this.three = new THREE.WebGLRenderer({
+      alpha: true,
+      antialias: true,
+      preserveDrawingBuffer: true,
+    });
+    this.three.setClearColor(0x000000, 0);
     this.three.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.three.setSize(canvas.width, canvas.height, false);
     canvas.element.appendChild(this.three.domElement);

@@ -19,6 +19,8 @@ The implementation follows the reference's editor hierarchy: compact top toolbar
 - Browser interaction test created a reactive circle and text layer, then imported `src/assets/hero.png`; the inspector correctly followed each selected layer.
 - Layer-list deletion was verified in the browser: the always-visible trash icon removed the selected row immediately, and the `Delete` key removed the selected canvas layer.
 - Keyboard safety was verified by pressing `Backspace` inside the text-content input; the character was edited while the layer remained present.
+- The default `Sine Wave` now appears as the initial bottom layer. Browser verification moved it above a circle (`canvas z-index: 2`, circle `z-index: 1`) and confirmed both remained visible through the transparent WebGL canvas.
+- Deleting `Sine Wave` from its row and with the `Delete` key both removed the row and hid the generated wave while leaving other design layers visible.
 - PNG export composites the WebGL artwork and design layers into one 1600 × 1600 image.
 - Mobile browser verification at 390 × 844 reported zero horizontal page overflow and a working off-canvas Controls drawer.
 - Browser console contained no errors or warnings during the verified interactions.
@@ -37,6 +39,8 @@ The implementation follows the reference's editor hierarchy: compact top toolbar
 8. P3 — The production bundle reports a non-blocking size warning due to Three.js and the icon font. Deferred; code splitting can be addressed when load performance becomes a priority.
 9. P1 — Delete was only available low in the inspector and was difficult to discover in a tall panel. Resolved by adding a dedicated Phosphor trash control beside the six-dot handle on every layer row.
 10. P2 — Selected layers could not be removed with the keyboard. Resolved with `Delete` and `Backspace` shortcuts, guarded so form fields and editable text retain normal editing behavior.
+11. P1 — The default generated wave was visually fixed behind every design layer. Resolved by registering the WebGL output as the initial `Sine Wave` layer and using a transparent renderer so it can move above or below DOM layers without covering them with a black rectangle.
+12. P1 — The generated wave could not be removed through the layer model. Resolved by routing row-trash, inspector Delete, and keyboard deletion through the same generator-layer removal path.
 
 ## Required fidelity surfaces
 
@@ -52,6 +56,7 @@ The implementation follows the reference's editor hierarchy: compact top toolbar
 - Earlier P1: layered artwork could not be exported. Fixed with composited PNG output.
 - Earlier P1: layer deletion was hidden below the fold. Fixed with an always-visible row action; post-fix browser evidence showed one delete button for one layer and zero rows after activation.
 - Earlier P2: keyboard deletion was unavailable. Fixed and verified for both layer deletion and text-input protection.
+- Earlier P1: the default wave was outside the layer stack. Fixed and verified through browser-visible ordering, row deletion, keyboard deletion, and a clean console.
 - Post-fix evidence: browser-rendered desktop state with circle plus text, image-import interaction state, mobile 390 × 844 state, and clean console were inspected during this QA pass. The existing 1600 × 1000 screenshot remains the normalized shell-layout reference because the outer layout did not change.
 
 ## Final result

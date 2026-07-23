@@ -1,10 +1,10 @@
-import * as THREE from 'three';
+import { Scene as ThreeScene } from 'three';
 
 export class Scene {
-  readonly three: THREE.Scene;
+  readonly three: ThreeScene;
 
   constructor() {
-    this.three = new THREE.Scene();
-    this.three.background = new THREE.Color(0x000000);
+    this.three = new ThreeScene();
+    this.three.background = null;
   }
 }

@@ -472,6 +472,8 @@ select:focus-visible {
 }
 
 .artboard canvas {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -479,9 +481,9 @@ select:focus-visible {
 
 .layer-surface {
   position: absolute;
-  z-index: 4;
   inset: 0;
   overflow: hidden;
+  pointer-events: none;
   touch-action: none;
 }
 
@@ -490,6 +492,7 @@ select:focus-visible {
   display: block;
   max-width: none;
   cursor: grab;
+  pointer-events: auto;
   user-select: none;
   transform-origin: center;
   will-change: transform, filter;
@@ -545,6 +548,7 @@ select:focus-visible {
 .layer-text-control { display: grid; gap: 7px; }
 .layer-text-control input { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--control); }
 .layer-actions { grid-template-columns: repeat(2, 1fr); }
+.inspector-note { color: var(--muted); font-size: 10px; line-height: 1.55; }
 
 .control-panel--left > .layer-panel { order: 0 !important; }
 

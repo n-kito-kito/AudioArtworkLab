@@ -1,7 +1,7 @@
 import type { AudioEngine, AudioParameters } from '../audio/AudioEngine';
 import type { StudioShell } from './StudioShell';
 
-type LayerKind = 'image' | 'circle' | 'text' | 'wave';
+type LayerKind = 'generator' | 'image' | 'circle' | 'text' | 'wave';
 type ReactSource = 'none' | 'volume' | 'bass' | 'mid' | 'treble' | 'beat';
 
 interface DesignLayer {
@@ -48,12 +48,38 @@ export class LayerEditor {
     this.fileInput.hidden = true;
     this.buildPanel();
     this.shell.canvasHost.append(this.surface);
+    this.registerDefaultGenerator();
     this.shell.leftPanel.prepend(this.section);
     this.bindDrag();
     this.fileInput.addEventListener('change', this.onFile);
     this.shell.root.addEventListener('studio:effect-selected', this.clearSelection);
     document.addEventListener('keydown', this.onKeyDown);
     this.frame = requestAnimationFrame(this.update);
+  }
+
+  private registerDefaultGenerator(): void {
+    const canvas = this.shell.canvasHost.querySelector('canvas');
+    if (!canvas) return;
+    const layer: DesignLayer = {
+      id: crypto.randomUUID(),
+      kind: 'generator',
+      name: 'Sine Wave',
+      element: canvas,
+      x: 50,
+      y: 50,
+      scale: 1,
+      rotation: 0,
+      opacity: 1,
+      color: '#ffffff',
+      blur: 0,
+      contrast: 1,
+      reactTo: 'none',
+      reactAmount: 0,
+      baseWidth: 100,
+    };
+    this.layers.push(layer);
+    this.syncStack();
+    this.renderList();
   }
 
   private buildPanel(): void {
@@ -121,6 +147,7 @@ export class LayerEditor {
     });
     this.layers.push(layer);
     this.surface.append(element);
+    this.syncStack();
     this.applyLayer(layer, 0);
     this.select(layer);
     this.renderList();
@@ -160,9 +187,13 @@ export class LayerEditor {
       const row = document.createElement('div');
       row.className = 'layer-row';
       row.classList.toggle('is-selected', layer === this.selected);
-      const icon = { image: 'ph-image', circle: 'ph-circle', wave: 'ph-wave-sine', text: 'ph-text-t' }[
-        layer.kind
-      ];
+      const icon = {
+        generator: 'ph-wave-sine',
+        image: 'ph-image',
+        circle: 'ph-circle',
+        wave: 'ph-wave-sine',
+        text: 'ph-text-t',
+      }[layer.kind];
       const selectButton = document.createElement('button');
       selectButton.type = 'button';
       selectButton.className = 'layer-row__select';
@@ -202,6 +233,24 @@ export class LayerEditor {
     const header = document.createElement('div');
     header.className = 'inspector-header';
     header.innerHTML = `<span>SELECTED LAYER</span><strong>${layer.name}</strong>`;
+    if (layer.kind === 'generator') {
+      const source = this.inspectorSection('GENERATOR SOURCE', 'ph-wave-sine');
+      const note = document.createElement('p');
+      note.className = 'inspector-note';
+      note.textContent = 'Shape and audio response are controlled in the Generator panel.';
+      source.append(note);
+      const actions = this.inspectorSection('ARRANGE', 'ph-stack');
+      const row = document.createElement('div');
+      row.className = 'button-row layer-actions';
+      row.append(
+        this.actionButton('ph-arrow-up', 'Forward', () => this.move(layer, 1)),
+        this.actionButton('ph-arrow-down', 'Backward', () => this.move(layer, -1)),
+        this.actionButton('ph-trash', 'Delete', () => this.remove(layer)),
+      );
+      actions.append(row);
+      panel.append(header, source, actions);
+      return;
+    }
     const transform = this.inspectorSection('TRANSFORM', 'ph-arrows-out-cardinal');
     transform.append(
       this.range('Position X', layer.x, 0, 100, 1, (v) => (layer.x = v), '%'),
@@ -286,10 +335,11 @@ export class LayerEditor {
   private move(layer: DesignLayer, direction: -1 | 1): void {
     const index = this.layers.indexOf(layer); const next = Math.max(0, Math.min(this.layers.length - 1, index + direction));
     if (index === next) return; this.layers.splice(index, 1); this.layers.splice(next, 0, layer);
-    this.layers.forEach((item) => this.surface.append(item.element)); this.renderList();
+    this.syncStack(); this.renderList();
   }
 
   private duplicate(layer: DesignLayer): void {
+    if (layer.kind === 'generator') return;
     if (layer.kind === 'image' && layer.objectUrl) this.addLayer('image', layer.objectUrl); else this.addLayer(layer.kind);
     const copy = this.layers.at(-1)!; Object.assign(copy, { x: layer.x + 4, y: layer.y + 4, scale: layer.scale, rotation: layer.rotation, opacity: layer.opacity, color: layer.color, blur: layer.blur, contrast: layer.contrast, reactTo: layer.reactTo, reactAmount: layer.reactAmount, text: layer.text });
     if (copy.kind === 'text') copy.element.textContent = copy.text ?? '';
@@ -297,8 +347,18 @@ export class LayerEditor {
 
   private remove(layer: DesignLayer): void {
     const index = this.layers.indexOf(layer); if (index < 0) return;
-    layer.element.remove(); if (layer.objectUrl) URL.revokeObjectURL(layer.objectUrl); this.layers.splice(index, 1);
+    if (layer.kind === 'generator') layer.element.style.display = 'none';
+    else layer.element.remove();
+    if (layer.objectUrl) URL.revokeObjectURL(layer.objectUrl);
+    this.layers.splice(index, 1);
+    this.syncStack();
     this.selected = null; this.renderList(); this.shell.root.dispatchEvent(new CustomEvent('studio:restore-effect'));
+  }
+
+  private syncStack(): void {
+    this.layers.forEach((layer, index) => {
+      layer.element.style.zIndex = String(index + 1);
+    });
   }
 
   private bindDrag(): void {
@@ -327,6 +387,7 @@ export class LayerEditor {
   }
 
   private applyLayer(layer: DesignLayer, audioValue: number): void {
+    if (layer.kind === 'generator') return;
     const pulse = 1 + audioValue * layer.reactAmount;
     const wobble = Math.sin(performance.now() * 0.004 + this.layers.indexOf(layer)) * audioValue * layer.reactAmount * 7;
     const element = layer.element;
@@ -347,8 +408,12 @@ export class LayerEditor {
     output.height = size;
     const context = output.getContext('2d');
     if (!context) return;
-    context.drawImage(source, 0, 0, size, size);
-    for (const layer of this.layers) this.drawLayer(context, layer, size);
+    context.fillStyle = '#000000';
+    context.fillRect(0, 0, size, size);
+    for (const layer of this.layers) {
+      if (layer.kind === 'generator') context.drawImage(source, 0, 0, size, size);
+      else this.drawLayer(context, layer, size);
+    }
     const link = document.createElement('a');
     link.download = `audio-artwork-${Date.now()}.png`;
     link.href = output.toDataURL('image/png');
