@@ -6,6 +6,7 @@ import type {
   Effect,
   EffectAudioMapping,
   EffectAudioMappings,
+  EffectBlendMode,
   EffectParameterSchema,
   EffectParameterValue,
   EffectParameterValues,
@@ -23,14 +24,59 @@ export abstract class BaseShaderEffect implements Effect {
   readonly pass: ShaderPass;
   readonly parameterSchema: readonly EffectParameterSchema[];
   intensity: number;
+  dryWet = 1;
+  effectOpacity = 1;
+  blendMode: EffectBlendMode = 'normal';
   private readonly audioMappings: EffectAudioMappings = {};
   private readonly smoothedAudioValues = new Map<string, number>();
 
   constructor(shader: EffectShader, intensity: Omit<NumberEffectParameter, 'key' | 'type'>) {
-    this.pass = new ShaderPass(shader);
+    this.pass = new ShaderPass({
+      ...shader,
+      uniforms: {
+        ...shader.uniforms,
+        uDryWet: { value: 1 },
+        uEffectOpacity: { value: 1 },
+        uBlendMode: { value: 0 },
+      },
+      fragmentShader: this.wrapFragmentShader(shader.fragmentShader),
+    });
     this.pass.enabled = false;
     this.intensity = intensity.defaultValue;
-    this.parameterSchema = [{ key: 'intensity', type: 'number', ...intensity }];
+    this.parameterSchema = [
+      { key: 'intensity', type: 'number', ...intensity },
+      {
+        key: 'dryWet',
+        type: 'number',
+        label: 'Dry / Wet',
+        defaultValue: 1,
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
+      {
+        key: 'effectOpacity',
+        type: 'number',
+        label: 'Effect opacity',
+        defaultValue: 1,
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
+      {
+        key: 'blendMode',
+        type: 'select',
+        label: 'Blend mode',
+        defaultValue: 'normal',
+        options: [
+          { label: 'Normal', value: 'normal' },
+          { label: 'Add', value: 'add' },
+          { label: 'Screen', value: 'screen' },
+          { label: 'Multiply', value: 'multiply' },
+          { label: 'Difference', value: 'difference' },
+        ],
+      },
+    ];
   }
 
   get enabled(): boolean {
@@ -125,6 +171,9 @@ export abstract class BaseShaderEffect implements Effect {
 
   protected readParameter(key: string): EffectParameterValue | undefined {
     if (key === 'intensity') return this.intensity;
+    if (key === 'dryWet') return this.dryWet;
+    if (key === 'effectOpacity') return this.effectOpacity;
+    if (key === 'blendMode') return this.blendMode;
     const uniform = this.pass.uniforms[`u${key.charAt(0).toUpperCase()}${key.slice(1)}`];
     const value = uniform?.value;
     return typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string'
@@ -149,6 +198,19 @@ export abstract class BaseShaderEffect implements Effect {
     }
     if (parameter.key === 'intensity') {
       this.intensity = safeValue as number;
+      return;
+    }
+    if (parameter.key === 'dryWet') {
+      this.dryWet = safeValue as number;
+      return;
+    }
+    if (parameter.key === 'effectOpacity') {
+      this.effectOpacity = safeValue as number;
+      return;
+    }
+    if (parameter.key === 'blendMode') {
+      this.blendMode = safeValue as EffectBlendMode;
+      this.pass.uniforms.uBlendMode!.value = this.blendModeIndex(this.blendMode);
       return;
     }
     const uniform = this.pass.uniforms[
@@ -200,5 +262,46 @@ export abstract class BaseShaderEffect implements Effect {
   private writeUniform(key: string, value: number): void {
     const uniform = this.pass.uniforms[`u${key.charAt(0).toUpperCase()}${key.slice(1)}`];
     if (uniform) uniform.value = value;
+  }
+
+  private blendModeIndex(mode: EffectBlendMode): number {
+    return ['normal', 'add', 'screen', 'multiply', 'difference'].indexOf(mode);
+  }
+
+  private wrapFragmentShader(fragmentShader: string): string {
+    const effectShader = fragmentShader.replace(
+      /void\s+main\s*\(\s*\)/,
+      'void effectMain()',
+    );
+    if (effectShader === fragmentShader) {
+      throw new Error('Effect shader must declare void main()');
+    }
+    return /* glsl */ `
+      ${effectShader}
+
+      uniform float uDryWet;
+      uniform float uEffectOpacity;
+      uniform int uBlendMode;
+
+      vec3 blendEffect(vec3 source, vec3 effectColor) {
+        if (uBlendMode == 1) return source + effectColor;
+        if (uBlendMode == 2) return 1.0 - (1.0 - source) * (1.0 - effectColor);
+        if (uBlendMode == 3) return source * effectColor;
+        if (uBlendMode == 4) return abs(source - effectColor);
+        return effectColor;
+      }
+
+      void main() {
+        vec4 source = texture2D(tDiffuse, vUv);
+        effectMain();
+        vec4 effectColor = gl_FragColor;
+        float mixAmount = clamp(uDryWet, 0.0, 1.0) * clamp(uEffectOpacity, 0.0, 1.0);
+        vec3 blended = blendEffect(source.rgb, effectColor.rgb);
+        gl_FragColor = vec4(
+          mix(source.rgb, blended, mixAmount),
+          mix(source.a, effectColor.a, mixAmount)
+        );
+      }
+    `;
   }
 }

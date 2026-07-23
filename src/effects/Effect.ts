@@ -2,6 +2,7 @@ import type { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js
 import type { AudioParameters } from '../audio/AudioEngine';
 
 export type AudioSource = 'none' | 'volume' | 'bass' | 'mid' | 'treble' | 'beat';
+export type EffectBlendMode = 'normal' | 'add' | 'screen' | 'multiply' | 'difference';
 
 export type EffectParameterValue = number | boolean | string;
 export type EffectParameterValues = Record<string, EffectParameterValue>;
@@ -60,6 +61,9 @@ export interface Effect {
   readonly parameterSchema: readonly EffectParameterSchema[];
   enabled: boolean;
   intensity: number;
+  dryWet: number;
+  effectOpacity: number;
+  blendMode: EffectBlendMode;
   audioSource: AudioSource;
   getParameterValues(): EffectParameterValues;
   setParameterValues(values: EffectParameterValues): void;

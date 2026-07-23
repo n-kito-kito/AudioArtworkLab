@@ -58,6 +58,8 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
   without Effect-specific StudioControls code.
 - Added per-number-parameter Audio Mapping controls for source, amount, min/max, smoothing, and
   inversion, allowing one Effect to react to multiple audio bands independently.
+- Added common Dry/Wet, Effect opacity, and Normal/Add/Screen/Multiply/Difference blend controls
+  through a shared shader wrapper, with neutral defaults that preserve existing output.
 - Added automatic migration from legacy percentage-based layer presets to pixel coordinates.
 - Replaced the fluorescent green UI accent with a Figma-like blue selection color.
 - Kept Export PNG as the visually prominent blue primary action.
