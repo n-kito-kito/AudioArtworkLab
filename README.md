@@ -38,7 +38,11 @@ Framework の骨格と最初の表現が動いている。
 | **Effect**      | `Grain`, `Blur`, `PaletteMap`, `RGBSplit`, `Glitch`, `Warp`, `ScanDrift`, `Repeat` |
 | **Composition** | `SineWaveBasic` — ゆっくり動く正弦波                                               |
 | **Audio**       | MP3 / WAV再生、周波数帯・Beat・波形解析                                            |
-| **GUI**         | Generator、音反応量、Effect Pipelineをリアルタイム操作                             |
+| **GUI**         | Generator、音反応量、Effect Pipeline、デザインレイヤーをリアルタイム操作            |
+
+### デザインレイヤー
+
+中央のキャンバスには、WebGLで生成する波形とは別に、画像・円・波形・テキストを自由に追加できます。各レイヤーはドラッグ移動、拡大縮小、回転、色、透明度、Blur、Contrast、重なり順を調整でき、Volume / Bass / Mid / Treble / Beatへ反応させられます。画像はローカルファイルから読み込みでき、すべてのレイヤーを含むPNGを書き出せます。
 
 ---
 

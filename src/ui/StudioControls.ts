@@ -20,6 +20,7 @@ export class StudioControls {
   private readonly composition: SineWaveBasic;
   private readonly audioEngine: FileAudioEngine;
   private readonly app: App;
+  private readonly exportArtwork: () => void;
   private readonly toolbarActions = document.createElement('div');
   private readonly chainTrack = document.createElement('div');
   private selectedEffect: Effect;
@@ -30,21 +31,25 @@ export class StudioControls {
     composition: SineWaveBasic,
     audioEngine: FileAudioEngine,
     app: App,
+    exportArtwork?: () => void,
   ) {
     this.shell = shell;
     this.composition = composition;
     this.audioEngine = audioEngine;
     this.app = app;
+    this.exportArtwork = exportArtwork ?? (() => this.app.exportPng());
     this.selectedEffect = composition.getEffects()[0]!;
     this.buildToolbar();
     this.buildLeftPanel();
     this.buildInspector();
     this.buildChain();
+    this.shell.root.addEventListener('studio:restore-effect', this.restoreEffect);
   }
 
   dispose(): void {
     this.toolbarActions.remove();
     this.chainTrack.remove();
+    this.shell.root.removeEventListener('studio:restore-effect', this.restoreEffect);
     this.shell.leftPanel.querySelectorAll('.visual-section').forEach((element) => element.remove());
     this.shell.rightPanel.replaceChildren();
   }
@@ -69,7 +74,7 @@ export class StudioControls {
         this.shell.root.classList.toggle('right-open'),
       ),
       this.iconButton('ph-corners-out', 'Fullscreen', () => void this.toggleFullscreen()),
-      this.iconButton('ph-export', 'Export PNG', () => this.app.exportPng(), true),
+      this.iconButton('ph-export', 'Export PNG', this.exportArtwork, true),
     );
     this.shell.toolbar.append(this.toolbarActions);
   }
@@ -229,6 +234,7 @@ export class StudioControls {
       name.textContent = effect.name;
       node.append(state, name);
       node.addEventListener('click', () => {
+        this.shell.root.dispatchEvent(new CustomEvent('studio:effect-selected'));
         this.selectedEffect = effect;
         this.buildInspector();
         this.buildChain();
@@ -238,6 +244,10 @@ export class StudioControls {
     }
     this.shell.chain.replaceChildren(this.chainTrack);
   }
+
+  private restoreEffect = (): void => {
+    this.buildInspector();
+  };
 
   private section(titleText: string, iconClass: string): HTMLElement {
     const section = document.createElement('section');

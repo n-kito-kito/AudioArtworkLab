@@ -5,6 +5,7 @@ import { SineWaveBasic } from './compositions/SineWaveBasic';
 import { AudioControls } from './ui/AudioControls';
 import { StudioControls } from './ui/StudioControls';
 import { StudioShell } from './ui/StudioShell';
+import { LayerEditor } from './ui/LayerEditor';
 
 const container = document.querySelector<HTMLDivElement>('#app');
 
@@ -17,13 +18,17 @@ const composition = new SineWaveBasic();
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 const audioControls = new AudioControls(shell.leftPanel, audioEngine);
-const studioControls = new StudioControls(shell, composition, audioEngine, app);
+const layerEditor = new LayerEditor(shell, audioEngine);
+const studioControls = new StudioControls(shell, composition, audioEngine, app, () =>
+  layerEditor.exportPng(),
+);
 let disposed = false;
 
 const dispose = (): void => {
   if (disposed) return;
   disposed = true;
   audioControls.dispose();
+  layerEditor.dispose();
   studioControls.dispose();
   app.dispose();
   shell.dispose();

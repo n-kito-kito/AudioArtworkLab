@@ -35,7 +35,7 @@ export class StudioShell {
 
     const stageLabel = document.createElement('div');
     stageLabel.className = 'stage-label';
-    stageLabel.innerHTML = '<span>LIVE COMPOSITION</span><strong>SINE / WAVEFORM</strong>';
+    stageLabel.innerHTML = '<span>LIVE COMPOSITION</span><strong>MULTI-LAYER CANVAS</strong>';
     this.stage.append(this.gridOverlay, this.canvasHost, stageLabel);
     this.root.append(this.toolbar, this.leftPanel, this.stage, this.rightPanel, this.chain);
     container.replaceChildren(this.root);
