@@ -21,6 +21,7 @@ const EFFECT_MAX: Record<string, number> = {
   'Scan Drift': 0.1,
   'Pixel Stretch': 0.4,
   'Grid Reveal': 1,
+  Halftone: 1,
 };
 
 const MODIFIER_NAMES = [
