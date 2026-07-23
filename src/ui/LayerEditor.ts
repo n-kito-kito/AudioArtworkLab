@@ -1,7 +1,16 @@
 import type { AudioEngine, AudioParameters } from '../audio/AudioEngine';
 import type { StudioShell } from './StudioShell';
 
-type LayerKind = 'generator' | 'image' | 'circle' | 'text' | 'wave';
+type LayerKind =
+  | 'generator'
+  | 'image'
+  | 'circle'
+  | 'text'
+  | 'wave'
+  | 'rectangle'
+  | 'line'
+  | 'polygon'
+  | 'freehand';
 type ReactSource = 'none' | 'volume' | 'bass' | 'mid' | 'treble' | 'beat';
 
 interface DesignLayer {
@@ -22,6 +31,11 @@ interface DesignLayer {
   baseWidth: number;
   text?: string;
   objectUrl?: string;
+  fontFamily?: string;
+  fontWeight?: number;
+  lineHeight?: number;
+  path?: string;
+  groupId?: string;
 }
 
 export interface LayerSnapshot {
@@ -40,6 +54,11 @@ export interface LayerSnapshot {
   baseWidth: number;
   text?: string;
   imageData?: string;
+  fontFamily?: string;
+  fontWeight?: number;
+  lineHeight?: number;
+  path?: string;
+  groupId?: string;
 }
 
 export interface LayerEditorSnapshot {
@@ -55,6 +74,8 @@ export class LayerEditor {
   private readonly fileInput = document.createElement('input');
   private readonly layers: DesignLayer[] = [];
   private selected: DesignLayer | null = null;
+  private readonly selection = new Set<DesignLayer>();
+  private drawing: { points: Array<[number, number]> } | null = null;
   private frame = 0;
   private drag: { layer: DesignLayer; startX: number; startY: number; x: number; y: number } | null =
     null;
@@ -114,6 +135,10 @@ export class LayerEditor {
       this.addButton('ph-circle', 'Circle', () => this.addLayer('circle')),
       this.addButton('ph-wave-sine', 'Wave', () => this.addLayer('wave')),
       this.addButton('ph-text-t', 'Text', () => this.addLayer('text')),
+      this.addButton('ph-rectangle', 'Rectangle', () => this.addLayer('rectangle')),
+      this.addButton('ph-line-segment', 'Line', () => this.addLayer('line')),
+      this.addButton('ph-polygon', 'Polygon', () => this.addLayer('polygon')),
+      this.addButton('ph-pencil-simple', 'Draw', () => this.startDrawing()),
     );
     this.section.append(title, addGrid, this.fileInput, this.list);
     this.renderList();
@@ -132,7 +157,20 @@ export class LayerEditor {
     const element = document.createElement(kind === 'image' ? 'img' : 'div');
     element.className = `design-layer design-layer--${kind}`;
     element.tabIndex = 0;
-    let name = kind === 'circle' ? 'Reactive Orb' : kind === 'wave' ? 'Wave Line' : 'Text Layer';
+    let name =
+      kind === 'circle'
+        ? 'Reactive Orb'
+        : kind === 'wave'
+          ? 'Wave Line'
+          : kind === 'rectangle'
+            ? 'Rectangle'
+            : kind === 'line'
+              ? 'Line'
+              : kind === 'polygon'
+                ? 'Polygon'
+                : kind === 'freehand'
+                  ? 'Free Drawing'
+                  : 'Text Layer';
     let width = kind === 'text' ? 58 : kind === 'wave' ? 76 : 42;
     const color = kind === 'wave' ? '#b8ff38' : '#f2e9ff';
     if (kind === 'image' && element instanceof HTMLImageElement && url) {
@@ -142,6 +180,9 @@ export class LayerEditor {
       width = 100;
     } else if (kind === 'text') {
       element.textContent = 'AUDIO / FORM';
+    } else if (kind === 'freehand') {
+      element.innerHTML =
+        '<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path vector-effect="non-scaling-stroke"/></svg>';
     }
     const layer: DesignLayer = {
       id: crypto.randomUUID(),
@@ -161,11 +202,14 @@ export class LayerEditor {
       baseWidth: width,
       text: kind === 'text' ? 'AUDIO / FORM' : undefined,
       objectUrl: kind === 'image' ? url : undefined,
+      fontFamily: 'Inter',
+      fontWeight: 800,
+      lineHeight: 1,
     };
     element.dataset.layerId = layer.id;
     element.addEventListener('pointerdown', (event) => {
       event.stopPropagation();
-      this.select(layer);
+      this.select(layer, event instanceof PointerEvent && event.shiftKey);
     });
     this.layers.push(layer);
     this.surface.append(element);
@@ -192,9 +236,14 @@ export class LayerEditor {
     });
   }
 
-  private select(layer: DesignLayer): void {
+  private select(layer: DesignLayer, additive = false): void {
+    if (!additive) this.selection.clear();
+    if (additive && this.selection.has(layer)) this.selection.delete(layer);
+    else this.selection.add(layer);
     this.selected = layer;
-    this.layers.forEach((item) => item.element.classList.toggle('is-selected', item === layer));
+    this.layers.forEach((item) =>
+      item.element.classList.toggle('is-selected', this.selection.has(item)),
+    );
     this.renderList();
     this.buildInspector(layer);
     if (window.innerWidth <= 820) this.shell.root.classList.add('right-open');
@@ -202,6 +251,7 @@ export class LayerEditor {
 
   private clearSelection = (): void => {
     this.selected = null;
+    this.selection.clear();
     this.layers.forEach((item) => item.element.classList.remove('is-selected'));
     this.renderList();
   };
@@ -218,20 +268,26 @@ export class LayerEditor {
     [...this.layers].reverse().forEach((layer) => {
       const row = document.createElement('div');
       row.className = 'layer-row';
-      row.classList.toggle('is-selected', layer === this.selected);
+      row.classList.toggle('is-selected', this.selection.has(layer));
       const icon = {
         generator: 'ph-wave-sine',
         image: 'ph-image',
         circle: 'ph-circle',
         wave: 'ph-wave-sine',
         text: 'ph-text-t',
+        rectangle: 'ph-rectangle',
+        line: 'ph-line-segment',
+        polygon: 'ph-polygon',
+        freehand: 'ph-pencil-simple',
       }[layer.kind];
       const selectButton = document.createElement('button');
       selectButton.type = 'button';
       selectButton.className = 'layer-row__select';
       selectButton.setAttribute('aria-label', `Select ${layer.name}`);
       selectButton.innerHTML = `<i class="ph ${icon}"></i><span>${layer.name}</span><i class="ph ph-dots-six-vertical layer-row__handle"></i>`;
-      selectButton.addEventListener('click', () => this.select(layer));
+      selectButton.addEventListener('click', (event) =>
+        this.select(layer, event instanceof MouseEvent && event.shiftKey),
+      );
       const deleteButton = document.createElement('button');
       deleteButton.type = 'button';
       deleteButton.className = 'layer-row__delete';
@@ -291,7 +347,32 @@ export class LayerEditor {
       this.range('Rotation', layer.rotation, -180, 180, 1, (v) => (layer.rotation = v), '°'),
       this.range('Opacity', layer.opacity, 0, 1, 0.01, (v) => (layer.opacity = v)),
     );
-    if (layer.kind === 'text') transform.prepend(this.textInput(layer));
+    if (layer.kind === 'text') {
+      transform.prepend(
+        this.textInput(layer),
+        this.selectControl(
+          'Font',
+          ['Inter', 'Arial', 'Georgia', 'Courier New', 'Times New Roman'],
+          layer.fontFamily ?? 'Inter',
+          (value) => (layer.fontFamily = value),
+        ),
+        this.selectControl(
+          'Weight',
+          ['300', '400', '500', '600', '700', '800', '900'],
+          String(layer.fontWeight ?? 800),
+          (value) => (layer.fontWeight = Number(value)),
+        ),
+        this.range(
+          'Line height',
+          layer.lineHeight ?? 1,
+          0.7,
+          2,
+          0.05,
+          (value) => (layer.lineHeight = value),
+          'x',
+        ),
+      );
+    }
     const style = this.inspectorSection('STYLE & AUDIO', 'ph-sparkle');
     style.append(
       this.color('Color', layer.color, (v) => (layer.color = v)),
@@ -312,6 +393,19 @@ export class LayerEditor {
       this.actionButton('ph-trash', 'Delete', () => this.remove(layer)),
     );
     actions.append(row);
+    if (this.selection.size > 1) {
+      const multi = document.createElement('div');
+      multi.className = 'button-row layer-actions';
+      multi.append(
+        this.actionButton('ph-align-left', 'Align left', () => this.alignSelection('left')),
+        this.actionButton('ph-align-center-horizontal', 'Align center', () =>
+          this.alignSelection('center'),
+        ),
+        this.actionButton('ph-align-top', 'Align top', () => this.alignSelection('top')),
+        this.actionButton('ph-link', 'Group', () => this.groupSelection()),
+      );
+      actions.append(multi);
+    }
     panel.append(header, transform, style, actions);
   }
 
@@ -354,7 +448,7 @@ export class LayerEditor {
   private textInput(layer: DesignLayer): HTMLElement {
     const label = document.createElement('label'); label.className = 'control-row layer-text-control';
     const name = document.createElement('span'); name.textContent = 'Content';
-    const input = document.createElement('input'); input.type = 'text'; input.value = layer.text ?? '';
+    const input = document.createElement('textarea'); input.value = layer.text ?? ''; input.rows = 3;
     input.addEventListener('input', () => { layer.text = input.value; layer.element.textContent = input.value; });
     label.append(name, input); return label;
   }
@@ -385,6 +479,7 @@ export class LayerEditor {
     this.layers.splice(index, 1);
     this.syncStack();
     this.selected = null; this.renderList(); this.shell.root.dispatchEvent(new CustomEvent('studio:restore-effect'));
+    this.selection.delete(layer);
   }
 
   private syncStack(): void {
@@ -411,6 +506,11 @@ export class LayerEditor {
         baseWidth: layer.baseWidth,
         text: layer.text,
         imageData: layer.kind === 'image' ? layer.objectUrl : undefined,
+        fontFamily: layer.fontFamily,
+        fontWeight: layer.fontWeight,
+        lineHeight: layer.lineHeight,
+        path: layer.path,
+        groupId: layer.groupId,
       })),
     };
   }
@@ -440,6 +540,7 @@ export class LayerEditor {
       this.applyLayer(layer, 0);
     }
     this.selected = null;
+    this.selection.clear();
     this.syncStack();
     this.renderList();
     this.shell.root.dispatchEvent(new CustomEvent('studio:restore-effect'));
@@ -447,17 +548,51 @@ export class LayerEditor {
 
   private bindDrag(): void {
     this.surface.addEventListener('pointerdown', (event) => {
+      if (this.drawing) {
+        const box = this.surface.getBoundingClientRect();
+        this.drawing.points.push([
+          ((event.clientX - box.left) / box.width) * 100,
+          ((event.clientY - box.top) / box.height) * 100,
+        ]);
+        this.surface.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        return;
+      }
       const target = (event.target as HTMLElement).closest<HTMLElement>('.design-layer');
       const layer = this.layers.find((item) => item.element === target); if (!layer) return;
       this.drag = { layer, startX: event.clientX, startY: event.clientY, x: layer.x, y: layer.y };
       this.surface.setPointerCapture(event.pointerId); event.preventDefault();
     });
     this.surface.addEventListener('pointermove', (event) => {
+      if (this.drawing && this.surface.hasPointerCapture(event.pointerId)) {
+        const box = this.surface.getBoundingClientRect();
+        this.drawing.points.push([
+          ((event.clientX - box.left) / box.width) * 100,
+          ((event.clientY - box.top) / box.height) * 100,
+        ]);
+        return;
+      }
       if (!this.drag) return; const box = this.surface.getBoundingClientRect();
-      this.drag.layer.x = Math.max(0, Math.min(100, this.drag.x + ((event.clientX - this.drag.startX) / box.width) * 100));
-      this.drag.layer.y = Math.max(0, Math.min(100, this.drag.y + ((event.clientY - this.drag.startY) / box.height) * 100));
+      const nextX = Math.max(0, Math.min(100, this.drag.x + ((event.clientX - this.drag.startX) / box.width) * 100));
+      const nextY = Math.max(0, Math.min(100, this.drag.y + ((event.clientY - this.drag.startY) / box.height) * 100));
+      const dx = nextX - this.drag.layer.x;
+      const dy = nextY - this.drag.layer.y;
+      const group = this.drag.layer.groupId
+        ? this.layers.filter((layer) => layer.groupId === this.drag!.layer.groupId)
+        : [this.drag.layer];
+      group.forEach((layer) => {
+        layer.x = Math.max(0, Math.min(100, layer.x + dx));
+        layer.y = Math.max(0, Math.min(100, layer.y + dy));
+      });
     });
-    this.surface.addEventListener('pointerup', () => { if (this.drag && this.selected) this.buildInspector(this.selected); this.drag = null; });
+    this.surface.addEventListener('pointerup', () => {
+      if (this.drawing) {
+        this.finishDrawing();
+        return;
+      }
+      if (this.drag && this.selected) this.buildInspector(this.selected);
+      this.drag = null;
+    });
   }
 
   private update = (): void => {
@@ -479,8 +614,18 @@ export class LayerEditor {
     element.style.opacity = String(layer.opacity); element.style.color = layer.color;
     element.style.transform = `translate(-50%, -50%) rotate(${layer.rotation + wobble}deg) scale(${layer.scale * pulse})`;
     element.style.filter = `blur(${layer.blur + audioValue * layer.reactAmount * 5}px) contrast(${layer.contrast})`;
+    if (layer.kind === 'text') {
+      element.style.fontFamily = `${layer.fontFamily ?? 'Inter'}, sans-serif`;
+      element.style.fontWeight = String(layer.fontWeight ?? 800);
+      element.style.lineHeight = String(layer.lineHeight ?? 1);
+    }
     if (layer.kind === 'circle') element.style.setProperty('--layer-color', layer.color);
     if (layer.kind === 'wave') element.style.setProperty('--wave-energy', String(1 + audioValue * layer.reactAmount * 2));
+    if (layer.kind === 'freehand') {
+      const path = element.querySelector('path');
+      path?.setAttribute('d', layer.path ?? '');
+      path?.setAttribute('stroke', layer.color);
+    }
   }
 
   exportPng(): void {
@@ -545,9 +690,93 @@ export class LayerEditor {
       context.stroke();
     } else if (layer.kind === 'text') {
       context.fillStyle = layer.color; context.textAlign = 'center'; context.textBaseline = 'middle';
-      context.font = `800 ${size * 0.075}px Inter, sans-serif`; context.fillText(layer.text ?? '', 0, 0);
+      context.font = `${layer.fontWeight ?? 800} ${size * 0.075}px ${layer.fontFamily ?? 'Inter'}, sans-serif`;
+      const lines = (layer.text ?? '').split('\n');
+      const lineHeight = size * 0.075 * (layer.lineHeight ?? 1);
+      lines.forEach((line, index) =>
+        context.fillText(line, 0, (index - (lines.length - 1) / 2) * lineHeight),
+      );
+    } else if (layer.kind === 'rectangle') {
+      context.strokeStyle = layer.color;
+      context.lineWidth = Math.max(size * 0.005, 2);
+      context.strokeRect(-width / 2, -width / 3, width, (width * 2) / 3);
+    } else if (layer.kind === 'line') {
+      context.strokeStyle = layer.color;
+      context.lineWidth = Math.max(size * 0.005, 2);
+      context.beginPath();
+      context.moveTo(-width / 2, 0);
+      context.lineTo(width / 2, 0);
+      context.stroke();
+    } else if (layer.kind === 'polygon') {
+      context.strokeStyle = layer.color;
+      context.lineWidth = Math.max(size * 0.005, 2);
+      context.beginPath();
+      for (let index = 0; index < 6; index++) {
+        const angle = -Math.PI / 2 + (index / 6) * Math.PI * 2;
+        const px = Math.cos(angle) * width * 0.45;
+        const py = Math.sin(angle) * width * 0.45;
+        if (index === 0) context.moveTo(px, py);
+        else context.lineTo(px, py);
+      }
+      context.closePath();
+      context.stroke();
+    } else if (layer.kind === 'freehand' && layer.path) {
+      context.strokeStyle = layer.color;
+      context.lineWidth = Math.max(size * 0.004, 2);
+      context.scale(width / 100, width / 100);
+      context.stroke(new Path2D(layer.path));
     }
     context.restore();
+  }
+
+  private startDrawing(): void {
+    this.drawing = { points: [] };
+    this.surface.classList.add('is-drawing');
+  }
+
+  private finishDrawing(): void {
+    const points = this.drawing?.points ?? [];
+    this.drawing = null;
+    this.surface.classList.remove('is-drawing');
+    if (points.length < 2) return;
+    this.addLayer('freehand');
+    const layer = this.layers.at(-1)!;
+    const minX = Math.min(...points.map(([x]) => x));
+    const maxX = Math.max(...points.map(([x]) => x));
+    const minY = Math.min(...points.map(([, y]) => y));
+    const maxY = Math.max(...points.map(([, y]) => y));
+    layer.x = (minX + maxX) / 2;
+    layer.y = (minY + maxY) / 2;
+    layer.baseWidth = Math.max(maxX - minX, 4);
+    const width = Math.max(maxX - minX, 0.1);
+    const height = Math.max(maxY - minY, 0.1);
+    layer.path = points
+      .map(
+        ([x, y], index) =>
+          `${index === 0 ? 'M' : 'L'} ${((x - minX) / width) * 100} ${((y - minY) / height) * 100}`,
+      )
+      .join(' ');
+  }
+
+  private alignSelection(mode: 'left' | 'center' | 'top'): void {
+    const layers = [...this.selection];
+    if (layers.length < 2) return;
+    const value =
+      mode === 'left'
+        ? Math.min(...layers.map((layer) => layer.x))
+        : mode === 'top'
+          ? Math.min(...layers.map((layer) => layer.y))
+          : layers.reduce((sum, layer) => sum + layer.x, 0) / layers.length;
+    layers.forEach((layer) => {
+      if (mode === 'top') layer.y = value;
+      else layer.x = value;
+    });
+  }
+
+  private groupSelection(): void {
+    if (this.selection.size < 2) return;
+    const groupId = crypto.randomUUID();
+    this.selection.forEach((layer) => (layer.groupId = groupId));
   }
 
   dispose(): void {

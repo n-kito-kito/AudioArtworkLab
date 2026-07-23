@@ -190,6 +190,32 @@ select:focus-visible {
   color: var(--accent);
 }
 
+.ui-button.is-recording {
+  border-color: var(--danger);
+  background: rgb(255 115 115 / 14%);
+  color: var(--danger);
+}
+
+.fps-badge {
+  order: 1;
+  margin-left: auto;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 10px;
+}
+
+.fps-badge.is-error {
+  color: var(--danger);
+}
+
+.quality-panel .ui-button {
+  width: 100%;
+  margin-top: 12px;
+}
+
 .ui-button i,
 .transport-button i {
   font-size: 15px;
@@ -565,6 +591,11 @@ select:focus-visible {
   touch-action: none;
 }
 
+.layer-surface.is-drawing {
+  cursor: crosshair;
+  pointer-events: auto;
+}
+
 .design-layer {
   position: absolute;
   display: block;
@@ -606,6 +637,39 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.design-layer--rectangle {
+  aspect-ratio: 3 / 2;
+  border: clamp(2px, 0.4vw, 6px) solid currentcolor;
+}
+
+.design-layer--line {
+  height: 0;
+  border-top: clamp(2px, 0.4vw, 6px) solid currentcolor;
+}
+
+.design-layer--polygon {
+  aspect-ratio: 1;
+  border: clamp(2px, 0.4vw, 6px) solid currentcolor;
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+}
+
+.design-layer--freehand {
+  aspect-ratio: 1;
+}
+
+.design-layer--freehand svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.design-layer--freehand path {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .layer-add-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .layer-add-button {
   display: grid; min-height: 52px; place-items: center; gap: 3px; padding: 7px 3px;
@@ -624,7 +688,7 @@ select:focus-visible {
 .layer-row__delete:hover { background: rgb(255 115 115 / 12%); color: var(--danger); }
 .layer-row__delete:focus-visible { position: relative; z-index: 1; }
 .layer-text-control { display: grid; gap: 7px; }
-.layer-text-control input { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--control); }
+.layer-text-control textarea { width: 100%; padding: 8px; resize: vertical; border: 1px solid var(--border); border-radius: 5px; background: var(--control); color: var(--text); font: inherit; }
 .layer-actions { grid-template-columns: repeat(2, 1fr); }
 .inspector-note { color: var(--muted); font-size: 10px; line-height: 1.55; }
 
