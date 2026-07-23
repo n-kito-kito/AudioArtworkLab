@@ -50,9 +50,9 @@ export class AudioControls {
     const icon = document.createElement('i');
     icon.className = 'ph ph-speaker-high';
     const title = document.createElement('span');
-    title.textContent = 'AUDIO';
+    title.textContent = 'Audio';
     this.status.className = 'audio-panel__status';
-    this.status.textContent = 'DROP MP3 / WAV';
+    this.status.textContent = 'Drop MP3 / WAV';
     heading.append(icon, title, this.status);
 
     const fileLabel = document.createElement('label');
@@ -60,25 +60,25 @@ export class AudioControls {
     const uploadIcon = document.createElement('i');
     uploadIcon.className = 'ph ph-upload-simple';
     const uploadText = document.createElement('span');
-    uploadText.textContent = 'LOAD AUDIO FILE';
+    uploadText.textContent = 'Load audio file';
     this.fileInput.type = 'file';
     this.fileInput.accept = 'audio/*,.mp3,.wav';
     this.fileInput.addEventListener('change', this.onFileChange);
     fileLabel.append(uploadIcon, uploadText, this.fileInput);
 
     this.trackName.className = 'audio-panel__track';
-    this.trackName.textContent = 'NO TRACK LOADED';
+    this.trackName.textContent = 'No track loaded';
     const transport = document.createElement('div');
     transport.className = 'audio-transport';
     this.playButton.type = 'button';
     this.playButton.className = 'transport-button';
     this.playButton.setAttribute('aria-label', 'Play audio');
-    this.playButton.innerHTML = '<i class="ph ph-play"></i><span>PLAY</span>';
+    this.playButton.innerHTML = '<i class="ph ph-play"></i><span>Play</span>';
     this.playButton.disabled = true;
     this.playButton.addEventListener('click', this.onPlayToggle);
     this.inputButton.type = 'button';
     this.inputButton.className = 'transport-button';
-    this.inputButton.innerHTML = '<i class="ph ph-microphone"></i><span>INPUT</span>';
+    this.inputButton.innerHTML = '<i class="ph ph-microphone"></i><span>Input</span>';
     this.inputButton.addEventListener('click', this.onInputToggle);
     this.time.textContent = '0:00 / 0:00';
     transport.append(this.playButton, this.inputButton, this.time);
@@ -126,7 +126,7 @@ export class AudioControls {
     for (const key of ['bass', 'mid', 'treble'] as const) {
       const meter = document.createElement('div');
       const label = document.createElement('span');
-      label.textContent = key.toUpperCase();
+      label.textContent = key.charAt(0).toUpperCase() + key.slice(1);
       const track = document.createElement('i');
       meter.append(label, track);
       group.append(meter);
@@ -149,15 +149,15 @@ export class AudioControls {
   private readonly onInputToggle = (): void => {
     if (this.engine.isInputActive) {
       this.engine.stopInput();
-      this.status.textContent = this.engine.isLoaded ? 'READY' : 'DROP MP3 / WAV';
+      this.status.textContent = this.engine.isLoaded ? 'Ready' : 'Drop MP3 / WAV';
       return;
     }
-    this.status.textContent = 'REQUESTING INPUT';
+    this.status.textContent = 'Requesting input';
     void this.engine
       .startInput()
       .then(() => {
-        this.trackName.textContent = 'MIC / LINE INPUT';
-        this.status.textContent = 'LIVE';
+        this.trackName.textContent = 'Mic / line input';
+        this.status.textContent = 'Live';
       })
       .catch((error: unknown) => this.setError(error));
   };
@@ -166,7 +166,7 @@ export class AudioControls {
     event.preventDefault();
     this.dragDepth += 1;
     this.root.classList.add('is-dragging');
-    this.status.textContent = 'DROP TO LOAD';
+    this.status.textContent = 'Drop to load';
   };
 
   private readonly onDragLeave = (event: DragEvent): void => {
@@ -174,7 +174,7 @@ export class AudioControls {
     this.dragDepth = Math.max(this.dragDepth - 1, 0);
     if (this.dragDepth === 0) {
       this.root.classList.remove('is-dragging');
-      this.status.textContent = this.engine.isLoaded ? 'READY' : 'DROP MP3 / WAV';
+      this.status.textContent = this.engine.isLoaded ? 'Ready' : 'Drop MP3 / WAV';
     }
   };
 
@@ -189,12 +189,12 @@ export class AudioControls {
   };
 
   private async load(file: File): Promise<void> {
-    this.status.textContent = 'LOADING';
+    this.status.textContent = 'Loading';
     this.status.classList.remove('is-error');
     try {
       await this.engine.load(file);
       this.trackName.textContent = file.name;
-      this.status.textContent = 'READY';
+      this.status.textContent = 'Ready';
       this.playButton.disabled = false;
       this.seekInput.disabled = false;
       this.seekInput.max = String(this.engine.duration);
@@ -211,8 +211,8 @@ export class AudioControls {
   private readonly update = (): void => {
     const playing = this.engine.isPlaying;
     this.playButton.innerHTML = playing
-      ? '<i class="ph ph-pause"></i><span>PAUSE</span>'
-      : '<i class="ph ph-play"></i><span>PLAY</span>';
+      ? '<i class="ph ph-pause"></i><span>Pause</span>'
+      : '<i class="ph ph-play"></i><span>Play</span>';
     this.inputButton.classList.toggle('is-active', this.engine.isInputActive);
     this.seekInput.value = String(this.engine.currentTime);
     this.time.textContent = `${formatTime(this.engine.currentTime)} / ${formatTime(this.engine.duration)}`;

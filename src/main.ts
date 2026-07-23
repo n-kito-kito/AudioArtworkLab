@@ -19,7 +19,7 @@ const audioEngine = new FileAudioEngine();
 let composition = createComposition('SineWaveBasic');
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
-const audioControls = new AudioControls(shell.leftPanel, audioEngine);
+const audioControls = new AudioControls(shell.leftTop, audioEngine);
 const layerEditor = new LayerEditor(shell, audioEngine, app);
 const recordingController = new RecordingController(shell, audioEngine);
 const studioControls = new StudioControls(shell, composition, audioEngine, app, layerEditor, () =>

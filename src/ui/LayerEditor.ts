@@ -104,7 +104,7 @@ export class LayerEditor {
     this.surface.append(this.selectionOutline);
     this.shell.canvasHost.append(this.surface);
     this.registerDefaultGenerator();
-    this.shell.leftPanel.prepend(this.section);
+    this.shell.leftBottom.append(this.section);
     this.bindDrag();
     this.fileInput.addEventListener('change', this.onFile);
     this.shell.root.addEventListener('studio:effect-selected', this.clearSelection);
@@ -141,9 +141,9 @@ export class LayerEditor {
 
   private buildPanel(): void {
     const title = document.createElement('h2');
-    title.innerHTML = '<i class="ph ph-stack"></i><span>LAYERS</span>';
+    title.innerHTML = '<i class="ph ph-stack"></i><span>Layers</span>';
     const addGrid = document.createElement('div');
-    addGrid.className = 'layer-add-grid';
+    addGrid.className = 'object-toolbar__tools';
     addGrid.append(
       this.addButton('ph-image', 'Image', () => this.fileInput.click()),
       this.addButton('ph-circle', 'Circle', () => this.addLayer('circle')),
@@ -154,7 +154,8 @@ export class LayerEditor {
       this.addButton('ph-polygon', 'Polygon', () => this.addLayer('polygon')),
       this.addButton('ph-pencil-simple', 'Draw', () => this.startDrawing()),
     );
-    this.section.append(title, addGrid, this.fileInput, this.list);
+    this.shell.objectToolbar.replaceChildren(addGrid);
+    this.section.append(title, this.fileInput, this.list);
     this.renderList();
   }
 
@@ -162,6 +163,8 @@ export class LayerEditor {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'layer-add-button';
+    button.title = label;
+    button.setAttribute('aria-label', `Add ${label}`);
     button.innerHTML = `<i class="ph ${iconName}"></i><span>${label}</span>`;
     button.addEventListener('click', action);
     return button;
@@ -347,14 +350,14 @@ export class LayerEditor {
     panel.replaceChildren();
     const header = document.createElement('div');
     header.className = 'inspector-header';
-    header.innerHTML = `<span>SELECTED LAYER</span><strong>${layer.name}</strong>`;
+    header.innerHTML = `<span>Selected layer</span><strong>${layer.name}</strong>`;
     if (layer.kind === 'generator') {
-      const source = this.inspectorSection('GENERATOR SOURCE', 'ph-wave-sine');
+      const source = this.inspectorSection('Generator source', 'ph-wave-sine');
       const note = document.createElement('p');
       note.className = 'inspector-note';
       note.textContent = 'Shape and audio response are controlled in the Generator panel.';
       source.append(note);
-      const actions = this.inspectorSection('ARRANGE', 'ph-stack');
+      const actions = this.inspectorSection('Arrange', 'ph-stack');
       const row = document.createElement('div');
       row.className = 'button-row layer-actions';
       row.append(
@@ -366,7 +369,7 @@ export class LayerEditor {
       panel.append(header, source, actions);
       return;
     }
-    const transform = this.inspectorSection('TRANSFORM', 'ph-arrows-out-cardinal');
+    const transform = this.inspectorSection('Transform', 'ph-arrows-out-cardinal');
     transform.append(
       this.range('Position X', layer.x, 0, 100, 1, (v) => (layer.x = v), '%'),
       this.range('Position Y', layer.y, 0, 100, 1, (v) => (layer.y = v), '%'),
@@ -400,7 +403,7 @@ export class LayerEditor {
         ),
       );
     }
-    const style = this.inspectorSection('STYLE & AUDIO', 'ph-sparkle');
+    const style = this.inspectorSection('Style & audio', 'ph-sparkle');
     style.append(
       this.color('Color', layer.color, (v) => (layer.color = v)),
       this.range('Blur', layer.blur, 0, 30, 0.5, (v) => (layer.blur = v), 'px'),
@@ -410,7 +413,7 @@ export class LayerEditor {
       ),
       this.range('Reaction', layer.reactAmount, 0, 1.5, 0.01, (v) => (layer.reactAmount = v)),
     );
-    const actions = this.inspectorSection('ARRANGE', 'ph-stack');
+    const actions = this.inspectorSection('Arrange', 'ph-stack');
     const row = document.createElement('div');
     row.className = 'button-row layer-actions';
     row.append(

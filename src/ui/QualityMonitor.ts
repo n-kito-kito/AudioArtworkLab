@@ -21,14 +21,14 @@ export class QualityMonitor {
     this.panel.className = 'panel-section visual-section quality-panel';
     this.buildPanel();
     this.shell.toolbar.append(this.badge);
-    this.shell.leftPanel.append(this.panel);
+    this.shell.leftTop.append(this.panel);
     window.addEventListener('studio:webgl-status', this.onWebGlStatus);
     this.frame = requestAnimationFrame(this.update);
   }
 
   private buildPanel(): void {
     const title = document.createElement('h2');
-    title.innerHTML = '<i class="ph ph-gauge"></i><span>QUALITY</span>';
+    title.innerHTML = '<i class="ph ph-gauge"></i><span>Quality</span>';
     const resolution = document.createElement('label');
     resolution.className = 'control-row control-row--inline';
     resolution.innerHTML = '<span>Resolution</span>';

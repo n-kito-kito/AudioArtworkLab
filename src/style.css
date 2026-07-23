@@ -1118,6 +1118,48 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
+.control-panel--left {
+  --left-top-height: 62%;
+  display: grid;
+  grid-template-rows: var(--left-top-height) 7px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.left-panel__top,
+.left-panel__bottom {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: #555 transparent;
+  scrollbar-width: thin;
+}
+
+.left-panel__splitter {
+  position: relative;
+  z-index: 2;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.left-panel__splitter::after {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--border);
+  content: '';
+  transition: height 120ms ease, background 120ms ease;
+}
+
+.left-panel__splitter:hover::after,
+.left-panel__splitter:focus-visible::after,
+.control-panel--left.is-resizing .left-panel__splitter::after {
+  top: 2px;
+  height: 3px;
+  background: var(--accent);
+}
+
 .inspector-tabs {
   display: grid;
   flex: 0 0 auto;
@@ -1262,30 +1304,16 @@ textarea:focus-visible {
   color: #fff;
 }
 
-.control-panel--left > .layer-panel {
-  order: 0 !important;
-}
-
-.control-panel--left > .visual-section:not(.layer-panel):not(.quality-panel) {
-  order: 1;
-}
-
-.control-panel--left > .audio-panel {
-  order: 2;
-}
-
-.control-panel--left > .quality-panel {
-  order: 3;
-}
-
-.layer-add-grid {
-  gap: 4px;
+.left-panel__bottom .layer-panel {
+  min-height: 100%;
+  border-bottom: 0;
 }
 
 .layer-add-button {
-  min-height: 46px;
-  gap: 2px;
-  padding: 6px 2px;
+  width: 42px;
+  min-height: 38px;
+  gap: 0;
+  padding: 0;
   border-color: transparent;
   border-radius: 4px;
   background: transparent;
@@ -1295,7 +1323,15 @@ textarea:focus-visible {
 
 .layer-add-button i {
   color: #c8c8c8;
-  font-size: 16px;
+  font-size: 18px;
+}
+
+.layer-add-button span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 .layer-add-button:hover {
@@ -1352,6 +1388,40 @@ textarea:focus-visible {
 .stage {
   padding: 32px;
   background: #1a1a1a;
+}
+
+.object-toolbar {
+  position: absolute;
+  z-index: 1100;
+  bottom: 18px;
+  left: 50%;
+  padding: 5px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  background: #2c2c2c;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 38%);
+  transform: translateX(-50%);
+}
+
+.object-toolbar__tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.object-toolbar .layer-add-button:hover,
+.object-toolbar .layer-add-button:focus-visible {
+  background: #454545;
+  color: #fff;
+}
+
+.object-toolbar .layer-add-button:active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.object-toolbar .layer-add-button:active i {
+  color: #fff;
 }
 
 .artboard {
@@ -1494,5 +1564,11 @@ textarea:focus-visible {
 
   .stage {
     padding: 18px;
+  }
+
+  .object-toolbar {
+    bottom: 12px;
+    max-width: calc(100vw - 24px);
+    overflow-x: auto;
   }
 }

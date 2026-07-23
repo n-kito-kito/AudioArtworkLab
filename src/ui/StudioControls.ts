@@ -92,7 +92,7 @@ export class StudioControls {
     window.clearInterval(this.autosaveTimer);
     this.presetInput.removeEventListener('change', this.importPreset);
     this.presetInput.remove();
-    this.shell.leftPanel
+    this.shell.leftTop
       .querySelectorAll('.visual-section:not(.layer-panel):not(.quality-panel)')
       .forEach((element) => element.remove());
     this.shell.effectsPanel.replaceChildren();
@@ -174,10 +174,10 @@ export class StudioControls {
   }
 
   private buildLeftPanel(): void {
-    this.shell.leftPanel
+    this.shell.leftTop
       .querySelectorAll('.visual-section:not(.layer-panel):not(.quality-panel)')
       .forEach((element) => element.remove());
-    const composition = this.section('COMPOSITION', 'ph-circles-three-plus');
+    const composition = this.section('Composition', 'ph-circles-three-plus');
     composition.append(
       this.selectControl(
         'Artwork',
@@ -187,13 +187,13 @@ export class StudioControls {
       ),
     );
 
-    const motion = this.section('MOTION', 'ph-wave-sine');
+    const motion = this.section('Motion', 'ph-wave-sine');
     const sine = this.composition.sineWave.getParameters();
     motion.append(
       this.range('Speed', sine.speed, 0, 4, 0.01, (value) => this.setSine('speed', value), 'x'),
     );
 
-    const generator = this.section('GENERATOR', 'ph-bezier-curve');
+    const generator = this.section('Generator', 'ph-bezier-curve');
     generator.append(
       this.segmented(
         'Source',
@@ -211,7 +211,7 @@ export class StudioControls {
       this.colorControl('Line color', sine.color),
     );
 
-    const reaction = this.section('AUDIO MAPPING', 'ph-equalizer');
+    const reaction = this.section('Audio mapping', 'ph-equalizer');
     const values = this.composition.sineWave.getAudioReaction();
     reaction.append(
       this.range('Bass → amplitude', values.bassStrength, 0, 2, 0.01, (value) =>
@@ -232,7 +232,7 @@ export class StudioControls {
       }),
     );
 
-    const range = this.section('OUTPUT RANGE', 'ph-arrows-out-line-vertical');
+    const range = this.section('Output range', 'ph-arrows-out-line-vertical');
     range.append(
       this.range('Amplitude min', values.amplitudeMin, 0, 0.8, 0.01, (value) =>
         this.setReaction('amplitudeMin', value),
@@ -247,8 +247,8 @@ export class StudioControls {
         this.setReaction('frequencyMax', value),
       ),
     );
-    this.shell.leftPanel.prepend(composition, motion);
-    this.shell.leftPanel.append(generator, reaction, range);
+    this.shell.leftTop.prepend(composition, motion);
+    this.shell.leftTop.append(generator, reaction, range);
   }
 
   private buildInspector(): void {
@@ -256,17 +256,17 @@ export class StudioControls {
     const header = document.createElement('div');
     header.className = 'inspector-header';
     const eyebrow = document.createElement('span');
-    eyebrow.textContent = 'SELECTED EFFECT';
+    eyebrow.textContent = 'Selected effect';
     const title = document.createElement('strong');
     title.textContent = this.selectedEffect.name;
     header.append(eyebrow, title);
 
-    const stack = this.section('EFFECT STACK', 'ph-stack');
+    const stack = this.section('Effect stack', 'ph-stack');
     this.effectStack.className = 'effect-stack';
     stack.append(this.effectStack);
     this.renderEffectStack();
 
-    const controls = this.section('PARAMETERS', 'ph-sliders');
+    const controls = this.section('Parameters', 'ph-sliders');
     controls.append(
       this.toggle('Enabled', this.selectedEffect.enabled, (value) => {
         this.selectedEffect.enabled = value;
@@ -292,7 +292,7 @@ export class StudioControls {
       ),
     );
 
-    const order = this.section('CHAIN POSITION', 'ph-path');
+    const order = this.section('Chain position', 'ph-path');
     const orderActions = document.createElement('div');
     orderActions.className = 'button-row';
     orderActions.append(
@@ -301,14 +301,14 @@ export class StudioControls {
     );
     order.append(orderActions);
 
-    const looks = this.section('QUICK LOOKS', 'ph-sparkle');
+    const looks = this.section('Quick looks', 'ph-sparkle');
     const lookGrid = document.createElement('div');
     lookGrid.className = 'look-grid';
     for (const [name, amount, source] of [
-      ['SUBTLE', 0.18, 'none'],
-      ['BASS HIT', 0.5, 'bass'],
-      ['AIR', 0.35, 'treble'],
-      ['BROKEN', 0.8, 'beat'],
+      ['Subtle', 0.18, 'none'],
+      ['Bass hit', 0.5, 'bass'],
+      ['Air', 0.35, 'treble'],
+      ['Broken', 0.8, 'beat'],
     ] as const) {
       const button = this.textButton(name, () => {
         const max = EFFECT_MAX[this.selectedEffect.name] ?? 1;
@@ -458,7 +458,7 @@ export class StudioControls {
     for (const value of options) {
       const option = document.createElement('option');
       option.value = value;
-      option.textContent = value.toUpperCase();
+      option.textContent = value.charAt(0).toUpperCase() + value.slice(1);
       option.selected = value === selected;
       select.append(option);
     }
