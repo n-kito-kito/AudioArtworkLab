@@ -6,6 +6,8 @@ import { AudioControls } from './ui/AudioControls';
 import { StudioControls } from './ui/StudioControls';
 import { StudioShell } from './ui/StudioShell';
 import { LayerEditor } from './ui/LayerEditor';
+import { RecordingController } from './ui/RecordingController';
+import { QualityMonitor } from './ui/QualityMonitor';
 
 const container = document.querySelector<HTMLDivElement>('#app');
 
@@ -19,8 +21,10 @@ const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 const audioControls = new AudioControls(shell.leftPanel, audioEngine);
 const layerEditor = new LayerEditor(shell, audioEngine);
+const recordingController = new RecordingController(shell, audioEngine);
 const studioControls = new StudioControls(shell, composition, audioEngine, app, layerEditor, () =>
   layerEditor.exportPng(),
+  () => recordingController.toggle(),
   COMPOSITIONS,
   (name) => {
     composition = createComposition(name);
@@ -28,12 +32,15 @@ const studioControls = new StudioControls(shell, composition, audioEngine, app, 
     return composition;
   },
 );
+const qualityMonitor = new QualityMonitor(shell, app, () => composition.getEffects());
 let disposed = false;
 
 const dispose = (): void => {
   if (disposed) return;
   disposed = true;
   audioControls.dispose();
+  recordingController.dispose();
+  qualityMonitor.dispose();
   layerEditor.dispose();
   studioControls.dispose();
   app.dispose();

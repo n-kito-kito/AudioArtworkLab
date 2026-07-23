@@ -8,7 +8,10 @@ const TREBLE_RANGE = [4000, 16000] as const;
 export class FileAudioEngine implements AudioEngine {
   private readonly audio = new Audio();
   private context: AudioContext | null = null;
-  private source: MediaElementAudioSourceNode | null = null;
+  private fileSource: MediaElementAudioSourceNode | null = null;
+  private inputSource: MediaStreamAudioSourceNode | null = null;
+  private inputStream: MediaStream | null = null;
+  private recordingDestination: MediaStreamAudioDestinationNode | null = null;
   private analyser: AnalyserNode | null = null;
   private frequencyData: Uint8Array<ArrayBuffer> | null = null;
   private timeData: Uint8Array<ArrayBuffer> | null = null;
@@ -28,6 +31,7 @@ export class FileAudioEngine implements AudioEngine {
       throw new Error('MP3またはWAVなどの音声ファイルを選択してください。');
     }
 
+    this.stopInput();
     this.pause();
     this.releaseObjectUrl();
     this.objectUrl = URL.createObjectURL(file);
@@ -61,6 +65,33 @@ export class FileAudioEngine implements AudioEngine {
     await this.audio.play();
   }
 
+  async startInput(): Promise<void> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('このブラウザはマイク入力に対応していません。');
+    }
+    this.pause();
+    this.stopInput();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
+    this.ensureAudioGraph();
+    this.inputStream = stream;
+    this.inputSource = this.context!.createMediaStreamSource(stream);
+    this.inputSource.connect(this.analyser!);
+    await this.context?.resume();
+  }
+
+  stopInput(): void {
+    this.inputSource?.disconnect();
+    this.inputSource = null;
+    this.inputStream?.getTracks().forEach((track) => track.stop());
+    this.inputStream = null;
+  }
+
   pause(): void {
     this.audio.pause();
   }
@@ -87,7 +118,11 @@ export class FileAudioEngine implements AudioEngine {
   }
 
   get isPlaying(): boolean {
-    return this.isLoaded && !this.audio.paused;
+    return this.isInputActive || (this.isLoaded && !this.audio.paused);
+  }
+
+  get isInputActive(): boolean {
+    return this.inputStream?.active ?? false;
   }
 
   get currentTime(): number {
@@ -99,7 +134,7 @@ export class FileAudioEngine implements AudioEngine {
   }
 
   getParameters(): AudioParameters {
-    if (!this.objectUrl) return {};
+    if (!this.objectUrl && !this.isInputActive) return {};
     if (!this.analyser || !this.frequencyData || !this.timeData || !this.context) {
       return { active: 0, volume: 0, bass: 0, mid: 0, treble: 0, beat: 0 };
     }
@@ -119,7 +154,7 @@ export class FileAudioEngine implements AudioEngine {
     this.previousVolume = volume;
 
     return {
-      active: this.audio.paused ? 0 : 1,
+      active: this.isInputActive || !this.audio.paused ? 1 : 0,
       volume,
       bass: this.getBandEnergy(...BASS_RANGE),
       mid: this.getBandEnergy(...MID_RANGE),
@@ -138,18 +173,29 @@ export class FileAudioEngine implements AudioEngine {
     return this.waveform;
   }
 
+  getRecordingStream(): MediaStream | null {
+    if (!this.context || !this.analyser) return null;
+    if (!this.recordingDestination) {
+      this.recordingDestination = this.context.createMediaStreamDestination();
+      this.analyser.connect(this.recordingDestination);
+    }
+    return this.recordingDestination.stream;
+  }
+
   dispose(): void {
     this.pause();
+    this.stopInput();
     this.audio.removeAttribute('src');
     this.audio.load();
-    this.source?.disconnect();
+    this.fileSource?.disconnect();
     this.analyser?.disconnect();
     void this.context?.close();
-    this.source = null;
+    this.fileSource = null;
     this.analyser = null;
     this.context = null;
     this.frequencyData = null;
     this.timeData = null;
+    this.recordingDestination = null;
     this.waveform = new Float32Array(FFT_SIZE);
     this.releaseObjectUrl();
   }
@@ -161,9 +207,9 @@ export class FileAudioEngine implements AudioEngine {
     this.analyser = this.context.createAnalyser();
     this.analyser.fftSize = FFT_SIZE;
     this.analyser.smoothingTimeConstant = 0.82;
-    this.source = this.context.createMediaElementSource(this.audio);
-    this.source.connect(this.analyser);
-    this.analyser.connect(this.context.destination);
+    this.fileSource = this.context.createMediaElementSource(this.audio);
+    this.fileSource.connect(this.analyser);
+    this.fileSource.connect(this.context.destination);
     this.frequencyData = new Uint8Array(this.analyser.frequencyBinCount);
     this.timeData = new Uint8Array(this.analyser.fftSize);
   }

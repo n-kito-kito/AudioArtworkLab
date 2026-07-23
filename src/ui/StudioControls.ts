@@ -45,6 +45,7 @@ export class StudioControls {
   private readonly compositionDefinitions: CompositionDefinition[];
   private readonly onCompositionChange: ((name: string) => SineWaveBasic) | null;
   private readonly exportArtwork: () => void;
+  private readonly recordArtwork: (() => boolean) | null;
   private readonly presetInput = document.createElement('input');
   private readonly toolbarActions = document.createElement('div');
   private readonly chainTrack = document.createElement('div');
@@ -62,6 +63,7 @@ export class StudioControls {
     app: App,
     layerEditor: LayerEditor,
     exportArtwork?: () => void,
+    recordArtwork?: () => boolean,
     compositionDefinitions: CompositionDefinition[] = [],
     onCompositionChange?: (name: string) => SineWaveBasic,
   ) {
@@ -73,6 +75,7 @@ export class StudioControls {
     this.compositionDefinitions = compositionDefinitions;
     this.onCompositionChange = onCompositionChange ?? null;
     this.exportArtwork = exportArtwork ?? (() => this.app.exportPng());
+    this.recordArtwork = recordArtwork ?? null;
     this.selectedEffect = composition.getEffects()[0]!;
     this.buildToolbar();
     this.buildLeftPanel();
@@ -98,7 +101,7 @@ export class StudioControls {
     this.presetInput.removeEventListener('change', this.importPreset);
     this.presetInput.remove();
     this.shell.leftPanel
-      .querySelectorAll('.visual-section:not(.layer-panel)')
+      .querySelectorAll('.visual-section:not(.layer-panel):not(.quality-panel)')
       .forEach((element) => element.remove());
     this.shell.rightPanel.replaceChildren();
   }
@@ -114,6 +117,16 @@ export class StudioControls {
     this.rightPanelButton = this.iconButton('ph-sliders-horizontal', 'Inspector', () =>
       this.togglePanel('right'),
     );
+    const recordButton = this.iconButton('ph-record', 'Record WebM', () => {
+      if (!this.recordArtwork) return;
+      try {
+        const recording = this.recordArtwork();
+        recordButton.classList.toggle('is-recording', recording);
+        recordButton.querySelector('span')!.textContent = recording ? 'Stop recording' : 'Record WebM';
+      } catch (error) {
+        this.showNotice(error instanceof Error ? error.message : 'Recording unavailable', true);
+      }
+    });
     this.toolbarActions.append(
       seed,
       this.iconButton('ph-shuffle', 'Randomize', () => {
@@ -128,6 +141,7 @@ export class StudioControls {
       this.iconButton('ph-floppy-disk', 'Save preset', () => this.saveAutosave(true)),
       this.iconButton('ph-download-simple', 'Export preset', () => this.exportPreset()),
       this.iconButton('ph-upload-simple', 'Import preset', () => this.presetInput.click()),
+      recordButton,
       this.iconButton('ph-export', 'Export PNG', this.exportArtwork, true),
     );
     this.shell.toolbar.append(this.toolbarActions);
@@ -169,7 +183,7 @@ export class StudioControls {
 
   private buildLeftPanel(): void {
     this.shell.leftPanel
-      .querySelectorAll('.visual-section:not(.layer-panel)')
+      .querySelectorAll('.visual-section:not(.layer-panel):not(.quality-panel)')
       .forEach((element) => element.remove());
     const composition = this.section('COMPOSITION', 'ph-circles-three-plus');
     composition.append(

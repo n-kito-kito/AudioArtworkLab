@@ -16,6 +16,7 @@ export class App {
   private readonly audioEngine: AudioEngine;
   private readonly resizeObserver: ResizeObserver;
   private loop: AnimationLoop | null = null;
+  private contextLost = false;
 
   constructor(container: HTMLElement, composition: Composition, audioEngine?: AudioEngine) {
     this.canvas = new Canvas(container);
@@ -36,6 +37,8 @@ export class App {
 
     this.resizeObserver = new ResizeObserver(this.onResize);
     this.resizeObserver.observe(container);
+    this.renderer.three.domElement.addEventListener('webglcontextlost', this.onContextLost);
+    this.renderer.three.domElement.addEventListener('webglcontextrestored', this.onContextRestored);
     this.onResize();
   }
 
@@ -59,7 +62,13 @@ export class App {
     this.startComposition();
   }
 
+  setResolutionScale(scale: number): void {
+    this.renderer.setResolutionScale(scale);
+    this.composition.resize(this.canvas.width, this.canvas.height);
+  }
+
   private startComposition(): void {
+    if (this.contextLost) return;
     if (!this.composition.animated) {
       this.composition.render();
       return;
@@ -81,9 +90,26 @@ export class App {
     }
   };
 
+  private onContextLost = (event: Event): void => {
+    event.preventDefault();
+    this.contextLost = true;
+    this.loop?.stop();
+    this.loop = null;
+    window.dispatchEvent(new CustomEvent('studio:webgl-status', { detail: 'lost' }));
+  };
+
+  private onContextRestored = (): void => {
+    this.contextLost = false;
+    this.composition.resize(this.canvas.width, this.canvas.height);
+    this.startComposition();
+    window.dispatchEvent(new CustomEvent('studio:webgl-status', { detail: 'restored' }));
+  };
+
   dispose(): void {
     this.loop?.stop();
     this.resizeObserver.disconnect();
+    this.renderer.three.domElement.removeEventListener('webglcontextlost', this.onContextLost);
+    this.renderer.three.domElement.removeEventListener('webglcontextrestored', this.onContextRestored);
     this.composition.dispose();
     this.audioEngine.dispose();
     this.renderer.dispose();

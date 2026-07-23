@@ -4,6 +4,7 @@ import type { Canvas } from './Canvas';
 export class Renderer {
   readonly three: THREE.WebGLRenderer;
   private readonly canvas: Canvas;
+  private resolutionScale = 1;
 
   constructor(canvas: Canvas) {
     this.canvas = canvas;
@@ -13,7 +14,7 @@ export class Renderer {
       preserveDrawingBuffer: true,
     });
     this.three.setClearColor(0x000000, 0);
-    this.three.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.updatePixelRatio();
     this.three.setSize(canvas.width, canvas.height, false);
     canvas.element.appendChild(this.three.domElement);
   }
@@ -23,7 +24,17 @@ export class Renderer {
   }
 
   resize(): void {
+    this.updatePixelRatio();
     this.three.setSize(this.canvas.width, this.canvas.height, false);
+  }
+
+  setResolutionScale(scale: number): void {
+    this.resolutionScale = Math.min(Math.max(scale, 0.5), 2);
+    this.resize();
+  }
+
+  private updatePixelRatio(): void {
+    this.three.setPixelRatio(Math.min(window.devicePixelRatio * this.resolutionScale, 3));
   }
 
   exportPng(filename: string): void {

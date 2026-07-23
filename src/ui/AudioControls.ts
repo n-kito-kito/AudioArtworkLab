@@ -18,6 +18,7 @@ export class AudioControls {
   private readonly status = document.createElement('span');
   private readonly time = document.createElement('span');
   private readonly seekInput = document.createElement('input');
+  private readonly inputButton = document.createElement('button');
   private readonly meters = new Map<keyof AudioParameters, HTMLElement>();
   private animationId: number | null = null;
   private dragDepth = 0;
@@ -75,8 +76,12 @@ export class AudioControls {
     this.playButton.innerHTML = '<i class="ph ph-play"></i><span>PLAY</span>';
     this.playButton.disabled = true;
     this.playButton.addEventListener('click', this.onPlayToggle);
+    this.inputButton.type = 'button';
+    this.inputButton.className = 'transport-button';
+    this.inputButton.innerHTML = '<i class="ph ph-microphone"></i><span>INPUT</span>';
+    this.inputButton.addEventListener('click', this.onInputToggle);
     this.time.textContent = '0:00 / 0:00';
-    transport.append(this.playButton, this.time);
+    transport.append(this.playButton, this.inputButton, this.time);
 
     this.seekInput.type = 'range';
     this.seekInput.min = '0';
@@ -136,8 +141,25 @@ export class AudioControls {
   };
 
   private readonly onPlayToggle = (): void => {
-    if (this.engine.isPlaying) this.engine.pause();
+    if (this.engine.isInputActive) this.engine.stopInput();
+    else if (this.engine.isPlaying) this.engine.pause();
     else void this.engine.play().catch((error: unknown) => this.setError(error));
+  };
+
+  private readonly onInputToggle = (): void => {
+    if (this.engine.isInputActive) {
+      this.engine.stopInput();
+      this.status.textContent = this.engine.isLoaded ? 'READY' : 'DROP MP3 / WAV';
+      return;
+    }
+    this.status.textContent = 'REQUESTING INPUT';
+    void this.engine
+      .startInput()
+      .then(() => {
+        this.trackName.textContent = 'MIC / LINE INPUT';
+        this.status.textContent = 'LIVE';
+      })
+      .catch((error: unknown) => this.setError(error));
   };
 
   private readonly onDragEnter = (event: DragEvent): void => {
@@ -191,6 +213,7 @@ export class AudioControls {
     this.playButton.innerHTML = playing
       ? '<i class="ph ph-pause"></i><span>PAUSE</span>'
       : '<i class="ph ph-play"></i><span>PLAY</span>';
+    this.inputButton.classList.toggle('is-active', this.engine.isInputActive);
     this.seekInput.value = String(this.engine.currentTime);
     this.time.textContent = `${formatTime(this.engine.currentTime)} / ${formatTime(this.engine.duration)}`;
     const parameters = this.engine.getParameters();
