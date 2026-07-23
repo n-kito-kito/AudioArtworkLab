@@ -13,6 +13,7 @@ type LayerKind =
   | 'polygon'
   | 'freehand';
 type ReactSource = 'none' | 'volume' | 'bass' | 'mid' | 'treble' | 'beat';
+type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
 interface DesignLayer {
   id: string;
@@ -88,6 +89,22 @@ export class LayerEditor {
   private compositeRefreshPending = true;
   private drag: { layer: DesignLayer; startX: number; startY: number; x: number; y: number } | null =
     null;
+  private directManipulation:
+    | {
+        mode: 'move' | 'resize';
+        layer: DesignLayer;
+        handle?: ResizeHandle;
+        startX: number;
+        startY: number;
+        layerX: number;
+        layerY: number;
+        scale: number;
+        width: number;
+        height: number;
+        surfaceWidth: number;
+        surfaceHeight: number;
+      }
+    | null = null;
 
   constructor(shell: StudioShell, audioEngine: AudioEngine, app: App) {
     this.shell = shell;
@@ -101,6 +118,7 @@ export class LayerEditor {
     this.fileInput.accept = 'image/*';
     this.fileInput.hidden = true;
     this.buildPanel();
+    this.buildSelectionHandles();
     this.surface.append(this.selectionOutline);
     this.shell.canvasHost.append(this.surface);
     this.app.setGeneratorLayerVisible(false);
@@ -180,6 +198,21 @@ export class LayerEditor {
     this.shell.objectToolbar.replaceChildren(addGrid);
     this.section.append(title, this.fileInput, this.list);
     this.renderList();
+  }
+
+  private buildSelectionHandles(): void {
+    for (const handle of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const) {
+      const control = document.createElement('button');
+      control.type = 'button';
+      control.className = `layer-resize-handle layer-resize-handle--${handle}`;
+      control.dataset.handle = handle;
+      control.setAttribute('aria-label', `Resize from ${handle}`);
+      this.selectionOutline.append(control);
+    }
+    this.selectionOutline.addEventListener('pointerdown', this.onSelectionPointerDown);
+    this.selectionOutline.addEventListener('pointermove', this.onSelectionPointerMove);
+    this.selectionOutline.addEventListener('pointerup', this.onSelectionPointerUp);
+    this.selectionOutline.addEventListener('pointercancel', this.onSelectionPointerUp);
   }
 
   private addButton(iconName: string, label: string, action: () => void): HTMLButtonElement {
@@ -394,11 +427,11 @@ export class LayerEditor {
     }
     const transform = this.inspectorSection('Transform', 'ph-arrows-out-cardinal');
     transform.append(
-      this.range('Position X', layer.x, 0, 100, 1, (v) => (layer.x = v), '%'),
-      this.range('Position Y', layer.y, 0, 100, 1, (v) => (layer.y = v), '%'),
-      this.range('Scale', layer.scale, 0.1, 3, 0.01, (v) => (layer.scale = v), 'x'),
-      this.range('Rotation', layer.rotation, -180, 180, 1, (v) => (layer.rotation = v), '°'),
-      this.range('Opacity', layer.opacity, 0, 1, 0.01, (v) => (layer.opacity = v)),
+      this.range('Position X', layer.x, 0, 100, 1, (v) => this.changeLayer(layer, () => (layer.x = v)), '%'),
+      this.range('Position Y', layer.y, 0, 100, 1, (v) => this.changeLayer(layer, () => (layer.y = v)), '%'),
+      this.range('Scale', layer.scale, 0.1, 3, 0.01, (v) => this.changeLayer(layer, () => (layer.scale = v)), 'x'),
+      this.range('Rotation', layer.rotation, -180, 180, 1, (v) => this.changeLayer(layer, () => (layer.rotation = v)), '°'),
+      this.range('Opacity', layer.opacity, 0, 1, 0.01, (v) => this.changeLayer(layer, () => (layer.opacity = v))),
     );
     if (layer.kind === 'text') {
       transform.prepend(
@@ -407,13 +440,13 @@ export class LayerEditor {
           'Font',
           ['Inter', 'Arial', 'Georgia', 'Courier New', 'Times New Roman'],
           layer.fontFamily ?? 'Inter',
-          (value) => (layer.fontFamily = value),
+          (value) => this.changeLayer(layer, () => (layer.fontFamily = value)),
         ),
         this.selectControl(
           'Weight',
           ['300', '400', '500', '600', '700', '800', '900'],
           String(layer.fontWeight ?? 800),
-          (value) => (layer.fontWeight = Number(value)),
+          (value) => this.changeLayer(layer, () => (layer.fontWeight = Number(value))),
         ),
         this.range(
           'Line height',
@@ -421,20 +454,20 @@ export class LayerEditor {
           0.7,
           2,
           0.05,
-          (value) => (layer.lineHeight = value),
+          (value) => this.changeLayer(layer, () => (layer.lineHeight = value)),
           'x',
         ),
       );
     }
     const style = this.inspectorSection('Style & audio', 'ph-sparkle');
     style.append(
-      this.color('Color', layer.color, (v) => (layer.color = v)),
-      this.range('Blur', layer.blur, 0, 30, 0.5, (v) => (layer.blur = v), 'px'),
-      this.range('Contrast', layer.contrast, 0.2, 2.5, 0.05, (v) => (layer.contrast = v), 'x'),
+      this.color('Color', layer.color, (v) => this.changeLayer(layer, () => (layer.color = v))),
+      this.range('Blur', layer.blur, 0, 30, 0.5, (v) => this.changeLayer(layer, () => (layer.blur = v)), 'px'),
+      this.range('Contrast', layer.contrast, 0.2, 2.5, 0.05, (v) => this.changeLayer(layer, () => (layer.contrast = v)), 'x'),
       this.selectControl('React to', ['none', 'volume', 'bass', 'mid', 'treble', 'beat'], layer.reactTo, (v) =>
-        (layer.reactTo = v as ReactSource),
+        this.changeLayer(layer, () => (layer.reactTo = v as ReactSource)),
       ),
-      this.range('Reaction', layer.reactAmount, 0, 1.5, 0.01, (v) => (layer.reactAmount = v)),
+      this.range('Reaction', layer.reactAmount, 0, 1.5, 0.01, (v) => this.changeLayer(layer, () => (layer.reactAmount = v))),
     );
     const actions = this.inspectorSection('Arrange', 'ph-stack');
     const row = document.createElement('div');
@@ -502,7 +535,10 @@ export class LayerEditor {
     const label = document.createElement('label'); label.className = 'control-row layer-text-control';
     const name = document.createElement('span'); name.textContent = 'Content';
     const input = document.createElement('textarea'); input.value = layer.text ?? ''; input.rows = 3;
-    input.addEventListener('input', () => { layer.text = input.value; layer.element.textContent = input.value; });
+    input.addEventListener('input', () => this.changeLayer(layer, () => {
+      layer.text = input.value;
+      layer.element.textContent = input.value;
+    }));
     label.append(name, input); return label;
   }
 
@@ -514,7 +550,7 @@ export class LayerEditor {
   private move(layer: DesignLayer, direction: -1 | 1): void {
     const index = this.layers.indexOf(layer); const next = Math.max(0, Math.min(this.layers.length - 1, index + direction));
     if (index === next) return; this.layers.splice(index, 1); this.layers.splice(next, 0, layer);
-    this.syncStack(); this.renderList();
+    this.compositeRefreshPending = true; this.syncStack(); this.renderList();
   }
 
   private duplicate(layer: DesignLayer): void {
@@ -522,6 +558,7 @@ export class LayerEditor {
     if (layer.kind === 'image' && layer.objectUrl) this.addLayer('image', layer.objectUrl); else this.addLayer(layer.kind);
     const copy = this.layers.at(-1)!; Object.assign(copy, { x: layer.x + 4, y: layer.y + 4, scale: layer.scale, rotation: layer.rotation, opacity: layer.opacity, color: layer.color, blur: layer.blur, contrast: layer.contrast, reactTo: layer.reactTo, reactAmount: layer.reactAmount, text: layer.text });
     if (copy.kind === 'text') copy.element.textContent = copy.text ?? '';
+    this.compositeRefreshPending = true;
   }
 
   private remove(layer: DesignLayer): void {
@@ -642,6 +679,7 @@ export class LayerEditor {
         layer.x = Math.max(0, Math.min(100, layer.x + dx));
         layer.y = Math.max(0, Math.min(100, layer.y + dy));
       });
+      this.compositeRefreshPending = true;
     });
     this.surface.addEventListener('pointerup', () => {
       if (this.drawing) {
@@ -658,6 +696,103 @@ export class LayerEditor {
     this.layers.forEach((layer) => this.applyLayer(layer, this.audioValue(audio, layer.reactTo)));
     this.renderComposite(audio);
     this.frame = requestAnimationFrame(this.update);
+  };
+
+  private changeLayer(layer: DesignLayer, change: () => void): void {
+    change();
+    this.compositeRefreshPending = true;
+    this.applyLayer(layer, 0);
+  }
+
+  private onSelectionPointerDown = (event: PointerEvent): void => {
+    const layer = this.selected;
+    if (!layer || layer.kind === 'generator') return;
+    const surfaceBox = this.surface.getBoundingClientRect();
+    const outlineBox = this.selectionOutline.getBoundingClientRect();
+    const handle = (event.target as HTMLElement).dataset.handle as ResizeHandle | undefined;
+    this.directManipulation = {
+      mode: handle ? 'resize' : 'move',
+      layer,
+      handle,
+      startX: event.clientX,
+      startY: event.clientY,
+      layerX: layer.x,
+      layerY: layer.y,
+      scale: layer.scale,
+      width: Math.max(outlineBox.width, 1),
+      height: Math.max(outlineBox.height, 1),
+      surfaceWidth: Math.max(surfaceBox.width, 1),
+      surfaceHeight: Math.max(surfaceBox.height, 1),
+    };
+    this.selectionOutline.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  private onSelectionPointerMove = (event: PointerEvent): void => {
+    const operation = this.directManipulation;
+    if (!operation || !this.selectionOutline.hasPointerCapture(event.pointerId)) return;
+    const deltaX = event.clientX - operation.startX;
+    const deltaY = event.clientY - operation.startY;
+    if (operation.mode === 'move') {
+      operation.layer.x = Math.max(
+        0,
+        Math.min(100, operation.layerX + (deltaX / operation.surfaceWidth) * 100),
+      );
+      operation.layer.y = Math.max(
+        0,
+        Math.min(100, operation.layerY + (deltaY / operation.surfaceHeight) * 100),
+      );
+    } else {
+      const handle = operation.handle!;
+      const horizontal = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0;
+      const vertical = handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0;
+      const horizontalFactor = horizontal
+        ? 1 + (deltaX * horizontal) / operation.width
+        : 1;
+      const verticalFactor = vertical
+        ? 1 + (deltaY * vertical) / operation.height
+        : 1;
+      const factor =
+        horizontal && vertical
+          ? Math.abs(horizontalFactor - 1) > Math.abs(verticalFactor - 1)
+            ? horizontalFactor
+            : verticalFactor
+          : horizontal
+            ? horizontalFactor
+            : verticalFactor;
+      const scale = Math.max(0.1, Math.min(3, operation.scale * factor));
+      const appliedFactor = scale / operation.scale;
+      const widthChange = operation.width * (appliedFactor - 1);
+      const heightChange = operation.height * (appliedFactor - 1);
+      operation.layer.scale = scale;
+      operation.layer.x = Math.max(
+        0,
+        Math.min(
+          100,
+          operation.layerX + ((horizontal * widthChange) / 2 / operation.surfaceWidth) * 100,
+        ),
+      );
+      operation.layer.y = Math.max(
+        0,
+        Math.min(
+          100,
+          operation.layerY + ((vertical * heightChange) / 2 / operation.surfaceHeight) * 100,
+        ),
+      );
+    }
+    this.compositeRefreshPending = true;
+    this.applyLayer(operation.layer, 0);
+  };
+
+  private onSelectionPointerUp = (event: PointerEvent): void => {
+    if (!this.directManipulation) return;
+    if (this.selectionOutline.hasPointerCapture(event.pointerId)) {
+      this.selectionOutline.releasePointerCapture(event.pointerId);
+    }
+    const layer = this.directManipulation.layer;
+    this.directManipulation = null;
+    this.buildInspector(layer);
   };
 
   private audioValue(audio: AudioParameters, source: ReactSource): number {
@@ -946,6 +1081,7 @@ export class LayerEditor {
       if (mode === 'top') layer.y = value;
       else layer.x = value;
     });
+    this.compositeRefreshPending = true;
   }
 
   private groupSelection(): void {
@@ -958,6 +1094,10 @@ export class LayerEditor {
     cancelAnimationFrame(this.frame); this.fileInput.removeEventListener('change', this.onFile);
     this.shell.root.removeEventListener('studio:effect-selected', this.clearSelection);
     document.removeEventListener('keydown', this.onKeyDown);
+    this.selectionOutline.removeEventListener('pointerdown', this.onSelectionPointerDown);
+    this.selectionOutline.removeEventListener('pointermove', this.onSelectionPointerMove);
+    this.selectionOutline.removeEventListener('pointerup', this.onSelectionPointerUp);
+    this.selectionOutline.removeEventListener('pointercancel', this.onSelectionPointerUp);
     this.layers.forEach((layer) => {
       if (layer.objectUrl?.startsWith('blob:')) URL.revokeObjectURL(layer.objectUrl);
     });

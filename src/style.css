@@ -607,9 +607,33 @@ select:focus-visible {
   border: 1px solid var(--accent);
   outline: 1px solid rgb(0 0 0 / 45%);
   outline-offset: 2px;
-  pointer-events: none;
+  cursor: move;
+  pointer-events: auto;
+  touch-action: none;
   transform-origin: center;
 }
+
+.layer-resize-handle {
+  position: absolute;
+  z-index: 2;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 1px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 25%);
+  touch-action: none;
+}
+
+.layer-resize-handle--nw { top: 0; left: 0; cursor: nwse-resize; transform: translate(-50%, -50%); }
+.layer-resize-handle--n { top: 0; left: 50%; cursor: ns-resize; transform: translate(-50%, -50%); }
+.layer-resize-handle--ne { top: 0; right: 0; cursor: nesw-resize; transform: translate(50%, -50%); }
+.layer-resize-handle--e { top: 50%; right: 0; cursor: ew-resize; transform: translate(50%, -50%); }
+.layer-resize-handle--se { right: 0; bottom: 0; cursor: nwse-resize; transform: translate(50%, 50%); }
+.layer-resize-handle--s { bottom: 0; left: 50%; cursor: ns-resize; transform: translate(-50%, 50%); }
+.layer-resize-handle--sw { bottom: 0; left: 0; cursor: nesw-resize; transform: translate(-50%, 50%); }
+.layer-resize-handle--w { top: 50%; left: 0; cursor: ew-resize; transform: translate(-50%, -50%); }
 
 .design-layer {
   position: absolute;

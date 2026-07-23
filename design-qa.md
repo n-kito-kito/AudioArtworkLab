@@ -33,6 +33,9 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
 - Added a None artwork state so a fresh workspace starts as an empty black canvas.
 - Made layer canvas texture changes request an immediate WebGL render for live transform, style,
   add, delete, and reorder feedback.
+- Reconnects the overlay textures when an object property becomes dirty, matching the refresh path
+  that previously occurred only after changing Artwork.
+- Added a Figma-style selection box with eight resize handles and direct drag-to-move behavior.
 - Replaced the fluorescent green UI accent with a Figma-like blue selection color.
 - Kept Export PNG as the visually prominent blue primary action.
 - Tightened toolbar, panel, row, button, label, and control spacing to match a dense desktop editor.
@@ -49,7 +52,7 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
 
 - [P1] Visual comparison is unavailable.
   - Evidence: no browser is connected to the execution environment.
-  - Impact: the empty canvas state, Artwork placement, and live layer feedback cannot be confirmed
+  - Impact: live layer feedback and the move/resize bounding-box interactions cannot be confirmed
     in a real browser.
   - Fix: capture the deployed application at the reference viewport and compare it with the supplied
     Figma screenshot.
