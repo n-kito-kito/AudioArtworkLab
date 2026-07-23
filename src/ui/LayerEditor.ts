@@ -14,6 +14,7 @@ type LayerKind =
   | 'freehand';
 type ReactSource = 'none' | 'volume' | 'bass' | 'mid' | 'treble' | 'beat';
 type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+const DESIGN_SIZE = 1600;
 
 interface DesignLayer {
   id: string;
@@ -22,15 +23,20 @@ interface DesignLayer {
   element: HTMLElement;
   x: number;
   y: number;
-  scale: number;
+  width: number;
+  height: number;
   rotation: number;
   opacity: number;
   color: string;
+  fillEnabled: boolean;
+  fillColor: string;
+  strokeEnabled: boolean;
+  strokeColor: string;
+  strokeWidth: number;
   blur: number;
   contrast: number;
   reactTo: ReactSource;
   reactAmount: number;
-  baseWidth: number;
   text?: string;
   objectUrl?: string;
   fontFamily?: string;
@@ -41,19 +47,27 @@ interface DesignLayer {
 }
 
 export interface LayerSnapshot {
+  coordinateSpace?: 'px';
   kind: LayerKind;
   name: string;
   x: number;
   y: number;
-  scale: number;
+  width?: number;
+  height?: number;
+  scale?: number;
   rotation: number;
   opacity: number;
   color: string;
+  fillEnabled?: boolean;
+  fillColor?: string;
+  strokeEnabled?: boolean;
+  strokeColor?: string;
+  strokeWidth?: number;
   blur: number;
   contrast: number;
   reactTo: ReactSource;
   reactAmount: number;
-  baseWidth: number;
+  baseWidth?: number;
   text?: string;
   imageData?: string;
   fontFamily?: string;
@@ -98,7 +112,8 @@ export class LayerEditor {
         startY: number;
         layerX: number;
         layerY: number;
-        scale: number;
+        layerWidth: number;
+        layerHeight: number;
         width: number;
         height: number;
         surfaceWidth: number;
@@ -144,17 +159,22 @@ export class LayerEditor {
       kind: 'generator',
       name: 'Sine Wave',
       element: canvas,
-      x: 50,
-      y: 50,
-      scale: 1,
+      x: DESIGN_SIZE / 2,
+      y: DESIGN_SIZE / 2,
+      width: DESIGN_SIZE,
+      height: DESIGN_SIZE,
       rotation: 0,
       opacity: 1,
       color: '#ffffff',
+      fillEnabled: false,
+      fillColor: '#ffffff',
+      strokeEnabled: false,
+      strokeColor: '#ffffff',
+      strokeWidth: 0,
       blur: 0,
       contrast: 1,
       reactTo: 'none',
       reactAmount: 0,
-      baseWidth: 100,
     };
     this.layers.push(layer);
     this.syncStack();
@@ -244,13 +264,24 @@ export class LayerEditor {
                 : kind === 'freehand'
                   ? 'Free Drawing'
                   : 'Text Layer';
-    let width = kind === 'text' ? 58 : kind === 'wave' ? 76 : 42;
+    const dimensions: Record<Exclude<LayerKind, 'generator'>, [number, number]> = {
+      image: [DESIGN_SIZE, DESIGN_SIZE],
+      circle: [672, 672],
+      text: [928, 192],
+      wave: [1216, 208],
+      rectangle: [672, 448],
+      line: [672, 32],
+      polygon: [672, 672],
+      freehand: [672, 672],
+    };
+    let [width, height] = dimensions[kind as Exclude<LayerKind, 'generator'>];
     const color = kind === 'wave' ? '#b8ff38' : '#f2e9ff';
     if (kind === 'image' && element instanceof HTMLImageElement && url) {
       element.src = url;
       element.alt = 'Imported visual layer';
       name = 'Imported Image';
-      width = 100;
+      width = DESIGN_SIZE;
+      height = DESIGN_SIZE;
     } else if (kind === 'text') {
       element.textContent = 'AUDIO / FORM';
     } else if (kind === 'freehand') {
@@ -262,17 +293,22 @@ export class LayerEditor {
       kind,
       name,
       element,
-      x: 50,
-      y: 50,
-      scale: 1,
+      x: DESIGN_SIZE / 2,
+      y: DESIGN_SIZE / 2,
+      width,
+      height,
       rotation: 0,
       opacity: 1,
       color,
+      fillEnabled: false,
+      fillColor: color,
+      strokeEnabled: kind !== 'image' && kind !== 'text',
+      strokeColor: color,
+      strokeWidth: kind === 'line' || kind === 'wave' || kind === 'freehand' ? 6 : 8,
       blur: 0,
       contrast: 1,
       reactTo: kind === 'circle' ? 'bass' : kind === 'wave' ? 'mid' : 'none',
       reactAmount: kind === 'text' ? 0.15 : 0.45,
-      baseWidth: width,
       text: kind === 'text' ? 'AUDIO / FORM' : undefined,
       objectUrl: kind === 'image' ? url : undefined,
       fontFamily: 'Inter',
@@ -426,12 +462,30 @@ export class LayerEditor {
       return;
     }
     const transform = this.inspectorSection('Transform', 'ph-arrows-out-cardinal');
+    const position = document.createElement('div');
+    position.className = 'transform-input-grid';
+    position.append(
+      this.numberControl('X', layer.x, 0, DESIGN_SIZE, 1, 'px', (value) =>
+        this.changeLayer(layer, () => (layer.x = value)),
+      ),
+      this.numberControl('Y', layer.y, 0, DESIGN_SIZE, 1, 'px', (value) =>
+        this.changeLayer(layer, () => (layer.y = value)),
+      ),
+      this.numberControl('W', layer.width, 8, DESIGN_SIZE * 2, 1, 'px', (value) =>
+        this.changeLayer(layer, () => (layer.width = value)),
+      ),
+      this.numberControl('H', layer.height, 8, DESIGN_SIZE * 2, 1, 'px', (value) =>
+        this.changeLayer(layer, () => (layer.height = value)),
+      ),
+    );
     transform.append(
-      this.range('Position X', layer.x, 0, 100, 1, (v) => this.changeLayer(layer, () => (layer.x = v)), '%'),
-      this.range('Position Y', layer.y, 0, 100, 1, (v) => this.changeLayer(layer, () => (layer.y = v)), '%'),
-      this.range('Scale', layer.scale, 0.1, 3, 0.01, (v) => this.changeLayer(layer, () => (layer.scale = v)), 'x'),
-      this.range('Rotation', layer.rotation, -180, 180, 1, (v) => this.changeLayer(layer, () => (layer.rotation = v)), '°'),
-      this.range('Opacity', layer.opacity, 0, 1, 0.01, (v) => this.changeLayer(layer, () => (layer.opacity = v))),
+      position,
+      this.numberControl('Rotation', layer.rotation, -360, 360, 1, '°', (value) =>
+        this.changeLayer(layer, () => (layer.rotation = value)),
+      ),
+      this.numberControl('Opacity', layer.opacity * 100, 0, 100, 1, '%', (value) =>
+        this.changeLayer(layer, () => (layer.opacity = value / 100)),
+      ),
     );
     if (layer.kind === 'text') {
       transform.prepend(
@@ -460,8 +514,41 @@ export class LayerEditor {
       );
     }
     const style = this.inspectorSection('Style & audio', 'ph-sparkle');
+    const supportsFill = ['circle', 'rectangle', 'polygon'].includes(layer.kind);
+    const supportsStroke = ['circle', 'wave', 'rectangle', 'line', 'polygon', 'freehand'].includes(
+      layer.kind,
+    );
+    if (supportsFill) {
+      style.append(
+        this.paintControl('Fill', layer.fillEnabled, layer.fillColor, (enabled, color) =>
+          this.changeLayer(layer, () => {
+            layer.fillEnabled = enabled;
+            layer.fillColor = color;
+          }),
+        ),
+      );
+    }
+    if (supportsStroke) {
+      style.append(
+        this.paintControl('Stroke', layer.strokeEnabled, layer.strokeColor, (enabled, color) =>
+          this.changeLayer(layer, () => {
+            layer.strokeEnabled = enabled;
+            layer.strokeColor = color;
+            layer.color = color;
+          }),
+        ),
+        this.numberControl('Stroke width', layer.strokeWidth, 0, 200, 1, 'px', (value) =>
+          this.changeLayer(layer, () => (layer.strokeWidth = value)),
+        ),
+      );
+    } else if (layer.kind !== 'image') {
+      style.append(
+        this.color('Color', layer.color, (value) =>
+          this.changeLayer(layer, () => (layer.color = value)),
+        ),
+      );
+    }
     style.append(
-      this.color('Color', layer.color, (v) => this.changeLayer(layer, () => (layer.color = v))),
       this.range('Blur', layer.blur, 0, 30, 0.5, (v) => this.changeLayer(layer, () => (layer.blur = v)), 'px'),
       this.range('Contrast', layer.contrast, 0.2, 2.5, 0.05, (v) => this.changeLayer(layer, () => (layer.contrast = v)), 'x'),
       this.selectControl('React to', ['none', 'volume', 'bass', 'mid', 'treble', 'beat'], layer.reactTo, (v) =>
@@ -516,6 +603,63 @@ export class LayerEditor {
     return label;
   }
 
+  private numberControl(
+    labelText: string,
+    value: number,
+    min: number,
+    max: number,
+    step: number,
+    suffix: string,
+    change: (value: number) => void,
+  ): HTMLElement {
+    const label = document.createElement('label');
+    label.className = 'number-control';
+    const prefix = document.createElement('span');
+    prefix.textContent = labelText;
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = String(min);
+    input.max = String(max);
+    input.step = String(step);
+    input.value = String(Number(value.toFixed(2)));
+    input.addEventListener('input', () => {
+      const next = Number(input.value);
+      if (!Number.isFinite(next)) return;
+      change(Math.min(Math.max(next, min), max));
+    });
+    const unit = document.createElement('small');
+    unit.textContent = suffix;
+    label.append(prefix, input, unit);
+    return label;
+  }
+
+  private paintControl(
+    labelText: string,
+    enabled: boolean,
+    value: string,
+    change: (enabled: boolean, color: string) => void,
+  ): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'paint-control';
+    const toggle = document.createElement('input');
+    toggle.type = 'checkbox';
+    toggle.checked = enabled;
+    toggle.setAttribute('aria-label', `Enable ${labelText}`);
+    const label = document.createElement('span');
+    label.textContent = labelText;
+    const color = document.createElement('input');
+    color.type = 'color';
+    color.value = value;
+    color.disabled = !enabled;
+    toggle.addEventListener('change', () => {
+      color.disabled = !toggle.checked;
+      change(toggle.checked, color.value);
+    });
+    color.addEventListener('input', () => change(toggle.checked, color.value));
+    row.append(toggle, label, color);
+    return row;
+  }
+
   private color(labelText: string, value: string, change: (v: string) => void): HTMLElement {
     const label = document.createElement('label'); label.className = 'control-row control-row--inline';
     const name = document.createElement('span'); name.textContent = labelText;
@@ -556,7 +700,7 @@ export class LayerEditor {
   private duplicate(layer: DesignLayer): void {
     if (layer.kind === 'generator') return;
     if (layer.kind === 'image' && layer.objectUrl) this.addLayer('image', layer.objectUrl); else this.addLayer(layer.kind);
-    const copy = this.layers.at(-1)!; Object.assign(copy, { x: layer.x + 4, y: layer.y + 4, scale: layer.scale, rotation: layer.rotation, opacity: layer.opacity, color: layer.color, blur: layer.blur, contrast: layer.contrast, reactTo: layer.reactTo, reactAmount: layer.reactAmount, text: layer.text });
+    const copy = this.layers.at(-1)!; Object.assign(copy, { x: layer.x + 32, y: layer.y + 32, width: layer.width, height: layer.height, rotation: layer.rotation, opacity: layer.opacity, color: layer.color, fillEnabled: layer.fillEnabled, fillColor: layer.fillColor, strokeEnabled: layer.strokeEnabled, strokeColor: layer.strokeColor, strokeWidth: layer.strokeWidth, blur: layer.blur, contrast: layer.contrast, reactTo: layer.reactTo, reactAmount: layer.reactAmount, text: layer.text });
     if (copy.kind === 'text') copy.element.textContent = copy.text ?? '';
     this.compositeRefreshPending = true;
   }
@@ -583,19 +727,25 @@ export class LayerEditor {
   getSnapshot(): LayerEditorSnapshot {
     return {
       layers: this.layers.map((layer) => ({
+        coordinateSpace: 'px',
         kind: layer.kind,
         name: layer.name,
         x: layer.x,
         y: layer.y,
-        scale: layer.scale,
+        width: layer.width,
+        height: layer.height,
         rotation: layer.rotation,
         opacity: layer.opacity,
         color: layer.color,
+        fillEnabled: layer.fillEnabled,
+        fillColor: layer.fillColor,
+        strokeEnabled: layer.strokeEnabled,
+        strokeColor: layer.strokeColor,
+        strokeWidth: layer.strokeWidth,
         blur: layer.blur,
         contrast: layer.contrast,
         reactTo: layer.reactTo,
         reactAmount: layer.reactAmount,
-        baseWidth: layer.baseWidth,
         text: layer.text,
         imageData: layer.kind === 'image' ? layer.objectUrl : undefined,
         fontFamily: layer.fontFamily,
@@ -604,6 +754,37 @@ export class LayerEditor {
         path: layer.path,
         groupId: layer.groupId,
       })),
+    };
+  }
+
+  private normalizeSnapshot(saved: LayerSnapshot): Partial<DesignLayer> {
+    const legacy = saved.coordinateSpace !== 'px';
+    const scale = saved.scale ?? 1;
+    const legacyWidth = (saved.baseWidth ?? 42) * (DESIGN_SIZE / 100) * scale;
+    const legacyHeight = {
+      generator: DESIGN_SIZE,
+      image: DESIGN_SIZE * scale,
+      circle: legacyWidth,
+      text: 192 * scale,
+      wave: 208 * scale,
+      rectangle: legacyWidth * (2 / 3),
+      line: 32 * scale,
+      polygon: legacyWidth,
+      freehand: legacyWidth,
+    }[saved.kind];
+    const color = saved.color ?? '#f2e9ff';
+    return {
+      ...saved,
+      x: legacy ? saved.x * (DESIGN_SIZE / 100) : saved.x,
+      y: legacy ? saved.y * (DESIGN_SIZE / 100) : saved.y,
+      width: saved.width ?? legacyWidth,
+      height: saved.height ?? legacyHeight,
+      fillEnabled: saved.fillEnabled ?? false,
+      fillColor: saved.fillColor ?? color,
+      strokeEnabled:
+        saved.strokeEnabled ?? !['generator', 'image', 'text'].includes(saved.kind),
+      strokeColor: saved.strokeColor ?? color,
+      strokeWidth: saved.strokeWidth ?? (['line', 'wave', 'freehand'].includes(saved.kind) ? 6 : 8),
     };
   }
 
@@ -617,7 +798,7 @@ export class LayerEditor {
     const generator = snapshot.layers.find((layer) => layer.kind === 'generator');
     if (generator) {
       this.registerDefaultGenerator();
-      Object.assign(this.layers[0]!, generator);
+      Object.assign(this.layers[0]!, this.normalizeSnapshot(generator));
       this.app.setGeneratorLayerVisible(true);
     } else {
       const canvas = this.shell.canvasHost.querySelector('canvas');
@@ -629,7 +810,7 @@ export class LayerEditor {
       if (saved.kind === 'image' && !saved.imageData) continue;
       this.addLayer(saved.kind, saved.imageData);
       const layer = this.layers.at(-1)!;
-      Object.assign(layer, saved, { objectUrl: saved.imageData });
+      Object.assign(layer, this.normalizeSnapshot(saved), { objectUrl: saved.imageData });
       if (layer.kind === 'text') layer.element.textContent = layer.text ?? '';
       this.applyLayer(layer, 0);
     }
@@ -668,16 +849,16 @@ export class LayerEditor {
         return;
       }
       if (!this.drag) return; const box = this.surface.getBoundingClientRect();
-      const nextX = Math.max(0, Math.min(100, this.drag.x + ((event.clientX - this.drag.startX) / box.width) * 100));
-      const nextY = Math.max(0, Math.min(100, this.drag.y + ((event.clientY - this.drag.startY) / box.height) * 100));
+      const nextX = Math.max(0, Math.min(DESIGN_SIZE, this.drag.x + ((event.clientX - this.drag.startX) / box.width) * DESIGN_SIZE));
+      const nextY = Math.max(0, Math.min(DESIGN_SIZE, this.drag.y + ((event.clientY - this.drag.startY) / box.height) * DESIGN_SIZE));
       const dx = nextX - this.drag.layer.x;
       const dy = nextY - this.drag.layer.y;
       const group = this.drag.layer.groupId
         ? this.layers.filter((layer) => layer.groupId === this.drag!.layer.groupId)
         : [this.drag.layer];
       group.forEach((layer) => {
-        layer.x = Math.max(0, Math.min(100, layer.x + dx));
-        layer.y = Math.max(0, Math.min(100, layer.y + dy));
+        layer.x = Math.max(0, Math.min(DESIGN_SIZE, layer.x + dx));
+        layer.y = Math.max(0, Math.min(DESIGN_SIZE, layer.y + dy));
       });
       this.compositeRefreshPending = true;
     });
@@ -718,7 +899,8 @@ export class LayerEditor {
       startY: event.clientY,
       layerX: layer.x,
       layerY: layer.y,
-      scale: layer.scale,
+      layerWidth: layer.width,
+      layerHeight: layer.height,
       width: Math.max(outlineBox.width, 1),
       height: Math.max(outlineBox.height, 1),
       surfaceWidth: Math.max(surfaceBox.width, 1),
@@ -737,47 +919,44 @@ export class LayerEditor {
     if (operation.mode === 'move') {
       operation.layer.x = Math.max(
         0,
-        Math.min(100, operation.layerX + (deltaX / operation.surfaceWidth) * 100),
-      );
-      operation.layer.y = Math.max(
-        0,
-        Math.min(100, operation.layerY + (deltaY / operation.surfaceHeight) * 100),
-      );
-    } else {
-      const handle = operation.handle!;
-      const horizontal = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0;
-      const vertical = handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0;
-      const horizontalFactor = horizontal
-        ? 1 + (deltaX * horizontal) / operation.width
-        : 1;
-      const verticalFactor = vertical
-        ? 1 + (deltaY * vertical) / operation.height
-        : 1;
-      const factor =
-        horizontal && vertical
-          ? Math.abs(horizontalFactor - 1) > Math.abs(verticalFactor - 1)
-            ? horizontalFactor
-            : verticalFactor
-          : horizontal
-            ? horizontalFactor
-            : verticalFactor;
-      const scale = Math.max(0.1, Math.min(3, operation.scale * factor));
-      const appliedFactor = scale / operation.scale;
-      const widthChange = operation.width * (appliedFactor - 1);
-      const heightChange = operation.height * (appliedFactor - 1);
-      operation.layer.scale = scale;
-      operation.layer.x = Math.max(
-        0,
         Math.min(
-          100,
-          operation.layerX + ((horizontal * widthChange) / 2 / operation.surfaceWidth) * 100,
+          DESIGN_SIZE,
+          operation.layerX + (deltaX / operation.surfaceWidth) * DESIGN_SIZE,
         ),
       );
       operation.layer.y = Math.max(
         0,
         Math.min(
-          100,
-          operation.layerY + ((vertical * heightChange) / 2 / operation.surfaceHeight) * 100,
+          DESIGN_SIZE,
+          operation.layerY + (deltaY / operation.surfaceHeight) * DESIGN_SIZE,
+        ),
+      );
+    } else {
+      const handle = operation.handle!;
+      const horizontal = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0;
+      const vertical = handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0;
+      const widthChange =
+        horizontal * (deltaX / operation.surfaceWidth) * DESIGN_SIZE;
+      const heightChange =
+        vertical * (deltaY / operation.surfaceHeight) * DESIGN_SIZE;
+      const nextWidth = Math.max(8, operation.layerWidth + widthChange);
+      const nextHeight = Math.max(8, operation.layerHeight + heightChange);
+      const appliedWidthChange = nextWidth - operation.layerWidth;
+      const appliedHeightChange = nextHeight - operation.layerHeight;
+      operation.layer.width = nextWidth;
+      operation.layer.height = nextHeight;
+      operation.layer.x = Math.max(
+        0,
+        Math.min(
+          DESIGN_SIZE,
+          operation.layerX + (horizontal * appliedWidthChange) / 2,
+        ),
+      );
+      operation.layer.y = Math.max(
+        0,
+        Math.min(
+          DESIGN_SIZE,
+          operation.layerY + (vertical * appliedHeightChange) / 2,
         ),
       );
     }
@@ -803,21 +982,36 @@ export class LayerEditor {
     if (layer.kind === 'generator') return;
     const { pulse, wobble } = this.getLayerMotion(layer, audioValue);
     const element = layer.element;
-    element.style.left = `${layer.x}%`; element.style.top = `${layer.y}%`; element.style.width = `${layer.baseWidth}%`;
+    element.style.left = `${(layer.x / DESIGN_SIZE) * 100}%`;
+    element.style.top = `${(layer.y / DESIGN_SIZE) * 100}%`;
+    element.style.width = `${(layer.width / DESIGN_SIZE) * 100}%`;
+    element.style.height = `${(layer.height / DESIGN_SIZE) * 100}%`;
     element.style.opacity = String(layer.opacity); element.style.color = layer.color;
-    element.style.transform = `translate(-50%, -50%) rotate(${layer.rotation + wobble}deg) scale(${layer.scale * pulse})`;
+    element.style.transform = `translate(-50%, -50%) rotate(${layer.rotation + wobble}deg) scale(${pulse})`;
     element.style.filter = `blur(${layer.blur + audioValue * layer.reactAmount * 5}px) contrast(${layer.contrast})`;
     if (layer.kind === 'text') {
       element.style.fontFamily = `${layer.fontFamily ?? 'Inter'}, sans-serif`;
       element.style.fontWeight = String(layer.fontWeight ?? 800);
       element.style.lineHeight = String(layer.lineHeight ?? 1);
+      element.style.fontSize = `${Math.max((layer.height / DESIGN_SIZE) * this.surface.clientWidth * 0.55, 8)}px`;
     }
-    if (layer.kind === 'circle') element.style.setProperty('--layer-color', layer.color);
+    const displayStrokeWidth =
+      (layer.strokeWidth / DESIGN_SIZE) * Math.max(this.surface.clientWidth, 1);
+    element.style.setProperty(
+      '--layer-fill',
+      layer.fillEnabled ? layer.fillColor : 'transparent',
+    );
+    element.style.setProperty(
+      '--layer-stroke',
+      layer.strokeEnabled ? layer.strokeColor : 'transparent',
+    );
+    element.style.setProperty('--layer-stroke-width', `${displayStrokeWidth}px`);
     if (layer.kind === 'wave') element.style.setProperty('--wave-energy', String(1 + audioValue * layer.reactAmount * 2));
     if (layer.kind === 'freehand') {
       const path = element.querySelector('path');
       path?.setAttribute('d', layer.path ?? '');
-      path?.setAttribute('stroke', layer.color);
+      path?.setAttribute('stroke', layer.strokeEnabled ? layer.strokeColor : 'transparent');
+      path?.setAttribute('stroke-width', String(displayStrokeWidth));
     }
     if (this.selected === layer) this.updateSelectionOutline(pulse, wobble);
   }
@@ -846,14 +1040,15 @@ export class LayerEditor {
     size: number,
     audioValue: number,
   ): boolean {
-    const x = (layer.x / 100) * size;
-    const y = (layer.y / 100) * size;
-    const width = (layer.baseWidth / 100) * size;
+    const x = (layer.x / DESIGN_SIZE) * size;
+    const y = (layer.y / DESIGN_SIZE) * size;
+    const width = (layer.width / DESIGN_SIZE) * size;
+    const height = (layer.height / DESIGN_SIZE) * size;
     context.save();
     context.translate(x, y);
     const { pulse, wobble } = this.getLayerMotion(layer, audioValue);
     context.rotate(((layer.rotation + wobble) * Math.PI) / 180);
-    context.scale(layer.scale * pulse, layer.scale * pulse);
+    context.scale(pulse, pulse);
     context.globalAlpha = layer.opacity;
     context.filter = `blur(${layer.blur}px) contrast(${layer.contrast})`;
     if (layer.kind === 'image' && layer.element instanceof HTMLImageElement) {
@@ -863,7 +1058,7 @@ export class LayerEditor {
         return false;
       }
       const sourceRatio = image.naturalWidth / image.naturalHeight;
-      const targetRatio = width / size;
+      const targetRatio = width / height;
       let sourceWidth = image.naturalWidth;
       let sourceHeight = image.naturalHeight;
       let sourceX = 0;
@@ -882,68 +1077,73 @@ export class LayerEditor {
         sourceWidth,
         sourceHeight,
         -width / 2,
-        -size / 2,
+        -height / 2,
         width,
-        size,
+        height,
       );
     } else if (layer.kind === 'circle') {
-      context.strokeStyle = layer.color;
-      context.fillStyle = `${layer.color}22`;
-      context.lineWidth = Math.max(size * 0.008, 3);
+      context.strokeStyle = layer.strokeEnabled ? layer.strokeColor : 'transparent';
+      context.fillStyle = layer.fillEnabled ? layer.fillColor : 'transparent';
+      context.lineWidth = (layer.strokeWidth / DESIGN_SIZE) * size;
       context.beginPath();
-      context.arc(0, 0, width / 2, 0, Math.PI * 2);
-      context.fill();
-      context.stroke();
+      context.ellipse(0, 0, width / 2, height / 2, 0, 0, Math.PI * 2);
+      if (layer.fillEnabled) context.fill();
+      if (layer.strokeEnabled && layer.strokeWidth > 0) context.stroke();
     } else if (layer.kind === 'wave') {
-      context.strokeStyle = layer.color;
-      context.lineWidth = Math.max(size * 0.003, 2);
+      context.strokeStyle = layer.strokeEnabled ? layer.strokeColor : 'transparent';
+      context.lineWidth = (layer.strokeWidth / DESIGN_SIZE) * size;
       context.beginPath();
       for (let index = 0; index <= 100; index++) {
         const px = -width / 2 + (index / 100) * width;
-        const py = Math.sin((index / 100) * Math.PI * 6) * size * 0.055;
+        const py = Math.sin((index / 100) * Math.PI * 6) * height * 0.42;
         if (index === 0) context.moveTo(px, py);
         else context.lineTo(px, py);
       }
-      context.stroke();
+      if (layer.strokeEnabled && layer.strokeWidth > 0) context.stroke();
     } else if (layer.kind === 'text') {
       context.fillStyle = layer.color;
       context.textAlign = 'center';
       context.textBaseline = 'middle';
-      context.font = `${layer.fontWeight ?? 800} ${size * 0.075}px ${layer.fontFamily ?? 'Inter'}, sans-serif`;
+      context.font = `${layer.fontWeight ?? 800} ${height * 0.55}px ${layer.fontFamily ?? 'Inter'}, sans-serif`;
       const lines = (layer.text ?? '').split('\n');
-      const lineHeight = size * 0.075 * (layer.lineHeight ?? 1);
+      const lineHeight = height * 0.55 * (layer.lineHeight ?? 1);
       lines.forEach((line, index) =>
         context.fillText(line, 0, (index - (lines.length - 1) / 2) * lineHeight),
       );
     } else if (layer.kind === 'rectangle') {
-      context.strokeStyle = layer.color;
-      context.lineWidth = Math.max(size * 0.005, 2);
-      context.strokeRect(-width / 2, -width / 3, width, (width * 2) / 3);
+      context.fillStyle = layer.fillEnabled ? layer.fillColor : 'transparent';
+      context.strokeStyle = layer.strokeEnabled ? layer.strokeColor : 'transparent';
+      context.lineWidth = (layer.strokeWidth / DESIGN_SIZE) * size;
+      if (layer.fillEnabled) context.fillRect(-width / 2, -height / 2, width, height);
+      if (layer.strokeEnabled && layer.strokeWidth > 0)
+        context.strokeRect(-width / 2, -height / 2, width, height);
     } else if (layer.kind === 'line') {
-      context.strokeStyle = layer.color;
-      context.lineWidth = Math.max(size * 0.005, 2);
+      context.strokeStyle = layer.strokeEnabled ? layer.strokeColor : 'transparent';
+      context.lineWidth = (layer.strokeWidth / DESIGN_SIZE) * size;
       context.beginPath();
       context.moveTo(-width / 2, 0);
       context.lineTo(width / 2, 0);
-      context.stroke();
+      if (layer.strokeEnabled && layer.strokeWidth > 0) context.stroke();
     } else if (layer.kind === 'polygon') {
-      context.strokeStyle = layer.color;
-      context.lineWidth = Math.max(size * 0.005, 2);
+      context.fillStyle = layer.fillEnabled ? layer.fillColor : 'transparent';
+      context.strokeStyle = layer.strokeEnabled ? layer.strokeColor : 'transparent';
+      context.lineWidth = (layer.strokeWidth / DESIGN_SIZE) * size;
       context.beginPath();
       for (let index = 0; index < 6; index++) {
         const angle = -Math.PI / 2 + (index / 6) * Math.PI * 2;
         const px = Math.cos(angle) * width * 0.45;
-        const py = Math.sin(angle) * width * 0.45;
+        const py = Math.sin(angle) * height * 0.45;
         if (index === 0) context.moveTo(px, py);
         else context.lineTo(px, py);
       }
       context.closePath();
-      context.stroke();
+      if (layer.fillEnabled) context.fill();
+      if (layer.strokeEnabled && layer.strokeWidth > 0) context.stroke();
     } else if (layer.kind === 'freehand' && layer.path) {
-      context.strokeStyle = layer.color;
-      context.lineWidth = Math.max(size * 0.004, 2);
-      context.scale(width / 100, width / 100);
-      context.stroke(new Path2D(layer.path));
+      context.strokeStyle = layer.strokeEnabled ? layer.strokeColor : 'transparent';
+      context.lineWidth = Math.max(layer.strokeWidth / 100, 0.1);
+      context.scale(width / 100, height / 100);
+      if (layer.strokeEnabled && layer.strokeWidth > 0) context.stroke(new Path2D(layer.path));
     }
     context.restore();
     return true;
@@ -1025,18 +1225,11 @@ export class LayerEditor {
     const layer = this.selected;
     this.selectionOutline.hidden = !layer || layer.kind === 'generator';
     if (!layer || layer.kind === 'generator') return;
-    this.selectionOutline.style.left = `${layer.x}%`;
-    this.selectionOutline.style.top = `${layer.y}%`;
-    this.selectionOutline.style.width = `${layer.baseWidth}%`;
-    this.selectionOutline.style.height =
-      layer.kind === 'image'
-        ? '100%'
-        : layer.kind === 'text'
-          ? '12%'
-          : layer.kind === 'wave' || layer.kind === 'line'
-            ? '13%'
-            : `${layer.baseWidth}%`;
-    this.selectionOutline.style.transform = `translate(-50%, -50%) rotate(${layer.rotation + wobble}deg) scale(${layer.scale * pulse})`;
+    this.selectionOutline.style.left = `${(layer.x / DESIGN_SIZE) * 100}%`;
+    this.selectionOutline.style.top = `${(layer.y / DESIGN_SIZE) * 100}%`;
+    this.selectionOutline.style.width = `${(layer.width / DESIGN_SIZE) * 100}%`;
+    this.selectionOutline.style.height = `${(layer.height / DESIGN_SIZE) * 100}%`;
+    this.selectionOutline.style.transform = `translate(-50%, -50%) rotate(${layer.rotation + wobble}deg) scale(${pulse})`;
   }
 
   private startDrawing(): void {
@@ -1055,9 +1248,10 @@ export class LayerEditor {
     const maxX = Math.max(...points.map(([x]) => x));
     const minY = Math.min(...points.map(([, y]) => y));
     const maxY = Math.max(...points.map(([, y]) => y));
-    layer.x = (minX + maxX) / 2;
-    layer.y = (minY + maxY) / 2;
-    layer.baseWidth = Math.max(maxX - minX, 4);
+    layer.x = ((minX + maxX) / 2 / 100) * DESIGN_SIZE;
+    layer.y = ((minY + maxY) / 2 / 100) * DESIGN_SIZE;
+    layer.width = (Math.max(maxX - minX, 4) / 100) * DESIGN_SIZE;
+    layer.height = (Math.max(maxY - minY, 4) / 100) * DESIGN_SIZE;
     const width = Math.max(maxX - minX, 0.1);
     const height = Math.max(maxY - minY, 0.1);
     layer.path = points
