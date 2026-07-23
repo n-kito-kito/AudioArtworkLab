@@ -534,8 +534,14 @@ select:focus-visible {
 .layer-add-button:hover { border-color: var(--accent); background: var(--accent-soft); }
 .layer-list { display: grid; gap: 5px; margin-top: 10px; }
 .layer-empty { padding: 12px; border: 1px dashed var(--border); color: var(--muted); font-size: 9px; text-align: center; }
-.layer-row { display: grid; grid-template-columns: 20px 1fr 16px; align-items: center; min-height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--control); color: #aaa6b1; cursor: pointer; font-size: 10px; text-align: left; }
+.layer-row { display: grid; grid-template-columns: minmax(0, 1fr) 32px; align-items: stretch; min-height: 36px; overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: var(--control); color: #aaa6b1; font-size: 10px; }
 .layer-row.is-selected { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.layer-row__select { display: grid; grid-template-columns: 20px minmax(0, 1fr) 16px; align-items: center; min-width: 0; padding: 0 6px 0 8px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.layer-row__select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-row__handle { color: #77727f; }
+.layer-row__delete { display: grid; width: 32px; place-items: center; border: 0; border-left: 1px solid var(--border); background: transparent; color: #77727f; cursor: pointer; }
+.layer-row__delete:hover { background: rgb(255 115 115 / 12%); color: var(--danger); }
+.layer-row__delete:focus-visible { position: relative; z-index: 1; }
 .layer-text-control { display: grid; gap: 7px; }
 .layer-text-control input { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--control); }
 .layer-actions { grid-template-columns: repeat(2, 1fr); }

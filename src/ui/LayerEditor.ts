@@ -52,6 +52,7 @@ export class LayerEditor {
     this.bindDrag();
     this.fileInput.addEventListener('change', this.onFile);
     this.shell.root.addEventListener('studio:effect-selected', this.clearSelection);
+    document.addEventListener('keydown', this.onKeyDown);
     this.frame = requestAnimationFrame(this.update);
   }
 
@@ -156,18 +157,44 @@ export class LayerEditor {
       return;
     }
     [...this.layers].reverse().forEach((layer) => {
-      const row = document.createElement('button');
-      row.type = 'button';
+      const row = document.createElement('div');
       row.className = 'layer-row';
       row.classList.toggle('is-selected', layer === this.selected);
       const icon = { image: 'ph-image', circle: 'ph-circle', wave: 'ph-wave-sine', text: 'ph-text-t' }[
         layer.kind
       ];
-      row.innerHTML = `<i class="ph ${icon}"></i><span>${layer.name}</span><i class="ph ph-dots-six-vertical"></i>`;
-      row.addEventListener('click', () => this.select(layer));
+      const selectButton = document.createElement('button');
+      selectButton.type = 'button';
+      selectButton.className = 'layer-row__select';
+      selectButton.setAttribute('aria-label', `Select ${layer.name}`);
+      selectButton.innerHTML = `<i class="ph ${icon}"></i><span>${layer.name}</span><i class="ph ph-dots-six-vertical layer-row__handle"></i>`;
+      selectButton.addEventListener('click', () => this.select(layer));
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'layer-row__delete';
+      deleteButton.setAttribute('aria-label', `Delete ${layer.name}`);
+      deleteButton.title = 'Delete layer';
+      deleteButton.innerHTML = '<i class="ph ph-trash"></i>';
+      deleteButton.addEventListener('click', () => this.remove(layer));
+      row.append(selectButton, deleteButton);
       this.list.append(row);
     });
   }
+
+  private onKeyDown = (event: KeyboardEvent): void => {
+    if (!this.selected || (event.key !== 'Delete' && event.key !== 'Backspace')) return;
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      (target instanceof HTMLElement && target.isContentEditable)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    this.remove(this.selected);
+  };
 
   private buildInspector(layer: DesignLayer): void {
     const panel = this.shell.rightPanel;
@@ -377,6 +404,7 @@ export class LayerEditor {
   dispose(): void {
     cancelAnimationFrame(this.frame); this.fileInput.removeEventListener('change', this.onFile);
     this.shell.root.removeEventListener('studio:effect-selected', this.clearSelection);
+    document.removeEventListener('keydown', this.onKeyDown);
     this.layers.forEach((layer) => { if (layer.objectUrl) URL.revokeObjectURL(layer.objectUrl); });
     this.section.remove(); this.surface.remove();
   }
