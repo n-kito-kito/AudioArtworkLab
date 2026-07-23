@@ -112,6 +112,8 @@ export class LayerEditor {
   private registerDefaultGenerator(): void {
     const canvas = this.shell.canvasHost.querySelector('canvas');
     if (!canvas) return;
+    canvas.style.display = '';
+    this.app.setGeneratorLayerVisible(true);
     const layer: DesignLayer = {
       id: crypto.randomUUID(),
       kind: 'generator',
@@ -484,7 +486,7 @@ export class LayerEditor {
 
   private remove(layer: DesignLayer): void {
     const index = this.layers.indexOf(layer); if (index < 0) return;
-    if (layer.kind === 'generator') layer.element.style.display = 'none';
+    if (layer.kind === 'generator') this.app.setGeneratorLayerVisible(false);
     else layer.element.remove();
     if (layer.objectUrl?.startsWith('blob:')) URL.revokeObjectURL(layer.objectUrl);
     this.layers.splice(index, 1);
@@ -537,10 +539,11 @@ export class LayerEditor {
     if (generator) {
       this.registerDefaultGenerator();
       Object.assign(this.layers[0]!, generator);
-      this.layers[0]!.element.style.display = '';
+      this.app.setGeneratorLayerVisible(true);
     } else {
       const canvas = this.shell.canvasHost.querySelector('canvas');
-      if (canvas) canvas.style.display = 'none';
+      if (canvas) canvas.style.display = '';
+      this.app.setGeneratorLayerVisible(false);
     }
     for (const saved of snapshot.layers) {
       if (saved.kind === 'generator') continue;

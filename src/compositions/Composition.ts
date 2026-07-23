@@ -18,6 +18,7 @@ export interface Composition {
   update(elapsed: number): void;
   render(): void;
   resize(width: number, height: number): void;
+  setGeneratorsVisible(visible: boolean): void;
   dispose(): void;
 }
 
@@ -64,6 +65,14 @@ export abstract class BaseComposition implements Composition {
 
   resize(width: number, height: number): void {
     this.pipeline?.resize(width, height);
+  }
+
+  setGeneratorsVisible(visible: boolean): void {
+    for (const generator of this.generators) {
+      if ('setVisible' in generator && typeof generator.setVisible === 'function') {
+        generator.setVisible(visible);
+      }
+    }
   }
 
   getEffects(): readonly Effect[] {

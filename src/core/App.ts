@@ -18,6 +18,7 @@ export class App {
   private readonly resizeObserver: ResizeObserver;
   private loop: AnimationLoop | null = null;
   private contextLost = false;
+  private generatorLayerVisible = true;
   private readonly designLayerPlanes: THREE.Mesh[] = [];
   private readonly designLayerTextures: THREE.CanvasTexture[] = [];
 
@@ -35,6 +36,7 @@ export class App {
       renderer: this.renderer.three,
       audioEngine: this.audioEngine,
     });
+    this.composition.setGeneratorsVisible(this.generatorLayerVisible);
 
     this.startComposition();
 
@@ -61,6 +63,7 @@ export class App {
       renderer: this.renderer.three,
       audioEngine: this.audioEngine,
     });
+    this.composition.setGeneratorsVisible(this.generatorLayerVisible);
     this.composition.resize(this.canvas.width, this.canvas.height);
     this.startComposition();
   }
@@ -95,6 +98,12 @@ export class App {
 
   updateDesignLayerCanvases(): void {
     this.designLayerTextures.forEach((texture) => (texture.needsUpdate = true));
+  }
+
+  setGeneratorLayerVisible(visible: boolean): void {
+    this.generatorLayerVisible = visible;
+    this.composition.setGeneratorsVisible(visible);
+    this.renderer.three.domElement.style.display = '';
   }
 
   private startComposition(): void {
