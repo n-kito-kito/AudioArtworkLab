@@ -564,7 +564,7 @@ select:focus-visible {
 
 .artboard {
   position: relative;
-  z-index: 2;
+  z-index: 1000;
   width: min(72vmin, 760px);
   max-width: 100%;
   aspect-ratio: 1;
@@ -585,6 +585,7 @@ select:focus-visible {
 
 .layer-surface {
   position: absolute;
+  z-index: 2;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
