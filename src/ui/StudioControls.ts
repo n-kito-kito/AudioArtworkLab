@@ -21,6 +21,9 @@ const EFFECT_MAX: Record<string, number> = {
   'Scan Drift': 0.1,
 };
 
+const MODIFIER_NAMES = ['Warp', 'Repeat', 'Scan Drift'] as const;
+const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble', 'beat'];
+
 export class StudioControls {
   private readonly shell: StudioShell;
   private readonly composition: SineWaveBasic;
@@ -192,6 +195,11 @@ export class StudioControls {
       }),
     );
 
+    const modifiers = this.section('MODIFIER', 'ph-arrows-split');
+    for (const modifier of this.getModifiers()) {
+      modifiers.append(this.modifierControls(modifier));
+    }
+
     const range = this.section('OUTPUT RANGE', 'ph-arrows-out-line-vertical');
     range.append(
       this.range('Amplitude min', values.amplitudeMin, 0, 0.8, 0.01, (value) =>
@@ -208,7 +216,59 @@ export class StudioControls {
       ),
     );
     this.shell.leftPanel.prepend(motion);
-    this.shell.leftPanel.append(generator, reaction, range);
+    this.shell.leftPanel.append(generator, modifiers, reaction, range);
+  }
+
+  private modifierControls(modifier: Effect): HTMLElement {
+    const card = document.createElement('div');
+    card.className = 'modifier-card';
+
+    const header = document.createElement('div');
+    header.className = 'modifier-card__header';
+    const name = document.createElement('strong');
+    name.textContent = modifier.name;
+    const enabled = document.createElement('input');
+    enabled.type = 'checkbox';
+    enabled.checked = modifier.enabled;
+    enabled.setAttribute('aria-label', `${modifier.name} enabled`);
+    enabled.addEventListener('change', () => {
+      modifier.enabled = enabled.checked;
+      this.buildChain();
+      if (modifier === this.selectedEffect) this.buildInspector();
+    });
+    header.append(name, enabled);
+
+    const order = document.createElement('div');
+    order.className = 'button-row modifier-card__order';
+    order.append(
+      this.iconButton('ph-arrow-up', `Move ${modifier.name} earlier`, () =>
+        this.moveModifier(modifier, -1),
+      ),
+      this.iconButton('ph-arrow-down', `Move ${modifier.name} later`, () =>
+        this.moveModifier(modifier, 1),
+      ),
+    );
+
+    card.append(
+      header,
+      this.range(
+        'Intensity',
+        modifier.intensity,
+        0,
+        EFFECT_MAX[modifier.name] ?? 1,
+        0.001,
+        (value) => {
+          modifier.intensity = value;
+          if (modifier === this.selectedEffect) this.buildInspector();
+        },
+      ),
+      this.selectControl('React to', AUDIO_SOURCES, modifier.audioSource, (value) => {
+        modifier.audioSource = value as AudioSource;
+        if (modifier === this.selectedEffect) this.buildInspector();
+      }),
+      order,
+    );
+    return card;
   }
 
   private buildInspector(): void {
@@ -239,7 +299,7 @@ export class StudioControls {
       ),
       this.selectControl(
         'React to',
-        ['none', 'volume', 'bass', 'mid', 'treble', 'beat'],
+        AUDIO_SOURCES,
         this.selectedEffect.audioSource,
         (value) => {
           this.selectedEffect.audioSource = value as AudioSource;
@@ -490,6 +550,33 @@ export class StudioControls {
 
   private moveSelected(direction: -1 | 1): void {
     this.composition.moveEffect(this.selectedEffect, direction);
+    this.buildLeftPanel();
+    this.buildChain();
+  }
+
+  private getModifiers(): Effect[] {
+    return this.composition
+      .getEffects()
+      .filter((effect): effect is Effect =>
+        MODIFIER_NAMES.includes(effect.name as (typeof MODIFIER_NAMES)[number]),
+      );
+  }
+
+  private moveModifier(modifier: Effect, direction: -1 | 1): void {
+    const modifiers = this.getModifiers();
+    const index = modifiers.indexOf(modifier);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= modifiers.length) return;
+    [modifiers[index], modifiers[target]] = [modifiers[target]!, modifiers[index]!];
+
+    let modifierIndex = 0;
+    const order = this.composition.getEffects().map((effect) =>
+      MODIFIER_NAMES.includes(effect.name as (typeof MODIFIER_NAMES)[number])
+        ? modifiers[modifierIndex++]!.name
+        : effect.name,
+    );
+    this.composition.setEffectOrder(order);
+    this.buildLeftPanel();
     this.buildChain();
   }
 

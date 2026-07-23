@@ -317,6 +317,50 @@ select:focus-visible {
   font-size: 10px;
 }
 
+.modifier-card {
+  margin-top: 9px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--control);
+}
+
+.modifier-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modifier-card__header strong {
+  color: #d2ced7;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.modifier-card__header input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--accent);
+}
+
+.modifier-card .control-row select {
+  min-width: 112px;
+}
+
+.modifier-card__order {
+  margin-top: 11px;
+}
+
+.modifier-card__order .ui-button {
+  min-height: 30px;
+  padding: 0 8px;
+}
+
+.modifier-card__order .ui-button span {
+  display: none;
+}
+
 .segmented-control {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

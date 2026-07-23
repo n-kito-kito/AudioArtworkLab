@@ -54,7 +54,7 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 - [x] 左右の編集パネルを個別に開閉する
 - [x] Audio パネルを作る
 - [x] Generator パネルを作る
-- [ ] Modifier パネルを作る
+- [x] Modifier パネルを作る
 - [x] Effect パネルを作る
 - [x] プリセットを保存・復元する
 
