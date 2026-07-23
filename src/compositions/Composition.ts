@@ -19,6 +19,8 @@ export interface Composition {
   render(): void;
   resize(width: number, height: number): void;
   setGeneratorsVisible(visible: boolean): void;
+  setDesignLayerCanvases(canvases: [HTMLCanvasElement, HTMLCanvasElement]): void;
+  updateDesignLayerCanvases(): void;
   dispose(): void;
 }
 
@@ -73,6 +75,14 @@ export abstract class BaseComposition implements Composition {
         generator.setVisible(visible);
       }
     }
+  }
+
+  setDesignLayerCanvases(canvases: [HTMLCanvasElement, HTMLCanvasElement]): void {
+    this.pipeline?.setOverlayCanvases(canvases);
+  }
+
+  updateDesignLayerCanvases(): void {
+    this.pipeline?.updateOverlayCanvases();
   }
 
   getEffects(): readonly Effect[] {
