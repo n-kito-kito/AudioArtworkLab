@@ -48,7 +48,14 @@ export class StudioControls {
   private artworkSelection = 'None';
   private seed = Math.floor(Math.random() * 99999);
   private autosaveTimer = 0;
+  private historyTimer = 0;
+  private readonly history: string[] = [];
+  private readonly redoHistory: string[] = [];
+  private pendingHistory = '';
+  private pendingHistorySince = 0;
+  private applyingHistory = false;
   private static readonly PRESET_KEY = 'audio-artwork-lab:studio-preset';
+  private static readonly HISTORY_LIMIT = 25;
 
   constructor(
     shell: StudioShell,
@@ -77,20 +84,25 @@ export class StudioControls {
     this.buildChain();
     this.shell.root.addEventListener('studio:restore-effect', this.restoreEffect);
     window.addEventListener('resize', this.updatePanelButtons);
+    document.addEventListener('keydown', this.onHistoryShortcut);
     this.presetInput.type = 'file';
     this.presetInput.accept = 'application/json,.json';
     this.presetInput.hidden = true;
     this.presetInput.addEventListener('change', this.importPreset);
     this.shell.root.append(this.presetInput);
     this.restoreAutosave();
+    this.history.push(this.createHistoryState());
     this.autosaveTimer = window.setInterval(() => this.saveAutosave(false), 1200);
+    this.historyTimer = window.setInterval(this.trackHistory, 150);
   }
 
   dispose(): void {
     this.toolbarActions.remove();
     this.shell.root.removeEventListener('studio:restore-effect', this.restoreEffect);
     window.removeEventListener('resize', this.updatePanelButtons);
+    document.removeEventListener('keydown', this.onHistoryShortcut);
     window.clearInterval(this.autosaveTimer);
+    window.clearInterval(this.historyTimer);
     this.presetInput.removeEventListener('change', this.importPreset);
     this.presetInput.remove();
     this.shell.leftTop
@@ -585,6 +597,98 @@ export class StudioControls {
       this.applyPreset(JSON.parse(saved) as StudioPreset);
     } catch {
       localStorage.removeItem(StudioControls.PRESET_KEY);
+    }
+  }
+
+  private createHistoryState(): string {
+    const preset = createStudioPreset(
+      this.composition,
+      this.layerEditor,
+      this.artworkSelection,
+    );
+    preset.savedAt = '';
+    return JSON.stringify(preset);
+  }
+
+  private trackHistory = (): void => {
+    if (this.applyingHistory) return;
+    const current = this.createHistoryState();
+    if (current === this.history.at(-1)) {
+      this.pendingHistory = '';
+      this.pendingHistorySince = 0;
+      return;
+    }
+    if (current !== this.pendingHistory) {
+      this.pendingHistory = current;
+      this.pendingHistorySince = performance.now();
+      return;
+    }
+    if (performance.now() - this.pendingHistorySince < 400) return;
+    this.pushHistory(current);
+  };
+
+  private pushHistory(state: string): void {
+    if (state === this.history.at(-1)) return;
+    this.history.push(state);
+    if (this.history.length > StudioControls.HISTORY_LIMIT) this.history.shift();
+    this.redoHistory.splice(0);
+    this.pendingHistory = '';
+    this.pendingHistorySince = 0;
+  }
+
+  private commitPendingHistory(): void {
+    const current = this.createHistoryState();
+    if (current !== this.history.at(-1)) this.pushHistory(current);
+  }
+
+  private onHistoryShortcut = (event: KeyboardEvent): void => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z') return;
+    const target = event.target;
+    if (
+      target instanceof HTMLTextAreaElement ||
+      (target instanceof HTMLInputElement &&
+        ['text', 'search', 'email', 'url', 'tel', 'password', 'number'].includes(target.type)) ||
+      (target instanceof HTMLElement && target.isContentEditable)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (event.shiftKey) this.redo();
+    else this.undo();
+  };
+
+  private undo(): void {
+    this.commitPendingHistory();
+    if (this.history.length < 2) {
+      this.showNotice('Nothing to undo');
+      return;
+    }
+    const current = this.history.pop()!;
+    this.redoHistory.push(current);
+    this.restoreHistoryState(this.history.at(-1)!);
+    this.showNotice('Undid last change');
+  }
+
+  private redo(): void {
+    const state = this.redoHistory.pop();
+    if (!state) {
+      this.showNotice('Nothing to redo');
+      return;
+    }
+    this.history.push(state);
+    this.restoreHistoryState(state);
+    this.showNotice('Redid last change');
+  }
+
+  private restoreHistoryState(state: string): void {
+    this.applyingHistory = true;
+    try {
+      this.applyPreset(JSON.parse(state) as StudioPreset);
+      this.saveAutosave(false);
+      this.pendingHistory = '';
+      this.pendingHistorySince = 0;
+    } finally {
+      this.applyingHistory = false;
     }
   }
 
