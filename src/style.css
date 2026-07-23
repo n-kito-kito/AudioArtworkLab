@@ -63,16 +63,21 @@ select:focus-visible {
 }
 
 .studio-shell {
+  --left-panel-width: 300px;
+  --right-panel-width: 300px;
   display: grid;
   grid-template:
     'topbar topbar topbar' 52px
     'left stage right' minmax(0, 1fr)
     'chain chain chain' 76px /
-    300px minmax(0, 1fr) 300px;
+    var(--left-panel-width) minmax(0, 1fr) var(--right-panel-width);
   width: 100%;
   height: 100%;
   background: var(--bg);
 }
+
+.studio-shell.left-collapsed { --left-panel-width: 0px; }
+.studio-shell.right-collapsed { --right-panel-width: 0px; }
 
 .topbar {
   position: relative;
@@ -154,6 +159,12 @@ select:focus-visible {
   border-color: var(--accent);
   background: var(--accent);
   color: #0a0d05;
+}
+
+.ui-button.is-active:not(.is-primary) {
+  border-color: rgb(184 255 56 / 55%);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .ui-button i,
@@ -726,8 +737,12 @@ select:focus-visible {
 
 @media (width <= 1100px) {
   .studio-shell {
-    grid-template-columns: 270px minmax(0, 1fr) 270px;
+    --left-panel-width: 270px;
+    --right-panel-width: 270px;
   }
+
+  .studio-shell.left-collapsed { --left-panel-width: 0px; }
+  .studio-shell.right-collapsed { --right-panel-width: 0px; }
 
   .brand span,
   .seed-label,
@@ -742,6 +757,30 @@ select:focus-visible {
 
   .ui-button.is-primary {
     width: 38px;
+  }
+}
+
+@media (width > 820px) {
+  .studio-shell {
+    transition: grid-template-columns 180ms ease;
+  }
+
+  .control-panel {
+    transition: opacity 150ms ease, transform 180ms ease, visibility 180ms;
+  }
+
+  .left-collapsed .control-panel--left {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-12px);
+  }
+
+  .right-collapsed .control-panel--right {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(12px);
   }
 }
 

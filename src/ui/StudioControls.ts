@@ -23,6 +23,8 @@ export class StudioControls {
   private readonly exportArtwork: () => void;
   private readonly toolbarActions = document.createElement('div');
   private readonly chainTrack = document.createElement('div');
+  private leftPanelButton: HTMLButtonElement | null = null;
+  private rightPanelButton: HTMLButtonElement | null = null;
   private selectedEffect: Effect;
   private seed = Math.floor(Math.random() * 99999);
 
@@ -44,12 +46,14 @@ export class StudioControls {
     this.buildInspector();
     this.buildChain();
     this.shell.root.addEventListener('studio:restore-effect', this.restoreEffect);
+    window.addEventListener('resize', this.updatePanelButtons);
   }
 
   dispose(): void {
     this.toolbarActions.remove();
     this.chainTrack.remove();
     this.shell.root.removeEventListener('studio:restore-effect', this.restoreEffect);
+    window.removeEventListener('resize', this.updatePanelButtons);
     this.shell.leftPanel.querySelectorAll('.visual-section').forEach((element) => element.remove());
     this.shell.rightPanel.replaceChildren();
   }
@@ -59,6 +63,12 @@ export class StudioControls {
     const seed = document.createElement('span');
     seed.className = 'seed-label';
     seed.textContent = `SEED ${this.seed.toString().padStart(5, '0')}`;
+    this.leftPanelButton = this.iconButton('ph-sidebar-simple', 'Controls', () =>
+      this.togglePanel('left'),
+    );
+    this.rightPanelButton = this.iconButton('ph-sliders-horizontal', 'Inspector', () =>
+      this.togglePanel('right'),
+    );
     this.toolbarActions.append(
       seed,
       this.iconButton('ph-shuffle', 'Randomize', () => {
@@ -67,16 +77,46 @@ export class StudioControls {
         this.randomize();
       }),
       this.iconButton('ph-grid-four', 'Grid', () => this.shell.root.classList.toggle('show-grid')),
-      this.iconButton('ph-sidebar-simple', 'Controls', () =>
-        this.shell.root.classList.toggle('left-open'),
-      ),
-      this.iconButton('ph-sliders-horizontal', 'Inspector', () =>
-        this.shell.root.classList.toggle('right-open'),
-      ),
+      this.leftPanelButton,
+      this.rightPanelButton,
       this.iconButton('ph-corners-out', 'Fullscreen', () => void this.toggleFullscreen()),
       this.iconButton('ph-export', 'Export PNG', this.exportArtwork, true),
     );
     this.shell.toolbar.append(this.toolbarActions);
+    this.updatePanelButtons();
+  }
+
+  private togglePanel(side: 'left' | 'right'): void {
+    const mobile = window.matchMedia('(width <= 820px)').matches;
+    if (mobile) {
+      const openClass = side === 'left' ? 'left-open' : 'right-open';
+      const otherClass = side === 'left' ? 'right-open' : 'left-open';
+      const shouldOpen = !this.shell.root.classList.contains(openClass);
+      this.shell.root.classList.remove(otherClass);
+      this.shell.root.classList.toggle(openClass, shouldOpen);
+    } else {
+      const collapsedClass = side === 'left' ? 'left-collapsed' : 'right-collapsed';
+      this.shell.root.classList.toggle(collapsedClass);
+    }
+    this.updatePanelButtons();
+  }
+
+  private updatePanelButtons = (): void => {
+    const mobile = window.matchMedia('(width <= 820px)').matches;
+    const leftVisible = mobile
+      ? this.shell.root.classList.contains('left-open')
+      : !this.shell.root.classList.contains('left-collapsed');
+    const rightVisible = mobile
+      ? this.shell.root.classList.contains('right-open')
+      : !this.shell.root.classList.contains('right-collapsed');
+    this.setPanelButtonState(this.leftPanelButton, leftVisible);
+    this.setPanelButtonState(this.rightPanelButton, rightVisible);
+  };
+
+  private setPanelButtonState(button: HTMLButtonElement | null, visible: boolean): void {
+    if (!button) return;
+    button.classList.toggle('is-active', visible);
+    button.setAttribute('aria-pressed', String(visible));
   }
 
   private buildLeftPanel(): void {

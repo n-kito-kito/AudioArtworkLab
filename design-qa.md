@@ -23,6 +23,8 @@ The implementation follows the reference's editor hierarchy: compact top toolbar
 - Deleting `Sine Wave` from its row and with the `Delete` key both removed the row and hid the generated wave while leaving other design layers visible.
 - PNG export composites the WebGL artwork and design layers into one 1600 × 1600 image.
 - Mobile browser verification at 390 × 844 reported zero horizontal page overflow and a working off-canvas Controls drawer.
+- Desktop panel toggles were verified independently: closing Controls expanded the stage from 680px to 980px, closing Inspector expanded it to 1280px, and reopening both restored the original 680px stage.
+- Mobile verification at 390 × 844 confirmed both panels start closed, Controls opens from the left, Inspector opens from the right, and opening one closes the other.
 - Browser console contained no errors or warnings during the verified interactions.
 - Native labels, headings, buttons, radio controls, checkboxes, selects, and status values are present; Phosphor icons use one consistent icon family.
 - `npm run lint` and `npm run build` pass.
@@ -41,6 +43,7 @@ The implementation follows the reference's editor hierarchy: compact top toolbar
 10. P2 — Selected layers could not be removed with the keyboard. Resolved with `Delete` and `Backspace` shortcuts, guarded so form fields and editable text retain normal editing behavior.
 11. P1 — The default generated wave was visually fixed behind every design layer. Resolved by registering the WebGL output as the initial `Sine Wave` layer and using a transparent renderer so it can move above or below DOM layers without covering them with a black rectangle.
 12. P1 — The generated wave could not be removed through the layer model. Resolved by routing row-trash, inspector Delete, and keyboard deletion through the same generator-layer removal path.
+13. P1 — Toolbar panel icons did not collapse the desktop side panels. Resolved with independent desktop grid-column toggles, visible pressed states, and preserved mobile drawer behavior.
 
 ## Required fidelity surfaces
 
@@ -57,6 +60,7 @@ The implementation follows the reference's editor hierarchy: compact top toolbar
 - Earlier P1: layer deletion was hidden below the fold. Fixed with an always-visible row action; post-fix browser evidence showed one delete button for one layer and zero rows after activation.
 - Earlier P2: keyboard deletion was unavailable. Fixed and verified for both layer deletion and text-input protection.
 - Earlier P1: the default wave was outside the layer stack. Fixed and verified through browser-visible ordering, row deletion, keyboard deletion, and a clean console.
+- Earlier P1: desktop side panels remained permanently visible. Fixed and verified for left-only, right-only, both-closed, both-open, and mobile drawer states with no console errors.
 - Post-fix evidence: browser-rendered desktop state with circle plus text, image-import interaction state, mobile 390 × 844 state, and clean console were inspected during this QA pass. The existing 1600 × 1000 screenshot remains the normalized shell-layout reference because the outer layout did not change.
 
 ## Final result

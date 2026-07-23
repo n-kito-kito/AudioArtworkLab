@@ -51,6 +51,7 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 ## Phase 4 — GUI
 
 - [x] 開閉可能な GUI 基盤を追加する
+- [x] 左右の編集パネルを個別に開閉する
 - [x] Audio パネルを作る
 - [x] Generator パネルを作る
 - [ ] Modifier パネルを作る
