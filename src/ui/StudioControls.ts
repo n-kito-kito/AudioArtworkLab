@@ -19,9 +19,10 @@ const EFFECT_MAX: Record<string, number> = {
   Glitch: 0.1,
   Warp: 0.1,
   'Scan Drift': 0.1,
+  'Pixel Stretch': 0.4,
 };
 
-const MODIFIER_NAMES = ['Warp', 'Repeat', 'Scan Drift'] as const;
+const MODIFIER_NAMES = ['Warp', 'Repeat', 'Scan Drift', 'Pixel Stretch'] as const;
 const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble', 'beat'];
 
 export class StudioControls {

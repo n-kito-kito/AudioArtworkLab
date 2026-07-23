@@ -73,7 +73,7 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 
 - [ ] Warp
 - [ ] Repeat
-- [ ] PixelStretch
+- [x] PixelStretch
 - [ ] GridReveal
 - [ ] ScanDrift
 
