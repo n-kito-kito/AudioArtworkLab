@@ -7,6 +7,7 @@ export const STUDIO_PRESET_VERSION = 1;
 export interface StudioPreset {
   version: number;
   savedAt: string;
+  compositionName?: string;
   sine: ReturnType<SineWaveBasic['sineWave']['getParameters']>;
   reaction: ReturnType<SineWaveBasic['sineWave']['getAudioReaction']>;
   generatorName?: string;
@@ -27,6 +28,7 @@ export function createStudioPreset(
   return {
     version: STUDIO_PRESET_VERSION,
     savedAt: new Date().toISOString(),
+    compositionName: composition.name,
     sine: composition.sineWave.getParameters(),
     reaction: composition.sineWave.getAudioReaction(),
     generatorName: composition.getSelectedGeneratorName(),

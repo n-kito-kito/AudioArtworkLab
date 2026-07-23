@@ -5,6 +5,7 @@ import type { AudioSource, Effect } from '../effects/Effect';
 import type { AudioReactionParameters, SineWaveParameters } from '../generators/SineWave';
 import type { StudioShell } from './StudioShell';
 import type { LayerEditor } from './LayerEditor';
+import type { CompositionDefinition } from '../compositions/catalog';
 import {
   applyStudioPreset,
   createStudioPreset,
@@ -37,10 +38,12 @@ const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble',
 
 export class StudioControls {
   private readonly shell: StudioShell;
-  private readonly composition: SineWaveBasic;
+  private composition: SineWaveBasic;
   private readonly audioEngine: FileAudioEngine;
   private readonly app: App;
   private readonly layerEditor: LayerEditor;
+  private readonly compositionDefinitions: CompositionDefinition[];
+  private readonly onCompositionChange: ((name: string) => SineWaveBasic) | null;
   private readonly exportArtwork: () => void;
   private readonly presetInput = document.createElement('input');
   private readonly toolbarActions = document.createElement('div');
@@ -59,12 +62,16 @@ export class StudioControls {
     app: App,
     layerEditor: LayerEditor,
     exportArtwork?: () => void,
+    compositionDefinitions: CompositionDefinition[] = [],
+    onCompositionChange?: (name: string) => SineWaveBasic,
   ) {
     this.shell = shell;
     this.composition = composition;
     this.audioEngine = audioEngine;
     this.app = app;
     this.layerEditor = layerEditor;
+    this.compositionDefinitions = compositionDefinitions;
+    this.onCompositionChange = onCompositionChange ?? null;
     this.exportArtwork = exportArtwork ?? (() => this.app.exportPng());
     this.selectedEffect = composition.getEffects()[0]!;
     this.buildToolbar();
@@ -164,6 +171,16 @@ export class StudioControls {
     this.shell.leftPanel
       .querySelectorAll('.visual-section:not(.layer-panel)')
       .forEach((element) => element.remove());
+    const composition = this.section('COMPOSITION', 'ph-circles-three-plus');
+    composition.append(
+      this.selectControl(
+        'Artwork',
+        this.compositionDefinitions.map((definition) => definition.name),
+        this.composition.name,
+        (value) => this.switchComposition(value),
+      ),
+    );
+
     const motion = this.section('MOTION', 'ph-wave-sine');
     const sine = this.composition.sineWave.getParameters();
     motion.append(
@@ -229,7 +246,7 @@ export class StudioControls {
         this.setReaction('frequencyMax', value),
       ),
     );
-    this.shell.leftPanel.prepend(motion);
+    this.shell.leftPanel.prepend(composition, motion);
     this.shell.leftPanel.append(generator, modifiers, reaction, range);
   }
 
@@ -669,7 +686,19 @@ export class StudioControls {
   };
 
   private applyPreset(preset: StudioPreset): void {
+    if (preset.compositionName && preset.compositionName !== this.composition.name) {
+      this.switchComposition(preset.compositionName);
+    }
     applyStudioPreset(preset, this.composition, this.layerEditor);
+    this.selectedEffect = this.composition.getEffects()[0]!;
+    this.buildLeftPanel();
+    this.buildInspector();
+    this.buildChain();
+  }
+
+  private switchComposition(name: string): void {
+    if (name === this.composition.name || !this.onCompositionChange) return;
+    this.composition = this.onCompositionChange(name);
     this.selectedEffect = this.composition.getEffects()[0]!;
     this.buildLeftPanel();
     this.buildInspector();

@@ -1,7 +1,7 @@
 import './style.css';
 import { FileAudioEngine } from './audio/FileAudioEngine';
 import { App } from './core/App';
-import { SineWaveBasic } from './compositions/SineWaveBasic';
+import { COMPOSITIONS, createComposition } from './compositions/catalog';
 import { AudioControls } from './ui/AudioControls';
 import { StudioControls } from './ui/StudioControls';
 import { StudioShell } from './ui/StudioShell';
@@ -14,13 +14,19 @@ if (!container) {
 }
 
 const audioEngine = new FileAudioEngine();
-const composition = new SineWaveBasic();
+let composition = createComposition('SineWaveBasic');
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 const audioControls = new AudioControls(shell.leftPanel, audioEngine);
 const layerEditor = new LayerEditor(shell, audioEngine);
 const studioControls = new StudioControls(shell, composition, audioEngine, app, layerEditor, () =>
   layerEditor.exportPng(),
+  COMPOSITIONS,
+  (name) => {
+    composition = createComposition(name);
+    app.setComposition(composition);
+    return composition;
+  },
 );
 let disposed = false;
 

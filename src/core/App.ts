@@ -12,7 +12,7 @@ export class App {
   private readonly renderer: Renderer;
   private readonly scene: Scene;
   private readonly camera: Camera;
-  private readonly composition: Composition;
+  private composition: Composition;
   private readonly audioEngine: AudioEngine;
   private readonly resizeObserver: ResizeObserver;
   private loop: AnimationLoop | null = null;
@@ -32,15 +32,7 @@ export class App {
       audioEngine: this.audioEngine,
     });
 
-    if (this.composition.animated) {
-      this.loop = new AnimationLoop(
-        (elapsed) => this.composition.update(elapsed),
-        () => this.composition.render(),
-      );
-      this.loop.start();
-    } else {
-      this.composition.render();
-    }
+    this.startComposition();
 
     this.resizeObserver = new ResizeObserver(this.onResize);
     this.resizeObserver.observe(container);
@@ -50,6 +42,33 @@ export class App {
   exportPng(): void {
     this.composition.render();
     this.renderer.exportPng(`audio-artwork-${Date.now()}.png`);
+  }
+
+  setComposition(composition: Composition): void {
+    this.loop?.stop();
+    this.loop = null;
+    this.composition.dispose();
+    this.composition = composition;
+    this.composition.setup({
+      scene: this.scene.three,
+      camera: this.camera.three,
+      renderer: this.renderer.three,
+      audioEngine: this.audioEngine,
+    });
+    this.composition.resize(this.canvas.width, this.canvas.height);
+    this.startComposition();
+  }
+
+  private startComposition(): void {
+    if (!this.composition.animated) {
+      this.composition.render();
+      return;
+    }
+    this.loop = new AnimationLoop(
+      (elapsed) => this.composition.update(elapsed),
+      () => this.composition.render(),
+    );
+    this.loop.start();
   }
 
   private onResize = (): void => {

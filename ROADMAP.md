@@ -102,12 +102,12 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 
 ## Phase 7 — Composition
 
-- [ ] ReactiveSineWave
-- [ ] ScanDriftWave
-- [ ] NeonGrid
-- [ ] MosaicField
-- [ ] GlitchSpectrogram
-- [ ] 実行中の Composition 切り替え
+- [x] ReactiveSineWave
+- [x] ScanDriftWave
+- [x] NeonGrid
+- [x] MosaicField
+- [x] GlitchSpectrogram
+- [x] 実行中の Composition 切り替え
 
 ## Phase 8 — 保存と出力
 
