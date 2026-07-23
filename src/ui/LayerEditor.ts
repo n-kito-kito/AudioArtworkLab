@@ -103,7 +103,7 @@ export class LayerEditor {
     this.buildPanel();
     this.surface.append(this.selectionOutline);
     this.shell.canvasHost.append(this.surface);
-    this.registerDefaultGenerator();
+    this.app.setGeneratorLayerVisible(false);
     this.shell.leftBottom.append(this.section);
     this.bindDrag();
     this.fileInput.addEventListener('change', this.onFile);
@@ -113,6 +113,10 @@ export class LayerEditor {
   }
 
   private registerDefaultGenerator(): void {
+    if (this.layers.some((layer) => layer.kind === 'generator')) {
+      this.app.setGeneratorLayerVisible(true);
+      return;
+    }
     const canvas = this.shell.canvasHost.querySelector('canvas');
     if (!canvas) return;
     canvas.style.display = '';
@@ -137,6 +141,25 @@ export class LayerEditor {
     this.layers.push(layer);
     this.syncStack();
     this.renderList();
+  }
+
+  ensureGeneratorLayer(): void {
+    this.registerDefaultGenerator();
+    this.compositeRefreshPending = true;
+  }
+
+  clearGeneratorLayer(): void {
+    const generator = this.layers.find((layer) => layer.kind === 'generator');
+    if (generator) {
+      this.layers.splice(this.layers.indexOf(generator), 1);
+      this.selection.delete(generator);
+      if (this.selected === generator) this.selected = null;
+    }
+    this.app.setGeneratorLayerVisible(false);
+    this.compositeRefreshPending = true;
+    this.syncStack();
+    this.renderList();
+    this.updateSelectionOutline();
   }
 
   private buildPanel(): void {

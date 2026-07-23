@@ -29,6 +29,10 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
   below.
 - Added a pointer-draggable and keyboard-accessible divider for resizing the two left-panel areas.
 - Converted panel headings and control copy from all caps to sentence case.
+- Removed Composition from the left panel and placed Artwork at the top of the Effects inspector.
+- Added a None artwork state so a fresh workspace starts as an empty black canvas.
+- Made layer canvas texture changes request an immediate WebGL render for live transform, style,
+  add, delete, and reorder feedback.
 - Replaced the fluorescent green UI accent with a Figma-like blue selection color.
 - Kept Export PNG as the visually prominent blue primary action.
 - Tightened toolbar, panel, row, button, label, and control spacing to match a dense desktop editor.
@@ -45,15 +49,15 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
 
 - [P1] Visual comparison is unavailable.
   - Evidence: no browser is connected to the execution environment.
-  - Impact: exact toolbar placement, split-panel overflow, drag behavior, and viewport fidelity
-    cannot be confirmed.
+  - Impact: the empty canvas state, Artwork placement, and live layer feedback cannot be confirmed
+    in a real browser.
   - Fix: capture the deployed application at the reference viewport and compare it with the supplied
     Figma screenshot.
 
 ## Primary interactions tested
 
 - Not browser-tested because no browser is connected.
-- TypeScript, ESLint, Vite production build, and local HTTP 200 checks passed.
+- TypeScript, ESLint, and Vite production build checks passed.
 - Browser console errors could not be checked.
 
 ## Comparison history

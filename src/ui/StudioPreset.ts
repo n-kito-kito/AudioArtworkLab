@@ -8,6 +8,7 @@ export interface StudioPreset {
   version: number;
   savedAt: string;
   compositionName?: string;
+  artworkName?: string;
   sine: ReturnType<SineWaveBasic['sineWave']['getParameters']>;
   reaction: ReturnType<SineWaveBasic['sineWave']['getAudioReaction']>;
   generatorName?: string;
@@ -24,11 +25,13 @@ export interface StudioPreset {
 export function createStudioPreset(
   composition: SineWaveBasic,
   layerEditor: LayerEditor,
+  artworkName?: string,
 ): StudioPreset {
   return {
     version: STUDIO_PRESET_VERSION,
     savedAt: new Date().toISOString(),
     compositionName: composition.name,
+    artworkName,
     sine: composition.sineWave.getParameters(),
     reaction: composition.sineWave.getAudioReaction(),
     generatorName: composition.getSelectedGeneratorName(),

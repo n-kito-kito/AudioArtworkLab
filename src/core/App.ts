@@ -80,16 +80,24 @@ export class App {
   setDesignLayerCanvases(canvases: [HTMLCanvasElement, HTMLCanvasElement]): void {
     this.designLayerCanvases = canvases;
     this.composition.setDesignLayerCanvases(canvases);
+    this.renderNow();
   }
 
   updateDesignLayerCanvases(): void {
     this.composition.updateDesignLayerCanvases();
+    this.renderNow();
   }
 
   setGeneratorLayerVisible(visible: boolean): void {
     this.generatorLayerVisible = visible;
     this.composition.setGeneratorsVisible(visible);
     this.renderer.three.domElement.style.display = '';
+    this.renderNow();
+  }
+
+  renderNow(): void {
+    if (this.contextLost) return;
+    this.composition.render();
   }
 
   private startComposition(): void {

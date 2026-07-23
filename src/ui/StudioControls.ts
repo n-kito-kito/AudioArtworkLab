@@ -45,6 +45,7 @@ export class StudioControls {
   private leftPanelButton: HTMLButtonElement | null = null;
   private rightPanelButton: HTMLButtonElement | null = null;
   private selectedEffect: Effect;
+  private artworkSelection = 'None';
   private seed = Math.floor(Math.random() * 99999);
   private autosaveTimer = 0;
   private static readonly PRESET_KEY = 'audio-artwork-lab:studio-preset';
@@ -177,16 +178,6 @@ export class StudioControls {
     this.shell.leftTop
       .querySelectorAll('.visual-section:not(.layer-panel):not(.quality-panel)')
       .forEach((element) => element.remove());
-    const composition = this.section('Composition', 'ph-circles-three-plus');
-    composition.append(
-      this.selectControl(
-        'Artwork',
-        this.compositionDefinitions.map((definition) => definition.name),
-        this.composition.name,
-        (value) => this.switchComposition(value),
-      ),
-    );
-
     const motion = this.section('Motion', 'ph-wave-sine');
     const sine = this.composition.sineWave.getParameters();
     motion.append(
@@ -247,12 +238,22 @@ export class StudioControls {
         this.setReaction('frequencyMax', value),
       ),
     );
-    this.shell.leftTop.prepend(composition, motion);
+    this.shell.leftTop.prepend(motion);
     this.shell.leftTop.append(generator, reaction, range);
   }
 
   private buildInspector(): void {
     this.shell.effectsPanel.replaceChildren();
+    const artwork = this.section('Artwork', 'ph-sparkle');
+    artwork.classList.add('artwork-section');
+    artwork.append(
+      this.selectControl(
+        'Look',
+        ['None', ...this.compositionDefinitions.map((definition) => definition.name)],
+        this.artworkSelection,
+        (value) => this.switchArtwork(value),
+      ),
+    );
     const header = document.createElement('div');
     header.className = 'inspector-header';
     const eyebrow = document.createElement('span');
@@ -321,7 +322,7 @@ export class StudioControls {
       lookGrid.append(button);
     }
     looks.append(lookGrid);
-    this.shell.effectsPanel.append(header, stack, controls, order, looks);
+    this.shell.effectsPanel.append(artwork, header, stack, controls, order, looks);
   }
 
   private buildChain(): void {
@@ -567,7 +568,9 @@ export class StudioControls {
     try {
       localStorage.setItem(
         StudioControls.PRESET_KEY,
-        JSON.stringify(createStudioPreset(this.composition, this.layerEditor)),
+        JSON.stringify(
+          createStudioPreset(this.composition, this.layerEditor, this.artworkSelection),
+        ),
       );
       if (notify) this.showNotice('Preset saved');
     } catch {
@@ -586,7 +589,11 @@ export class StudioControls {
   }
 
   private exportPreset(): void {
-    const preset = createStudioPreset(this.composition, this.layerEditor);
+    const preset = createStudioPreset(
+      this.composition,
+      this.layerEditor,
+      this.artworkSelection,
+    );
     const link = document.createElement('a');
     link.download = `audio-artwork-preset-${Date.now()}.json`;
     link.href = URL.createObjectURL(
@@ -614,6 +621,11 @@ export class StudioControls {
     if (preset.compositionName && preset.compositionName !== this.composition.name) {
       this.switchComposition(preset.compositionName);
     }
+    this.artworkSelection =
+      preset.artworkName ??
+      (preset.layers.layers.some((layer) => layer.kind === 'generator')
+        ? (preset.compositionName ?? this.composition.name)
+        : 'None');
     applyStudioPreset(preset, this.composition, this.layerEditor);
     this.selectedEffect = this.composition.getEffects()[0]!;
     this.buildLeftPanel();
@@ -622,12 +634,25 @@ export class StudioControls {
   }
 
   private switchComposition(name: string): void {
-    if (name === this.composition.name || !this.onCompositionChange) return;
+    if (!this.onCompositionChange) return;
     this.composition = this.onCompositionChange(name);
     this.selectedEffect = this.composition.getEffects()[0]!;
     this.buildLeftPanel();
     this.buildInspector();
     this.buildChain();
+  }
+
+  private switchArtwork(name: string): void {
+    this.artworkSelection = name;
+    if (name === 'None') {
+      this.layerEditor.clearGeneratorLayer();
+      for (const effect of this.composition.getEffects()) effect.enabled = false;
+      this.buildInspector();
+      this.buildChain();
+      return;
+    }
+    this.layerEditor.ensureGeneratorLayer();
+    this.switchComposition(name);
   }
 
   private showNotice(message: string, error = false): void {
