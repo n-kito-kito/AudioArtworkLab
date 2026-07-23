@@ -124,3 +124,21 @@ Generative Art の **表現研究ノート**。
 ---
 
 <!-- 新しい研究はここに追加 -->
+
+### 外部ストリーミング音源 — Spotify / Apple Music
+
+#### 調査結果（2026-07-23）
+
+- Spotify Web Playback SDK はブラウザ内再生と再生状態・メタデータ取得に対応するが、Premium アカウントと OAuth が必要。
+- Spotify の公式ポリシーは、Spotify 音源とビジュアルの同期、および音源の改変を禁止している。このプロジェクトの音声解析・映像同期用途には適合しないため、Spotify 音源の直接解析は実装しない。
+- Apple Music は MusicKit on the Web でカタログ検索とブラウザ再生に対応するが、Developer Token、Media ID、ユーザー認証が必要。
+- Apple の公開 MusicKit API は再生制御とメタデータを提供する一方、Web Audio API に解析用 PCM を渡す公式 API は確認できない。DRM 音源の直接 FFT 解析は実装対象外とする。
+- 外部サービス連携は、将来、利用規約に適合するメタデータ（曲名、再生位置、BPM 等）のみをパラメーターへ利用する方式を再検討する。
+
+#### 公式資料
+
+- https://developer.spotify.com/documentation/web-playback-sdk/
+- https://developer.spotify.com/documentation/web-playback-sdk/reference
+- https://developer.spotify.com/compliance-tips
+- https://developer.apple.com/musickit/
+- https://developer.apple.com/documentation/musickit
