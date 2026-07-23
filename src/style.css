@@ -596,6 +596,20 @@ select:focus-visible {
   pointer-events: auto;
 }
 
+.layer-surface.is-composited .design-layer {
+  opacity: 0 !important;
+}
+
+.layer-selection-outline {
+  position: absolute;
+  z-index: 9999;
+  border: 1px solid var(--accent);
+  outline: 1px solid rgb(0 0 0 / 45%);
+  outline-offset: 2px;
+  pointer-events: none;
+  transform-origin: center;
+}
+
 .design-layer {
   position: absolute;
   display: block;

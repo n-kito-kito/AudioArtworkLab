@@ -389,7 +389,7 @@ export class StudioControls {
     this.chainTrack.className = 'effect-chain__track';
     const label = document.createElement('span');
     label.className = 'effect-chain__label';
-    label.textContent = 'CHAIN';
+    label.textContent = 'EFFECT';
     const source = document.createElement('button');
     source.type = 'button';
     source.className = 'chain-node chain-node--source';

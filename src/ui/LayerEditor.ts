@@ -1,4 +1,5 @@
 import type { AudioEngine, AudioParameters } from '../audio/AudioEngine';
+import type { App } from '../core/App';
 import type { StudioShell } from './StudioShell';
 
 type LayerKind =
@@ -68,7 +69,11 @@ export interface LayerEditorSnapshot {
 export class LayerEditor {
   private readonly shell: StudioShell;
   private readonly audioEngine: AudioEngine;
+  private readonly app: App;
   private readonly surface = document.createElement('div');
+  private readonly backCanvas = document.createElement('canvas');
+  private readonly frontCanvas = document.createElement('canvas');
+  private readonly selectionOutline = document.createElement('div');
   private readonly section = document.createElement('section');
   private readonly list = document.createElement('div');
   private readonly fileInput = document.createElement('input');
@@ -80,17 +85,21 @@ export class LayerEditor {
   private drag: { layer: DesignLayer; startX: number; startY: number; x: number; y: number } | null =
     null;
 
-  constructor(shell: StudioShell, audioEngine: AudioEngine) {
+  constructor(shell: StudioShell, audioEngine: AudioEngine, app: App) {
     this.shell = shell;
     this.audioEngine = audioEngine;
-    this.surface.className = 'layer-surface';
+    this.app = app;
+    this.surface.className = 'layer-surface is-composited';
+    this.selectionOutline.className = 'layer-selection-outline';
     this.section.className = 'panel-section visual-section layer-panel';
     this.list.className = 'layer-list';
     this.fileInput.type = 'file';
     this.fileInput.accept = 'image/*';
     this.fileInput.hidden = true;
     this.buildPanel();
+    this.surface.append(this.selectionOutline);
     this.shell.canvasHost.append(this.surface);
+    this.app.setDesignLayerCanvases([this.backCanvas, this.frontCanvas]);
     this.registerDefaultGenerator();
     this.shell.leftPanel.prepend(this.section);
     this.bindDrag();
@@ -244,6 +253,7 @@ export class LayerEditor {
     this.layers.forEach((item) =>
       item.element.classList.toggle('is-selected', this.selection.has(item)),
     );
+    this.updateSelectionOutline();
     this.renderList();
     this.buildInspector(layer);
     if (window.innerWidth <= 820) this.shell.root.classList.add('right-open');
@@ -253,6 +263,7 @@ export class LayerEditor {
     this.selected = null;
     this.selection.clear();
     this.layers.forEach((item) => item.element.classList.remove('is-selected'));
+    this.updateSelectionOutline();
     this.renderList();
   };
 
@@ -480,6 +491,7 @@ export class LayerEditor {
     this.syncStack();
     this.selected = null; this.renderList(); this.shell.root.dispatchEvent(new CustomEvent('studio:restore-effect'));
     this.selection.delete(layer);
+    this.updateSelectionOutline();
   }
 
   private syncStack(): void {
@@ -541,6 +553,7 @@ export class LayerEditor {
     }
     this.selected = null;
     this.selection.clear();
+    this.updateSelectionOutline();
     this.syncStack();
     this.renderList();
     this.shell.root.dispatchEvent(new CustomEvent('studio:restore-effect'));
@@ -598,6 +611,7 @@ export class LayerEditor {
   private update = (): void => {
     const audio = this.audioEngine.getParameters();
     this.layers.forEach((layer) => this.applyLayer(layer, this.audioValue(audio, layer.reactTo)));
+    this.renderComposite(audio);
     this.frame = requestAnimationFrame(this.update);
   };
 
@@ -607,8 +621,7 @@ export class LayerEditor {
 
   private applyLayer(layer: DesignLayer, audioValue: number): void {
     if (layer.kind === 'generator') return;
-    const pulse = 1 + audioValue * layer.reactAmount;
-    const wobble = Math.sin(performance.now() * 0.004 + this.layers.indexOf(layer)) * audioValue * layer.reactAmount * 7;
+    const { pulse, wobble } = this.getLayerMotion(layer, audioValue);
     const element = layer.element;
     element.style.left = `${layer.x}%`; element.style.top = `${layer.y}%`; element.style.width = `${layer.baseWidth}%`;
     element.style.opacity = String(layer.opacity); element.style.color = layer.color;
@@ -626,6 +639,7 @@ export class LayerEditor {
       path?.setAttribute('d', layer.path ?? '');
       path?.setAttribute('stroke', layer.color);
     }
+    if (this.selected === layer) this.updateSelectionOutline(pulse, wobble);
   }
 
   exportPng(): void {
@@ -639,24 +653,27 @@ export class LayerEditor {
     if (!context) return;
     context.fillStyle = '#000000';
     context.fillRect(0, 0, size, size);
-    for (const layer of this.layers) {
-      if (layer.kind === 'generator') context.drawImage(source, 0, 0, size, size);
-      else this.drawLayer(context, layer, size);
-    }
+    context.drawImage(source, 0, 0, size, size);
     const link = document.createElement('a');
     link.download = `audio-artwork-${Date.now()}.png`;
     link.href = output.toDataURL('image/png');
     link.click();
   }
 
-  private drawLayer(context: CanvasRenderingContext2D, layer: DesignLayer, size: number): void {
+  private drawLayer(
+    context: CanvasRenderingContext2D,
+    layer: DesignLayer,
+    size: number,
+    audioValue: number,
+  ): void {
     const x = (layer.x / 100) * size;
     const y = (layer.y / 100) * size;
     const width = (layer.baseWidth / 100) * size;
     context.save();
     context.translate(x, y);
-    context.rotate((layer.rotation * Math.PI) / 180);
-    context.scale(layer.scale, layer.scale);
+    const { pulse, wobble } = this.getLayerMotion(layer, audioValue);
+    context.rotate(((layer.rotation + wobble) * Math.PI) / 180);
+    context.scale(layer.scale * pulse, layer.scale * pulse);
     context.globalAlpha = layer.opacity;
     context.filter = `blur(${layer.blur}px) contrast(${layer.contrast})`;
     if (layer.kind === 'image' && layer.element instanceof HTMLImageElement) {
@@ -727,6 +744,64 @@ export class LayerEditor {
       context.stroke(new Path2D(layer.path));
     }
     context.restore();
+  }
+
+  private renderComposite(audio: AudioParameters): void {
+    const size = Math.min(
+      Math.max(Math.round(this.shell.canvasHost.getBoundingClientRect().width * devicePixelRatio), 1),
+      1600,
+    );
+    const canvases = [this.backCanvas, this.frontCanvas];
+    const contexts = canvases.map((canvas) => {
+      if (canvas.width !== size || canvas.height !== size) {
+        canvas.width = size;
+        canvas.height = size;
+      }
+      const context = canvas.getContext('2d');
+      context?.clearRect(0, 0, size, size);
+      return context;
+    });
+    const generatorIndex = this.layers.findIndex((layer) => layer.kind === 'generator');
+    this.layers.forEach((layer, index) => {
+      if (layer.kind === 'generator') return;
+      const context = contexts[index < generatorIndex ? 0 : 1];
+      if (context) {
+        this.drawLayer(context, layer, size, this.audioValue(audio, layer.reactTo));
+      }
+    });
+    this.app.updateDesignLayerCanvases();
+  }
+
+  private getLayerMotion(
+    layer: DesignLayer,
+    audioValue: number,
+  ): { pulse: number; wobble: number } {
+    return {
+      pulse: 1 + audioValue * layer.reactAmount,
+      wobble:
+        Math.sin(performance.now() * 0.004 + this.layers.indexOf(layer)) *
+        audioValue *
+        layer.reactAmount *
+        7,
+    };
+  }
+
+  private updateSelectionOutline(pulse = 1, wobble = 0): void {
+    const layer = this.selected;
+    this.selectionOutline.hidden = !layer || layer.kind === 'generator';
+    if (!layer || layer.kind === 'generator') return;
+    this.selectionOutline.style.left = `${layer.x}%`;
+    this.selectionOutline.style.top = `${layer.y}%`;
+    this.selectionOutline.style.width = `${layer.baseWidth}%`;
+    this.selectionOutline.style.height =
+      layer.kind === 'image'
+        ? '100%'
+        : layer.kind === 'text'
+          ? '12%'
+          : layer.kind === 'wave' || layer.kind === 'line'
+            ? '13%'
+            : `${layer.baseWidth}%`;
+    this.selectionOutline.style.transform = `translate(-50%, -50%) rotate(${layer.rotation + wobble}deg) scale(${layer.scale * pulse})`;
   }
 
   private startDrawing(): void {
