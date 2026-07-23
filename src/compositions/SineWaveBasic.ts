@@ -1,6 +1,11 @@
 import { BaseComposition } from './Composition';
 import { SineWave } from '../generators/SineWave';
 import { Waveform } from '../generators/Waveform';
+import { Grid } from '../generators/Grid';
+import { Bitmap } from '../generators/Bitmap';
+import { Mosaic } from '../generators/Mosaic';
+import { Lissajous } from '../generators/Lissajous';
+import type { VisualGenerator } from '../generators/Generator';
 import { GrainEffect } from '../effects/GrainEffect';
 import { BlurEffect } from '../effects/BlurEffect';
 import { PaletteMapEffect } from '../effects/PaletteMapEffect';
@@ -19,10 +24,22 @@ export class SineWaveBasic extends BaseComposition {
 
   readonly sineWave = new SineWave();
   readonly waveform = new Waveform();
+  readonly grid = new Grid();
+  readonly bitmap = new Bitmap();
+  readonly mosaic = new Mosaic();
+  readonly lissajous = new Lissajous();
+  readonly visualGenerators: VisualGenerator[] = [
+    this.sineWave,
+    this.waveform,
+    this.grid,
+    this.bitmap,
+    this.mosaic,
+    this.lissajous,
+  ];
 
   constructor() {
     super();
-    this.generators = [this.sineWave, this.waveform];
+    this.generators = this.visualGenerators;
     this.effects = [
       new GrainEffect(),
       new BlurEffect(),
@@ -37,5 +54,15 @@ export class SineWaveBasic extends BaseComposition {
       new HalftoneEffect(),
     ];
     this.effects[0]!.enabled = true;
+  }
+
+  selectGenerator(name: string): void {
+    for (const generator of this.visualGenerators) {
+      generator.setVisible(generator.name === name);
+    }
+  }
+
+  getSelectedGeneratorName(): string {
+    return this.visualGenerators.find((generator) => generator.isVisible())?.name ?? 'Sine';
   }
 }

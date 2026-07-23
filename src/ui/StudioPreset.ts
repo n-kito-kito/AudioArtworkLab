@@ -9,6 +9,7 @@ export interface StudioPreset {
   savedAt: string;
   sine: ReturnType<SineWaveBasic['sineWave']['getParameters']>;
   reaction: ReturnType<SineWaveBasic['sineWave']['getAudioReaction']>;
+  generatorName?: string;
   waveformVisible: boolean;
   effects: Array<{
     name: string;
@@ -28,6 +29,7 @@ export function createStudioPreset(
     savedAt: new Date().toISOString(),
     sine: composition.sineWave.getParameters(),
     reaction: composition.sineWave.getAudioReaction(),
+    generatorName: composition.getSelectedGeneratorName(),
     waveformVisible: composition.waveform.isVisible(),
     effects: composition.getEffects().map((effect) => ({
       name: effect.name,
@@ -49,7 +51,9 @@ export function applyStudioPreset(
   }
   composition.sineWave.setParameters(preset.sine);
   composition.sineWave.setAudioReaction(preset.reaction);
-  composition.waveform.setVisible(preset.waveformVisible);
+  composition.selectGenerator(
+    preset.generatorName ?? (preset.waveformVisible ? 'Waveform' : 'Sine'),
+  );
   composition.setEffectOrder(preset.effects.map((effect) => effect.name));
   for (const saved of preset.effects) {
     const effect = composition.getEffects().find((candidate) => candidate.name === saved.name);

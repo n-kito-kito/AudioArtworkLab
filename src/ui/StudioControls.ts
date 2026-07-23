@@ -170,8 +170,11 @@ export class StudioControls {
 
     const generator = this.section('GENERATOR', 'ph-bezier-curve');
     generator.append(
-      this.segmented('Source', ['Sine', 'Waveform'], 'Sine', (value) =>
-        this.composition.waveform.setVisible(value === 'Waveform'),
+      this.segmented(
+        'Source',
+        this.composition.visualGenerators.map((item) => item.name),
+        this.composition.getSelectedGeneratorName(),
+        (value) => this.composition.selectGenerator(value),
       ),
       this.range('Amplitude', sine.amplitude, 0.02, 1, 0.01, (value) =>
         this.setSine('amplitude', value),

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Generator, GeneratorContext } from './Generator';
+import type { GeneratorContext, VisualGenerator } from './Generator';
 
 const SEGMENT_COUNT = 256;
 const X_MIN = -1;
@@ -45,7 +45,8 @@ const DEFAULT_REACTION: AudioReactionParameters = {
   smoothing: 0.82,
 };
 
-export class SineWave implements Generator {
+export class SineWave implements VisualGenerator {
+  readonly name = 'Sine';
   private line: THREE.Line | null = null;
   private material: THREE.LineBasicMaterial | null = null;
   private positions: Float32Array | null = null;
@@ -55,6 +56,16 @@ export class SineWave implements Generator {
   private reaction: AudioReactionParameters = { ...DEFAULT_REACTION };
   private smoothedAmplitude = this.parameters.amplitude;
   private smoothedFrequency = this.parameters.frequency;
+  private visible = true;
+
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (this.line) this.line.visible = visible;
+  }
+
+  isVisible(): boolean {
+    return this.visible;
+  }
 
   setParameters(parameters: Partial<SineWaveParameters>): void {
     this.parameters = { ...this.parameters, ...parameters };
@@ -90,6 +101,7 @@ export class SineWave implements Generator {
     });
 
     this.line = new THREE.Line(geometry, this.material);
+    this.line.visible = this.visible;
     scene.add(this.line);
   }
 

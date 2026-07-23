@@ -11,3 +11,9 @@ export interface Generator {
   update(elapsed: number): void;
   dispose(): void;
 }
+
+export interface VisualGenerator extends Generator {
+  readonly name: string;
+  setVisible(visible: boolean): void;
+  isVisible(): boolean;
+}

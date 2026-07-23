@@ -63,10 +63,10 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 ### Generator
 
 - [x] Waveform
-- [ ] Grid
-- [ ] Bitmap
-- [ ] Mosaic
-- [ ] Lissajous
+- [x] Grid
+- [x] Bitmap
+- [x] Mosaic
+- [x] Lissajous
 - [ ] ParticleField
 
 ### Modifier
