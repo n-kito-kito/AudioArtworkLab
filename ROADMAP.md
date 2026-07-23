@@ -67,7 +67,7 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 - [x] Bitmap
 - [x] Mosaic
 - [x] Lissajous
-- [ ] ParticleField
+- [x] ParticleField
 
 ### Modifier
 

@@ -5,6 +5,7 @@ import { Grid } from '../generators/Grid';
 import { Bitmap } from '../generators/Bitmap';
 import { Mosaic } from '../generators/Mosaic';
 import { Lissajous } from '../generators/Lissajous';
+import { ParticleField } from '../generators/ParticleField';
 import type { VisualGenerator } from '../generators/Generator';
 import { GrainEffect } from '../effects/GrainEffect';
 import { BlurEffect } from '../effects/BlurEffect';
@@ -30,6 +31,7 @@ export class SineWaveBasic extends BaseComposition {
   readonly bitmap = new Bitmap();
   readonly mosaic = new Mosaic();
   readonly lissajous = new Lissajous();
+  readonly particleField = new ParticleField();
   readonly visualGenerators: VisualGenerator[] = [
     this.sineWave,
     this.waveform,
@@ -37,6 +39,7 @@ export class SineWaveBasic extends BaseComposition {
     this.bitmap,
     this.mosaic,
     this.lissajous,
+    this.particleField,
   ];
 
   constructor() {
