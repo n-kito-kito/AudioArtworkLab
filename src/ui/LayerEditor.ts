@@ -24,6 +24,28 @@ interface DesignLayer {
   objectUrl?: string;
 }
 
+export interface LayerSnapshot {
+  kind: LayerKind;
+  name: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  opacity: number;
+  color: string;
+  blur: number;
+  contrast: number;
+  reactTo: ReactSource;
+  reactAmount: number;
+  baseWidth: number;
+  text?: string;
+  imageData?: string;
+}
+
+export interface LayerEditorSnapshot {
+  layers: LayerSnapshot[];
+}
+
 export class LayerEditor {
   private readonly shell: StudioShell;
   private readonly audioEngine: AudioEngine;
@@ -153,12 +175,22 @@ export class LayerEditor {
     this.renderList();
   }
 
-  private onFile = (): void => {
+  private onFile = async (): Promise<void> => {
     const file = this.fileInput.files?.[0];
     if (!file) return;
-    this.addLayer('image', URL.createObjectURL(file));
+    const dataUrl = await this.readAsDataUrl(file);
+    this.addLayer('image', dataUrl);
     this.fileInput.value = '';
   };
+
+  private readAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener('load', () => resolve(String(reader.result)));
+      reader.addEventListener('error', () => reject(reader.error ?? new Error('Image read failed')));
+      reader.readAsDataURL(file);
+    });
+  }
 
   private select(layer: DesignLayer): void {
     this.selected = layer;
@@ -349,7 +381,7 @@ export class LayerEditor {
     const index = this.layers.indexOf(layer); if (index < 0) return;
     if (layer.kind === 'generator') layer.element.style.display = 'none';
     else layer.element.remove();
-    if (layer.objectUrl) URL.revokeObjectURL(layer.objectUrl);
+    if (layer.objectUrl?.startsWith('blob:')) URL.revokeObjectURL(layer.objectUrl);
     this.layers.splice(index, 1);
     this.syncStack();
     this.selected = null; this.renderList(); this.shell.root.dispatchEvent(new CustomEvent('studio:restore-effect'));
@@ -359,6 +391,58 @@ export class LayerEditor {
     this.layers.forEach((layer, index) => {
       layer.element.style.zIndex = String(index + 1);
     });
+  }
+
+  getSnapshot(): LayerEditorSnapshot {
+    return {
+      layers: this.layers.map((layer) => ({
+        kind: layer.kind,
+        name: layer.name,
+        x: layer.x,
+        y: layer.y,
+        scale: layer.scale,
+        rotation: layer.rotation,
+        opacity: layer.opacity,
+        color: layer.color,
+        blur: layer.blur,
+        contrast: layer.contrast,
+        reactTo: layer.reactTo,
+        reactAmount: layer.reactAmount,
+        baseWidth: layer.baseWidth,
+        text: layer.text,
+        imageData: layer.kind === 'image' ? layer.objectUrl : undefined,
+      })),
+    };
+  }
+
+  restoreSnapshot(snapshot: LayerEditorSnapshot): void {
+    for (const layer of [...this.layers]) {
+      if (layer.kind !== 'generator') layer.element.remove();
+      if (layer.objectUrl?.startsWith('blob:')) URL.revokeObjectURL(layer.objectUrl);
+    }
+    this.layers.splice(0);
+    const generator = snapshot.layers.find((layer) => layer.kind === 'generator');
+    if (generator) {
+      this.registerDefaultGenerator();
+      Object.assign(this.layers[0]!, generator);
+      this.layers[0]!.element.style.display = '';
+    } else {
+      const canvas = this.shell.canvasHost.querySelector('canvas');
+      if (canvas) canvas.style.display = 'none';
+    }
+    for (const saved of snapshot.layers) {
+      if (saved.kind === 'generator') continue;
+      if (saved.kind === 'image' && !saved.imageData) continue;
+      this.addLayer(saved.kind, saved.imageData);
+      const layer = this.layers.at(-1)!;
+      Object.assign(layer, saved, { objectUrl: saved.imageData });
+      if (layer.kind === 'text') layer.element.textContent = layer.text ?? '';
+      this.applyLayer(layer, 0);
+    }
+    this.selected = null;
+    this.syncStack();
+    this.renderList();
+    this.shell.root.dispatchEvent(new CustomEvent('studio:restore-effect'));
   }
 
   private bindDrag(): void {
@@ -470,7 +554,9 @@ export class LayerEditor {
     cancelAnimationFrame(this.frame); this.fileInput.removeEventListener('change', this.onFile);
     this.shell.root.removeEventListener('studio:effect-selected', this.clearSelection);
     document.removeEventListener('keydown', this.onKeyDown);
-    this.layers.forEach((layer) => { if (layer.objectUrl) URL.revokeObjectURL(layer.objectUrl); });
+    this.layers.forEach((layer) => {
+      if (layer.objectUrl?.startsWith('blob:')) URL.revokeObjectURL(layer.objectUrl);
+    });
     this.section.remove(); this.surface.remove();
   }
 }

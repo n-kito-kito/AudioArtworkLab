@@ -32,6 +32,16 @@ export class EffectPipeline {
     this.rebuild();
   }
 
+  setOrder(names: string[]): void {
+    const rank = new Map(names.map((name, index) => [name, index]));
+    this.effects.sort(
+      (left, right) =>
+        (rank.get(left.name) ?? Number.MAX_SAFE_INTEGER) -
+        (rank.get(right.name) ?? Number.MAX_SAFE_INTEGER),
+    );
+    this.rebuild();
+  }
+
   render(): void {
     this.composer.render();
   }

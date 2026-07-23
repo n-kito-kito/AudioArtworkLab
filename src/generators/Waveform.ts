@@ -14,6 +14,10 @@ export class Waveform implements Generator {
     if (this.line) this.line.visible = visible;
   }
 
+  isVisible(): boolean {
+    return this.visible;
+  }
+
   create({ scene, audioEngine }: GeneratorContext): void {
     this.audioEngine = audioEngine;
     this.positions = new Float32Array(POINT_COUNT * 3);

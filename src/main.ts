@@ -18,18 +18,17 @@ const composition = new SineWaveBasic();
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 const audioControls = new AudioControls(shell.leftPanel, audioEngine);
-let layerEditor: LayerEditor | null = null;
-const studioControls = new StudioControls(shell, composition, audioEngine, app, () =>
-  layerEditor ? layerEditor.exportPng() : app.exportPng(),
+const layerEditor = new LayerEditor(shell, audioEngine);
+const studioControls = new StudioControls(shell, composition, audioEngine, app, layerEditor, () =>
+  layerEditor.exportPng(),
 );
-layerEditor = new LayerEditor(shell, audioEngine);
 let disposed = false;
 
 const dispose = (): void => {
   if (disposed) return;
   disposed = true;
   audioControls.dispose();
-  layerEditor?.dispose();
+  layerEditor.dispose();
   studioControls.dispose();
   app.dispose();
   shell.dispose();

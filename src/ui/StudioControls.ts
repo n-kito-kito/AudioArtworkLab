@@ -4,6 +4,12 @@ import type { App } from '../core/App';
 import type { AudioSource, Effect } from '../effects/Effect';
 import type { AudioReactionParameters, SineWaveParameters } from '../generators/SineWave';
 import type { StudioShell } from './StudioShell';
+import type { LayerEditor } from './LayerEditor';
+import {
+  applyStudioPreset,
+  createStudioPreset,
+  type StudioPreset,
+} from './StudioPreset';
 
 type NumericKey<T> = { [K in keyof T]: T[K] extends number ? K : never }[keyof T];
 
@@ -20,25 +26,31 @@ export class StudioControls {
   private readonly composition: SineWaveBasic;
   private readonly audioEngine: FileAudioEngine;
   private readonly app: App;
+  private readonly layerEditor: LayerEditor;
   private readonly exportArtwork: () => void;
+  private readonly presetInput = document.createElement('input');
   private readonly toolbarActions = document.createElement('div');
   private readonly chainTrack = document.createElement('div');
   private leftPanelButton: HTMLButtonElement | null = null;
   private rightPanelButton: HTMLButtonElement | null = null;
   private selectedEffect: Effect;
   private seed = Math.floor(Math.random() * 99999);
+  private autosaveTimer = 0;
+  private static readonly PRESET_KEY = 'audio-artwork-lab:studio-preset';
 
   constructor(
     shell: StudioShell,
     composition: SineWaveBasic,
     audioEngine: FileAudioEngine,
     app: App,
+    layerEditor: LayerEditor,
     exportArtwork?: () => void,
   ) {
     this.shell = shell;
     this.composition = composition;
     this.audioEngine = audioEngine;
     this.app = app;
+    this.layerEditor = layerEditor;
     this.exportArtwork = exportArtwork ?? (() => this.app.exportPng());
     this.selectedEffect = composition.getEffects()[0]!;
     this.buildToolbar();
@@ -47,6 +59,13 @@ export class StudioControls {
     this.buildChain();
     this.shell.root.addEventListener('studio:restore-effect', this.restoreEffect);
     window.addEventListener('resize', this.updatePanelButtons);
+    this.presetInput.type = 'file';
+    this.presetInput.accept = 'application/json,.json';
+    this.presetInput.hidden = true;
+    this.presetInput.addEventListener('change', this.importPreset);
+    this.shell.root.append(this.presetInput);
+    this.restoreAutosave();
+    this.autosaveTimer = window.setInterval(() => this.saveAutosave(false), 1200);
   }
 
   dispose(): void {
@@ -54,7 +73,12 @@ export class StudioControls {
     this.chainTrack.remove();
     this.shell.root.removeEventListener('studio:restore-effect', this.restoreEffect);
     window.removeEventListener('resize', this.updatePanelButtons);
-    this.shell.leftPanel.querySelectorAll('.visual-section').forEach((element) => element.remove());
+    window.clearInterval(this.autosaveTimer);
+    this.presetInput.removeEventListener('change', this.importPreset);
+    this.presetInput.remove();
+    this.shell.leftPanel
+      .querySelectorAll('.visual-section:not(.layer-panel)')
+      .forEach((element) => element.remove());
     this.shell.rightPanel.replaceChildren();
   }
 
@@ -80,6 +104,9 @@ export class StudioControls {
       this.leftPanelButton,
       this.rightPanelButton,
       this.iconButton('ph-corners-out', 'Fullscreen', () => void this.toggleFullscreen()),
+      this.iconButton('ph-floppy-disk', 'Save preset', () => this.saveAutosave(true)),
+      this.iconButton('ph-download-simple', 'Export preset', () => this.exportPreset()),
+      this.iconButton('ph-upload-simple', 'Import preset', () => this.presetInput.click()),
       this.iconButton('ph-export', 'Export PNG', this.exportArtwork, true),
     );
     this.shell.toolbar.append(this.toolbarActions);
@@ -120,7 +147,9 @@ export class StudioControls {
   }
 
   private buildLeftPanel(): void {
-    this.shell.leftPanel.querySelectorAll('.visual-section').forEach((element) => element.remove());
+    this.shell.leftPanel
+      .querySelectorAll('.visual-section:not(.layer-panel)')
+      .forEach((element) => element.remove());
     const motion = this.section('MOTION', 'ph-wave-sine');
     const sine = this.composition.sineWave.getParameters();
     motion.append(
@@ -489,5 +518,68 @@ export class StudioControls {
   private async toggleFullscreen(): Promise<void> {
     if (document.fullscreenElement) await document.exitFullscreen();
     else await document.documentElement.requestFullscreen();
+  }
+
+  private saveAutosave(notify: boolean): void {
+    try {
+      localStorage.setItem(
+        StudioControls.PRESET_KEY,
+        JSON.stringify(createStudioPreset(this.composition, this.layerEditor)),
+      );
+      if (notify) this.showNotice('Preset saved');
+    } catch {
+      if (notify) this.showNotice('Preset could not be saved', true);
+    }
+  }
+
+  private restoreAutosave(): void {
+    const saved = localStorage.getItem(StudioControls.PRESET_KEY);
+    if (!saved) return;
+    try {
+      this.applyPreset(JSON.parse(saved) as StudioPreset);
+    } catch {
+      localStorage.removeItem(StudioControls.PRESET_KEY);
+    }
+  }
+
+  private exportPreset(): void {
+    const preset = createStudioPreset(this.composition, this.layerEditor);
+    const link = document.createElement('a');
+    link.download = `audio-artwork-preset-${Date.now()}.json`;
+    link.href = URL.createObjectURL(
+      new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' }),
+    );
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.showNotice('Preset exported');
+  }
+
+  private importPreset = async (): Promise<void> => {
+    const file = this.presetInput.files?.[0];
+    this.presetInput.value = '';
+    if (!file) return;
+    try {
+      this.applyPreset(JSON.parse(await file.text()) as StudioPreset);
+      this.saveAutosave(false);
+      this.showNotice('Preset imported');
+    } catch {
+      this.showNotice('Invalid preset file', true);
+    }
+  };
+
+  private applyPreset(preset: StudioPreset): void {
+    applyStudioPreset(preset, this.composition, this.layerEditor);
+    this.selectedEffect = this.composition.getEffects()[0]!;
+    this.buildLeftPanel();
+    this.buildInspector();
+    this.buildChain();
+  }
+
+  private showNotice(message: string, error = false): void {
+    const notice = document.createElement('div');
+    notice.className = `studio-notice${error ? ' is-error' : ''}`;
+    notice.textContent = message;
+    this.shell.root.append(notice);
+    window.setTimeout(() => notice.remove(), 2200);
   }
 }

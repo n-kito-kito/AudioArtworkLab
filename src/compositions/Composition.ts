@@ -74,6 +74,10 @@ export abstract class BaseComposition implements Composition {
     this.pipeline?.move(effect, direction);
   }
 
+  setEffectOrder(names: string[]): void {
+    this.pipeline?.setOrder(names);
+  }
+
   dispose(): void {
     for (const generator of this.generators) {
       generator.dispose();

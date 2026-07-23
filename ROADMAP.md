@@ -56,7 +56,7 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 - [x] Generator パネルを作る
 - [ ] Modifier パネルを作る
 - [x] Effect パネルを作る
-- [ ] プリセットを保存・復元する
+- [x] プリセットを保存・復元する
 
 ## Phase 5 — 表現ライブラリ
 
@@ -112,8 +112,8 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 ## Phase 8 — 保存と出力
 
 - [x] 現在フレームを PNG 保存する
-- [ ] 設定を LocalStorage へ自動保存する
-- [ ] プリセット JSON を入出力する
+- [x] 設定を LocalStorage へ自動保存する
+- [x] プリセット JSON を入出力する
 - [ ] Canvas と音声を WebM 録画する
 
 ## Phase 8.5 — デザインレイヤー
@@ -126,7 +126,7 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 - [x] デフォルトの生成波形をレイヤーとして並べ替え・削除する
 - [x] 各レイヤーを音声帯域とBeatへ反応させる
 - [x] デザインレイヤーを含めてPNG出力する
-- [ ] レイヤー設定をLocalStorageへ保存する
+- [x] レイヤー設定をLocalStorageへ保存する
 - [ ] テキストのフォント、ウェイト、行間を選択可能にする
 - [ ] 矩形、線、ポリゴン、自由描画を追加する
 - [ ] 複数選択、整列、グループ化を追加する
