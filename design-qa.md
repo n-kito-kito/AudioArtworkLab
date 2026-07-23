@@ -39,6 +39,8 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
 - Replaced transform sliders with Figma-style numeric X, Y, W, H, rotation, and opacity fields.
 - Standardized object position and size editing on a 1600 × 1600 px canvas coordinate system.
 - Added independent Fill and Stroke controls, including color, enable state, and pixel stroke width.
+- Added a Figma-style color popover for Fill, Stroke, and text color.
+- Added synchronized native palette, Hex code, RGB channel, and reusable swatch inputs.
 - Added automatic migration from legacy percentage-based layer presets to pixel coordinates.
 - Replaced the fluorescent green UI accent with a Figma-like blue selection color.
 - Kept Export PNG as the visually prominent blue primary action.
@@ -56,8 +58,8 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
 
 - [P1] Visual comparison is unavailable.
   - Evidence: no browser is connected to the execution environment.
-  - Impact: numeric transform fields, fill/stroke rendering, preset migration, and move/resize
-    bounding-box interactions cannot be confirmed in a real browser.
+  - Impact: color popover placement, native palette launch, synchronized color inputs, and
+    fill/stroke rendering cannot be confirmed in a real browser.
   - Fix: capture the deployed application at the reference viewport and compare it with the supplied
     Figma screenshot.
 

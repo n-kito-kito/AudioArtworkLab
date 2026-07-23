@@ -101,6 +101,7 @@ export class LayerEditor {
   private compositeFailed = false;
   private compositeTexturesReady = false;
   private compositeRefreshPending = true;
+  private closeColorPopover: (() => void) | null = null;
   private drag: { layer: DesignLayer; startX: number; startY: number; x: number; y: number } | null =
     null;
   private directManipulation:
@@ -647,15 +648,12 @@ export class LayerEditor {
     toggle.setAttribute('aria-label', `Enable ${labelText}`);
     const label = document.createElement('span');
     label.textContent = labelText;
-    const color = document.createElement('input');
-    color.type = 'color';
-    color.value = value;
-    color.disabled = !enabled;
+    const color = this.colorEditor(value, (next) => change(toggle.checked, next));
+    color.classList.toggle('is-disabled', !enabled);
     toggle.addEventListener('change', () => {
-      color.disabled = !toggle.checked;
-      change(toggle.checked, color.value);
+      color.classList.toggle('is-disabled', !toggle.checked);
+      change(toggle.checked, color.dataset.color ?? value);
     });
-    color.addEventListener('input', () => change(toggle.checked, color.value));
     row.append(toggle, label, color);
     return row;
   }
@@ -663,8 +661,157 @@ export class LayerEditor {
   private color(labelText: string, value: string, change: (v: string) => void): HTMLElement {
     const label = document.createElement('label'); label.className = 'control-row control-row--inline';
     const name = document.createElement('span'); name.textContent = labelText;
-    const input = document.createElement('input'); input.type = 'color'; input.value = value;
-    input.addEventListener('input', () => change(input.value)); label.append(name, input); return label;
+    label.append(name, this.colorEditor(value, change)); return label;
+  }
+
+  private colorEditor(value: string, change: (value: string) => void): HTMLElement {
+    const root = document.createElement('div');
+    root.className = 'color-picker';
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'color-picker__trigger';
+    trigger.setAttribute('aria-label', 'Open color picker');
+    const triggerSwatch = document.createElement('i');
+    const triggerCode = document.createElement('span');
+    trigger.append(triggerSwatch, triggerCode);
+
+    const popover = document.createElement('div');
+    popover.className = 'color-picker__popover';
+    popover.hidden = true;
+    const header = document.createElement('div');
+    header.className = 'color-picker__header';
+    const title = document.createElement('strong');
+    title.textContent = 'Custom color';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.innerHTML = '<i class="ph ph-x"></i>';
+    close.setAttribute('aria-label', 'Close color picker');
+    header.append(title, close);
+
+    const paletteLabel = document.createElement('label');
+    paletteLabel.className = 'color-picker__palette';
+    const paletteName = document.createElement('span');
+    paletteName.textContent = 'Palette';
+    const palette = document.createElement('input');
+    palette.type = 'color';
+    paletteLabel.append(paletteName, palette);
+
+    const hexLabel = document.createElement('label');
+    hexLabel.className = 'color-picker__field color-picker__field--hex';
+    const hexName = document.createElement('span');
+    hexName.textContent = 'Hex';
+    const hex = document.createElement('input');
+    hex.type = 'text';
+    hex.maxLength = 7;
+    hex.spellcheck = false;
+    hexLabel.append(hexName, hex);
+
+    const rgb = document.createElement('div');
+    rgb.className = 'color-picker__rgb';
+    const channels = (['R', 'G', 'B'] as const).map((channel) => {
+      const label = document.createElement('label');
+      const name = document.createElement('span');
+      name.textContent = channel;
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = '255';
+      input.step = '1';
+      label.append(name, input);
+      rgb.append(label);
+      return input;
+    });
+
+    const swatches = document.createElement('div');
+    swatches.className = 'color-picker__swatches';
+    for (const preset of [
+      '#ffffff',
+      '#d9d9d9',
+      '#ff3b30',
+      '#ff9500',
+      '#ffcc00',
+      '#34c759',
+      '#00c7be',
+      '#0d99ff',
+      '#5856d6',
+      '#af52de',
+      '#ff2d55',
+      '#000000',
+    ]) {
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
+      swatch.style.backgroundColor = preset;
+      swatch.setAttribute('aria-label', `Use ${preset}`);
+      swatch.addEventListener('click', () => update(preset));
+      swatches.append(swatch);
+    }
+    popover.append(header, paletteLabel, hexLabel, rgb, swatches);
+    root.append(trigger, popover);
+
+    const normalize = (input: string): string | null => {
+      const raw = input.trim().replace(/^#/, '');
+      if (/^[0-9a-f]{3}$/i.test(raw)) {
+        return `#${raw
+          .split('')
+          .map((part) => part + part)
+          .join('')
+          .toLowerCase()}`;
+      }
+      return /^[0-9a-f]{6}$/i.test(raw) ? `#${raw.toLowerCase()}` : null;
+    };
+    const update = (nextValue: string, emit = true): void => {
+      const normalized = normalize(nextValue);
+      if (!normalized) return;
+      root.dataset.color = normalized;
+      triggerSwatch.style.backgroundColor = normalized;
+      triggerCode.textContent = normalized.slice(1).toUpperCase();
+      palette.value = normalized;
+      hex.value = normalized.toUpperCase();
+      const numeric = Number.parseInt(normalized.slice(1), 16);
+      channels[0]!.value = String((numeric >> 16) & 255);
+      channels[1]!.value = String((numeric >> 8) & 255);
+      channels[2]!.value = String(numeric & 255);
+      if (emit) change(normalized);
+    };
+    const closePopover = (): void => {
+      popover.hidden = true;
+      document.removeEventListener('pointerdown', onOutsidePointer);
+      if (this.closeColorPopover === closePopover) this.closeColorPopover = null;
+    };
+    const onOutsidePointer = (event: PointerEvent): void => {
+      if (!root.contains(event.target as Node)) closePopover();
+    };
+    trigger.addEventListener('click', () => {
+      if (!popover.hidden) {
+        closePopover();
+        return;
+      }
+      this.closeColorPopover?.();
+      popover.hidden = false;
+      this.closeColorPopover = closePopover;
+      window.setTimeout(() => document.addEventListener('pointerdown', onOutsidePointer), 0);
+    });
+    close.addEventListener('click', closePopover);
+    palette.addEventListener('input', () => update(palette.value));
+    hex.addEventListener('input', () => {
+      const normalized = normalize(hex.value);
+      hex.classList.toggle('is-invalid', !normalized);
+      if (normalized) update(normalized);
+    });
+    for (const channel of channels) {
+      channel.addEventListener('input', () => {
+        const [red, green, blue] = channels.map((input) =>
+          Math.min(Math.max(Number(input.value) || 0, 0), 255),
+        );
+        update(
+          `#${[red, green, blue]
+            .map((part) => Math.round(part).toString(16).padStart(2, '0'))
+            .join('')}`,
+        );
+      });
+    }
+    update(value, false);
+    return root;
   }
 
   private selectControl(labelText: string, values: string[], selected: string, change: (v: string) => void): HTMLElement {
@@ -1288,6 +1435,7 @@ export class LayerEditor {
     cancelAnimationFrame(this.frame); this.fileInput.removeEventListener('change', this.onFile);
     this.shell.root.removeEventListener('studio:effect-selected', this.clearSelection);
     document.removeEventListener('keydown', this.onKeyDown);
+    this.closeColorPopover?.();
     this.selectionOutline.removeEventListener('pointerdown', this.onSelectionPointerDown);
     this.selectionOutline.removeEventListener('pointermove', this.onSelectionPointerMove);
     this.selectionOutline.removeEventListener('pointerup', this.onSelectionPointerUp);
