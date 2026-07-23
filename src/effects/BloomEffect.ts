@@ -42,7 +42,6 @@ export class BloomEffect extends BaseShaderEffect {
           gl_FragColor = vec4(source.rgb + glow * amount * 1.45, source.a);
         }
       `,
-    });
-    this.intensity = 0.62;
+    }, { label: 'Intensity', defaultValue: 0.62, min: 0, max: 1, step: 0.001 });
   }
 }

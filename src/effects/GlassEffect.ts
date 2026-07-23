@@ -33,7 +33,6 @@ export class GlassEffect extends BaseShaderEffect {
           gl_FragColor = vec4(glass, center.a);
         }
       `,
-    });
-    this.intensity = 0.024;
+    }, { label: 'Intensity', defaultValue: 0.024, min: 0, max: 0.08, step: 0.001 });
   }
 }

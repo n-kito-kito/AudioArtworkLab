@@ -11,7 +11,6 @@ export class ScanDriftEffect extends BaseShaderEffect {
         uniform sampler2D tDiffuse; uniform float uIntensity; uniform float uTime; varying vec2 vUv;
         void main(){ float band=smoothstep(.03,0.,abs(fract(vUv.y*5.-uTime*.12)-.5)); vec2 uv=vUv+vec2(band*uIntensity,0.); vec4 c=texture2D(tDiffuse,uv); c.rgb*=.92+.08*sin(vUv.y*900.); gl_FragColor=c; }
       `,
-    });
-    this.intensity = 0.02;
+    }, { label: 'Intensity', defaultValue: 0.02, min: 0, max: 0.1, step: 0.001 });
   }
 }

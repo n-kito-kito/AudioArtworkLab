@@ -35,7 +35,6 @@ export class PixelStretchModifier extends BaseShaderEffect {
           gl_FragColor = texture2D(tDiffuse, vec2(stretchedX, vUv.y));
         }
       `,
-    });
-    this.intensity = 0.16;
+    }, { label: 'Intensity', defaultValue: 0.16, min: 0, max: 0.4, step: 0.001 });
   }
 }

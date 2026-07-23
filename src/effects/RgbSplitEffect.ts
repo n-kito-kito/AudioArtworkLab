@@ -16,7 +16,6 @@ export class RgbSplitEffect extends BaseShaderEffect {
         uniform sampler2D tDiffuse; uniform float uIntensity; uniform vec2 uDirection; varying vec2 vUv;
         void main(){ vec2 o=uDirection*uIntensity; vec4 c=texture2D(tDiffuse,vUv); gl_FragColor=vec4(texture2D(tDiffuse,vUv+o).r,c.g,texture2D(tDiffuse,vUv-o).b,c.a); }
       `,
-    });
-    this.intensity = 0.006;
+    }, { label: 'Intensity', defaultValue: 0.006, min: 0, max: 0.1, step: 0.001 });
   }
 }

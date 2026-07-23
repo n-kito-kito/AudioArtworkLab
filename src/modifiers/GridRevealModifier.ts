@@ -29,7 +29,6 @@ export class GridRevealModifier extends BaseShaderEffect {
           gl_FragColor = mix(original, blocked, amount);
         }
       `,
-    });
-    this.intensity = 0.55;
+    }, { label: 'Intensity', defaultValue: 0.55, min: 0, max: 1, step: 0.001 });
   }
 }

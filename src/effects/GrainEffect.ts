@@ -12,7 +12,6 @@ export class GrainEffect extends BaseShaderEffect {
         float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)) + uTime * 17.0) * 43758.5453); }
         void main(){ vec4 c=texture2D(tDiffuse,vUv); float n=(hash(vUv)-.5)*uIntensity; gl_FragColor=vec4(c.rgb+n,c.a); }
       `,
-    });
-    this.intensity = 0.18;
+    }, { label: 'Intensity', defaultValue: 0.18, min: 0, max: 1, step: 0.001 });
   }
 }

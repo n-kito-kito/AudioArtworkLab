@@ -1,7 +1,13 @@
 import type { FileAudioEngine } from '../audio/FileAudioEngine';
 import type { SineWaveBasic } from '../compositions/SineWaveBasic';
 import type { App } from '../core/App';
-import type { AudioSource, Effect } from '../effects/Effect';
+import type {
+  AudioSource,
+  Effect,
+  EffectParameterSchema,
+  EffectParameterValue,
+  NumberEffectParameter,
+} from '../effects/Effect';
 import type { AudioReactionParameters, SineWaveParameters } from '../generators/SineWave';
 import type { StudioShell } from './StudioShell';
 import type { LayerEditor } from './LayerEditor';
@@ -9,23 +15,11 @@ import type { CompositionDefinition } from '../compositions/catalog';
 import {
   applyStudioPreset,
   createStudioPreset,
-  type StudioPreset,
+  migrateStudioPreset,
+  type CompatibleStudioPreset,
 } from './StudioPreset';
 
 type NumericKey<T> = { [K in keyof T]: T[K] extends number ? K : never }[keyof T];
-
-const EFFECT_MAX: Record<string, number> = {
-  Blur: 0.1,
-  'RGB Split': 0.1,
-  Glitch: 0.1,
-  Warp: 0.1,
-  'Scan Drift': 0.1,
-  'Pixel Stretch': 0.4,
-  'Grid Reveal': 1,
-  Halftone: 1,
-  Glass: 0.08,
-  Bloom: 1,
-};
 
 const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble', 'beat'];
 
@@ -360,16 +354,6 @@ export class StudioControls {
         const status = anchor.querySelector('small');
         if (status) status.textContent = value ? 'On' : 'Off';
       }),
-      this.range(
-        'Intensity',
-        this.selectedEffect.intensity,
-        0,
-        EFFECT_MAX[this.selectedEffect.name] ?? 1,
-        0.001,
-        (value) => {
-          this.selectedEffect.intensity = value;
-        },
-      ),
       this.selectControl(
         'React to',
         AUDIO_SOURCES,
@@ -379,6 +363,9 @@ export class StudioControls {
         },
       ),
     );
+    for (const parameter of this.selectedEffect.parameterSchema) {
+      parameters.append(this.effectParameterControl(this.selectedEffect, parameter));
+    }
 
     const order = document.createElement('div');
     order.className = 'effect-popover__section';
@@ -412,8 +399,13 @@ export class StudioControls {
     ] as const) {
       lookGrid.append(
         this.textButton(name, () => {
-          const max = EFFECT_MAX[this.selectedEffect.name] ?? 1;
-          this.selectedEffect.intensity = amount * max;
+          const intensity = this.selectedEffect.parameterSchema.find(
+            (parameter): parameter is NumberEffectParameter =>
+              parameter.key === 'intensity' && parameter.type === 'number',
+          );
+          this.selectedEffect.setParameterValues({
+            intensity: amount * (intensity?.max ?? 1),
+          });
           this.selectedEffect.audioSource = source;
           this.selectedEffect.enabled = true;
           anchor.classList.add('is-active');
@@ -512,6 +504,63 @@ export class StudioControls {
       onInput(next);
     });
     label.append(name, output, input);
+    return label;
+  }
+
+  private effectParameterControl(
+    effect: Effect,
+    parameter: EffectParameterSchema,
+  ): HTMLElement {
+    const value = effect.getParameterValues()[parameter.key] ?? parameter.defaultValue;
+    const update = (next: EffectParameterValue): void => {
+      effect.setParameterValues({ [parameter.key]: next });
+    };
+    if (parameter.type === 'number') {
+      return this.range(
+        parameter.label,
+        typeof value === 'number' ? value : parameter.defaultValue,
+        parameter.min,
+        parameter.max,
+        parameter.step,
+        update,
+        parameter.suffix,
+      );
+    }
+    if (parameter.type === 'boolean') {
+      return this.toggle(
+        parameter.label,
+        typeof value === 'boolean' ? value : parameter.defaultValue,
+        update,
+      );
+    }
+    if (parameter.type === 'select') {
+      const label = document.createElement('label');
+      label.className = 'control-row control-row--inline';
+      const text = document.createElement('span');
+      text.textContent = parameter.label;
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', parameter.label);
+      for (const item of parameter.options) {
+        const option = document.createElement('option');
+        option.value = item.value;
+        option.textContent = item.label;
+        option.selected = item.value === value;
+        select.append(option);
+      }
+      select.addEventListener('change', () => update(select.value));
+      label.append(text, select);
+      return label;
+    }
+    const label = document.createElement('label');
+    label.className = 'control-row control-row--inline';
+    const text = document.createElement('span');
+    text.textContent = parameter.label;
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = typeof value === 'string' ? value : parameter.defaultValue;
+    input.setAttribute('aria-label', parameter.label);
+    input.addEventListener('input', () => update(input.value));
+    label.append(text, input);
     return label;
   }
 
@@ -687,7 +736,7 @@ export class StudioControls {
     const saved = localStorage.getItem(StudioControls.PRESET_KEY);
     if (!saved) return;
     try {
-      this.applyPreset(JSON.parse(saved) as StudioPreset);
+      this.applyPreset(JSON.parse(saved) as CompatibleStudioPreset);
     } catch {
       localStorage.removeItem(StudioControls.PRESET_KEY);
     }
@@ -776,7 +825,7 @@ export class StudioControls {
   private restoreHistoryState(state: string): void {
     this.applyingHistory = true;
     try {
-      this.applyPreset(JSON.parse(state) as StudioPreset);
+      this.applyPreset(JSON.parse(state) as CompatibleStudioPreset);
       this.saveAutosave(false);
       this.pendingHistory = '';
       this.pendingHistorySince = 0;
@@ -806,7 +855,7 @@ export class StudioControls {
     this.presetInput.value = '';
     if (!file) return;
     try {
-      this.applyPreset(JSON.parse(await file.text()) as StudioPreset);
+      this.applyPreset(JSON.parse(await file.text()) as CompatibleStudioPreset);
       this.saveAutosave(false);
       this.showNotice('Preset imported');
     } catch {
@@ -814,7 +863,8 @@ export class StudioControls {
     }
   };
 
-  private applyPreset(preset: StudioPreset): void {
+  private applyPreset(compatiblePreset: CompatibleStudioPreset): void {
+    const preset = migrateStudioPreset(compatiblePreset);
     if (preset.compositionName && preset.compositionName !== this.composition.name) {
       this.switchComposition(preset.compositionName);
     }

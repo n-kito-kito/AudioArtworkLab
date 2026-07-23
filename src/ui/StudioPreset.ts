@@ -1,11 +1,11 @@
-import type { AudioSource } from '../effects/Effect';
+import type { AudioSource, EffectParameterValues } from '../effects/Effect';
 import type { SineWaveBasic } from '../compositions/SineWaveBasic';
 import type { LayerEditor, LayerEditorSnapshot } from './LayerEditor';
 
-export const STUDIO_PRESET_VERSION = 1;
+export const STUDIO_PRESET_VERSION = 2;
 
 export interface StudioPreset {
-  version: number;
+  version: 2;
   savedAt: string;
   compositionName?: string;
   artworkName?: string;
@@ -16,10 +16,39 @@ export interface StudioPreset {
   effects: Array<{
     name: string;
     enabled: boolean;
+    audioSource: AudioSource;
+    parameters: EffectParameterValues;
+  }>;
+  layers: LayerEditorSnapshot;
+}
+
+interface LegacyStudioPresetV1 extends Omit<StudioPreset, 'version' | 'effects'> {
+  version: 1;
+  effects: Array<{
+    name: string;
+    enabled: boolean;
     intensity: number;
     audioSource: AudioSource;
   }>;
-  layers: LayerEditorSnapshot;
+}
+
+export type CompatibleStudioPreset = StudioPreset | LegacyStudioPresetV1;
+
+export function migrateStudioPreset(preset: CompatibleStudioPreset): StudioPreset {
+  if (preset.version === STUDIO_PRESET_VERSION) return preset;
+  if (preset.version === 1) {
+    return {
+      ...preset,
+      version: STUDIO_PRESET_VERSION,
+      effects: preset.effects.map(({ name, enabled, intensity, audioSource }) => ({
+        name,
+        enabled,
+        audioSource,
+        parameters: { intensity },
+      })),
+    };
+  }
+  throw new Error(`Unsupported preset version: ${(preset as { version?: unknown }).version}`);
 }
 
 export function createStudioPreset(
@@ -39,21 +68,19 @@ export function createStudioPreset(
     effects: composition.getEffects().map((effect) => ({
       name: effect.name,
       enabled: effect.enabled,
-      intensity: effect.intensity,
       audioSource: effect.audioSource,
+      parameters: effect.getParameterValues(),
     })),
     layers: layerEditor.getSnapshot(),
   };
 }
 
 export function applyStudioPreset(
-  preset: StudioPreset,
+  compatiblePreset: CompatibleStudioPreset,
   composition: SineWaveBasic,
   layerEditor: LayerEditor,
 ): void {
-  if (preset.version !== STUDIO_PRESET_VERSION) {
-    throw new Error(`Unsupported preset version: ${preset.version}`);
-  }
+  const preset = migrateStudioPreset(compatiblePreset);
   composition.sineWave.setParameters(preset.sine);
   composition.sineWave.setAudioReaction(preset.reaction);
   composition.selectGenerator(
@@ -64,8 +91,8 @@ export function applyStudioPreset(
     const effect = composition.getEffects().find((candidate) => candidate.name === saved.name);
     if (!effect) continue;
     effect.enabled = saved.enabled;
-    effect.intensity = saved.intensity;
     effect.audioSource = saved.audioSource;
+    effect.setParameterValues(saved.parameters);
   }
   layerEditor.restoreSnapshot(preset.layers);
 }

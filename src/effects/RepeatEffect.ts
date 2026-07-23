@@ -11,7 +11,6 @@ export class RepeatEffect extends BaseShaderEffect {
         uniform sampler2D tDiffuse; uniform float uIntensity; varying vec2 vUv;
         void main(){ vec4 c=texture2D(tDiffuse,vUv); vec2 uv=fract(vUv*2.); vec4 repeated=texture2D(tDiffuse,uv); gl_FragColor=mix(c,repeated,clamp(uIntensity,0.,1.)); }
       `,
-    });
-    this.intensity = 0.45;
+    }, { label: 'Intensity', defaultValue: 0.45, min: 0, max: 1, step: 0.001 });
   }
 }

@@ -37,7 +37,6 @@ export class HalftoneEffect extends BaseShaderEffect {
           gl_FragColor = vec4(mix(original.rgb, halftone, amount), original.a);
         }
       `,
-    });
-    this.intensity = 0.65;
+    }, { label: 'Intensity', defaultValue: 0.65, min: 0, max: 1, step: 0.001 });
   }
 }
