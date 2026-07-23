@@ -27,13 +27,6 @@ const EFFECT_MAX: Record<string, number> = {
   Bloom: 1,
 };
 
-const MODIFIER_NAMES = [
-  'Warp',
-  'Repeat',
-  'Scan Drift',
-  'Pixel Stretch',
-  'Grid Reveal',
-] as const;
 const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble', 'beat'];
 
 export class StudioControls {
@@ -48,7 +41,7 @@ export class StudioControls {
   private readonly recordArtwork: (() => boolean) | null;
   private readonly presetInput = document.createElement('input');
   private readonly toolbarActions = document.createElement('div');
-  private readonly chainTrack = document.createElement('div');
+  private readonly effectStack = document.createElement('div');
   private leftPanelButton: HTMLButtonElement | null = null;
   private rightPanelButton: HTMLButtonElement | null = null;
   private selectedEffect: Effect;
@@ -94,7 +87,6 @@ export class StudioControls {
 
   dispose(): void {
     this.toolbarActions.remove();
-    this.chainTrack.remove();
     this.shell.root.removeEventListener('studio:restore-effect', this.restoreEffect);
     window.removeEventListener('resize', this.updatePanelButtons);
     window.clearInterval(this.autosaveTimer);
@@ -103,7 +95,7 @@ export class StudioControls {
     this.shell.leftPanel
       .querySelectorAll('.visual-section:not(.layer-panel):not(.quality-panel)')
       .forEach((element) => element.remove());
-    this.shell.rightPanel.replaceChildren();
+    this.shell.effectsPanel.replaceChildren();
   }
 
   private buildToolbar(): void {
@@ -240,11 +232,6 @@ export class StudioControls {
       }),
     );
 
-    const modifiers = this.section('MODIFIER', 'ph-arrows-split');
-    for (const modifier of this.getModifiers()) {
-      modifiers.append(this.modifierControls(modifier));
-    }
-
     const range = this.section('OUTPUT RANGE', 'ph-arrows-out-line-vertical');
     range.append(
       this.range('Amplitude min', values.amplitudeMin, 0, 0.8, 0.01, (value) =>
@@ -261,63 +248,11 @@ export class StudioControls {
       ),
     );
     this.shell.leftPanel.prepend(composition, motion);
-    this.shell.leftPanel.append(generator, modifiers, reaction, range);
-  }
-
-  private modifierControls(modifier: Effect): HTMLElement {
-    const card = document.createElement('div');
-    card.className = 'modifier-card';
-
-    const header = document.createElement('div');
-    header.className = 'modifier-card__header';
-    const name = document.createElement('strong');
-    name.textContent = modifier.name;
-    const enabled = document.createElement('input');
-    enabled.type = 'checkbox';
-    enabled.checked = modifier.enabled;
-    enabled.setAttribute('aria-label', `${modifier.name} enabled`);
-    enabled.addEventListener('change', () => {
-      modifier.enabled = enabled.checked;
-      this.buildChain();
-      if (modifier === this.selectedEffect) this.buildInspector();
-    });
-    header.append(name, enabled);
-
-    const order = document.createElement('div');
-    order.className = 'button-row modifier-card__order';
-    order.append(
-      this.iconButton('ph-arrow-up', `Move ${modifier.name} earlier`, () =>
-        this.moveModifier(modifier, -1),
-      ),
-      this.iconButton('ph-arrow-down', `Move ${modifier.name} later`, () =>
-        this.moveModifier(modifier, 1),
-      ),
-    );
-
-    card.append(
-      header,
-      this.range(
-        'Intensity',
-        modifier.intensity,
-        0,
-        EFFECT_MAX[modifier.name] ?? 1,
-        0.001,
-        (value) => {
-          modifier.intensity = value;
-          if (modifier === this.selectedEffect) this.buildInspector();
-        },
-      ),
-      this.selectControl('React to', AUDIO_SOURCES, modifier.audioSource, (value) => {
-        modifier.audioSource = value as AudioSource;
-        if (modifier === this.selectedEffect) this.buildInspector();
-      }),
-      order,
-    );
-    return card;
+    this.shell.leftPanel.append(generator, reaction, range);
   }
 
   private buildInspector(): void {
-    this.shell.rightPanel.replaceChildren();
+    this.shell.effectsPanel.replaceChildren();
     const header = document.createElement('div');
     header.className = 'inspector-header';
     const eyebrow = document.createElement('span');
@@ -325,6 +260,11 @@ export class StudioControls {
     const title = document.createElement('strong');
     title.textContent = this.selectedEffect.name;
     header.append(eyebrow, title);
+
+    const stack = this.section('EFFECT STACK', 'ph-stack');
+    this.effectStack.className = 'effect-stack';
+    stack.append(this.effectStack);
+    this.renderEffectStack();
 
     const controls = this.section('PARAMETERS', 'ph-sliders');
     controls.append(
@@ -381,42 +321,39 @@ export class StudioControls {
       lookGrid.append(button);
     }
     looks.append(lookGrid);
-    this.shell.rightPanel.append(header, controls, order, looks);
+    this.shell.effectsPanel.append(header, stack, controls, order, looks);
   }
 
   private buildChain(): void {
-    this.chainTrack.replaceChildren();
-    this.chainTrack.className = 'effect-chain__track';
-    const label = document.createElement('span');
-    label.className = 'effect-chain__label';
-    label.textContent = 'EFFECT';
-    const source = document.createElement('button');
-    source.type = 'button';
-    source.className = 'chain-node chain-node--source';
-    source.textContent = 'SOURCE';
-    this.chainTrack.append(label, source);
+    this.shell.chain.replaceChildren();
+    this.renderEffectStack();
+  }
 
+  private renderEffectStack(): void {
+    this.effectStack.replaceChildren();
     for (const effect of this.composition.getEffects()) {
       const node = document.createElement('button');
       node.type = 'button';
-      node.className = 'chain-node';
+      node.className = 'effect-stack__item';
       node.classList.toggle('is-active', effect.enabled);
       node.classList.toggle('is-selected', effect === this.selectedEffect);
       const state = document.createElement('i');
-      state.className = 'chain-node__state';
+      state.className = 'effect-stack__state';
       const name = document.createElement('span');
       name.textContent = effect.name;
+      const status = document.createElement('small');
+      status.textContent = effect.enabled ? 'On' : 'Off';
       node.append(state, name);
+      node.append(status);
       node.addEventListener('click', () => {
         this.shell.root.dispatchEvent(new CustomEvent('studio:effect-selected'));
         this.selectedEffect = effect;
         this.buildInspector();
-        this.buildChain();
+        this.shell.setInspectorTab('effects');
         this.shell.root.classList.add('right-open');
       });
-      this.chainTrack.append(node);
+      this.effectStack.append(node);
     }
-    this.shell.chain.replaceChildren(this.chainTrack);
   }
 
   private restoreEffect = (): void => {
@@ -595,32 +532,6 @@ export class StudioControls {
 
   private moveSelected(direction: -1 | 1): void {
     this.composition.moveEffect(this.selectedEffect, direction);
-    this.buildLeftPanel();
-    this.buildChain();
-  }
-
-  private getModifiers(): Effect[] {
-    return this.composition
-      .getEffects()
-      .filter((effect): effect is Effect =>
-        MODIFIER_NAMES.includes(effect.name as (typeof MODIFIER_NAMES)[number]),
-      );
-  }
-
-  private moveModifier(modifier: Effect, direction: -1 | 1): void {
-    const modifiers = this.getModifiers();
-    const index = modifiers.indexOf(modifier);
-    const target = index + direction;
-    if (index < 0 || target < 0 || target >= modifiers.length) return;
-    [modifiers[index], modifiers[target]] = [modifiers[target]!, modifiers[index]!];
-
-    let modifierIndex = 0;
-    const order = this.composition.getEffects().map((effect) =>
-      MODIFIER_NAMES.includes(effect.name as (typeof MODIFIER_NAMES)[number])
-        ? modifiers[modifierIndex++]!.name
-        : effect.name,
-    );
-    this.composition.setEffectOrder(order);
     this.buildLeftPanel();
     this.buildChain();
   }

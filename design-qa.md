@@ -1,68 +1,58 @@
 # Design QA
 
-- Source reference: `/var/folders/xd/_d8bvs1s0tz605vrqpfw34lc0000gn/T/codex-clipboard-7ddf6c65-df88-4f50-898e-bf4e0230119c.png`
-- Supporting reference: `/var/folders/xd/_d8bvs1s0tz605vrqpfw34lc0000gn/T/codex-clipboard-fd1d47d7-9ccf-4f25-ae36-e8e127a300c3.png`
-- Implementation screenshot: `design-qa-implementation.png`
-- Desktop viewport: 1600 × 1000
-- Mobile viewport: 390 × 844
+- Source visual truth: Figma desktop UI screenshot attached in the user request on 2026-07-23
+- Implementation screenshot: unavailable
+- Intended viewport: desktop, 2048 × 1080 reference
+- Source pixel dimensions: 2048 × 1080
+- Implementation pixel dimensions: unavailable
+- CSS viewport and density normalization: unavailable
+- State: dark workspace with a selected canvas layer
 
-## Comparison
+## Full-view comparison evidence
 
-The implementation follows the reference's editor hierarchy: compact top toolbar, scrollable source and layer controls at left, a square live canvas at center, selected-layer/effect inspector at right, and a horizontal effect chain at the bottom. Density, thin dividers, square controls, lime selection color, monospaced microcopy, and dark surfaces are intentionally matched. This iteration adds the reference's core authoring model: imported images, generated shapes, editable text, layer ordering, direct manipulation, per-layer styling, and audio mapping.
+Blocked. The reference screenshot is available in the conversation, but this execution environment
+reports no connected browser, so a browser-rendered implementation screenshot could not be captured.
 
-## Verification
+## Focused region comparison evidence
 
-- Desktop layout keeps both side panels and the artwork visible without overlap.
-- Mobile layout reduces the toolbar to icon controls, keeps the artwork primary, and exposes source/inspector panels as working drawers.
-- Randomize, grid, source selection, effect selection, effect enable/intensity/audio mapping, chain ordering, fullscreen, and PNG export are wired to application state.
-- Image upload, circle/wave/text creation, layer selection, drag positioning, transform/style controls, duplication, deletion, ordering, and audio reaction are wired to application state.
-- Browser interaction test created a reactive circle and text layer, then imported `src/assets/hero.png`; the inspector correctly followed each selected layer.
-- Layer-list deletion was verified in the browser: the always-visible trash icon removed the selected row immediately, and the `Delete` key removed the selected canvas layer.
-- Keyboard safety was verified by pressing `Backspace` inside the text-content input; the character was edited while the layer remained present.
-- The default `Sine Wave` now appears as the initial bottom layer. Browser verification moved it above a circle (`canvas z-index: 2`, circle `z-index: 1`) and confirmed both remained visible through the transparent WebGL canvas.
-- Deleting `Sine Wave` from its row and with the `Delete` key both removed the row and hid the generated wave while leaving other design layers visible.
-- PNG export composites the WebGL artwork and design layers into one 1600 × 1600 image.
-- Mobile browser verification at 390 × 844 reported zero horizontal page overflow and a working off-canvas Controls drawer.
-- Desktop panel toggles were verified independently: closing Controls expanded the stage from 680px to 980px, closing Inspector expanded it to 1280px, and reopening both restored the original 680px stage.
-- Mobile verification at 390 × 844 confirmed both panels start closed, Controls opens from the left, Inspector opens from the right, and opening one closes the other.
-- Browser console contained no errors or warnings during the verified interactions.
-- Native labels, headings, buttons, radio controls, checkboxes, selects, and status values are present; Phosphor icons use one consistent icon family.
-- `npm run lint` and `npm run build` pass.
+Blocked for the same reason. The intended focused regions are the top toolbar, left Layers/Source
+panel, right Design/Effects inspector, and compact control rows.
 
-## Findings and resolution
+## Implemented design changes
 
-1. P1 — The previous canvas filled the browser and could not support an editor workspace. Resolved with container-aware renderer/camera/composer resizing and a square artboard.
-2. P1 — The previous controls did not express source, inspector, and effect-chain relationships. Resolved with a persistent five-region studio shell and selected-effect inspector.
-3. P1 — Mobile controls would crowd the artwork. Resolved with off-canvas source and inspector drawers and icon-only toolbar actions.
-4. P2 — Randomized HSL values were not valid for the native color input. Resolved by generating six-digit hex colors.
-5. P1 — The source was limited to a single generated wave and could not reproduce the reference's layered compositions. Resolved with an ordered layer surface supporting image, circle, wave, and text sources.
-6. P1 — Export previously omitted design layers. Resolved with a composite 1600 × 1600 PNG renderer.
-7. P2 — Layer controls needed to remain usable on mobile. Resolved by placing authoring controls inside the existing off-canvas panels; verified at 390 × 844.
-8. P3 — The production bundle reports a non-blocking size warning due to Three.js and the icon font. Deferred; code splitting can be addressed when load performance becomes a priority.
-9. P1 — Delete was only available low in the inspector and was difficult to discover in a tall panel. Resolved by adding a dedicated Phosphor trash control beside the six-dot handle on every layer row.
-10. P2 — Selected layers could not be removed with the keyboard. Resolved with `Delete` and `Backspace` shortcuts, guarded so form fields and editable text retain normal editing behavior.
-11. P1 — The default generated wave was visually fixed behind every design layer. Resolved by registering the WebGL output as the initial `Sine Wave` layer and using a transparent renderer so it can move above or below DOM layers without covering them with a black rectangle.
-12. P1 — The generated wave could not be removed through the layer model. Resolved by routing row-trash, inspector Delete, and keyboard deletion through the same generator-layer removal path.
-13. P1 — Toolbar panel icons did not collapse the desktop side panels. Resolved with independent desktop grid-column toggles, visible pressed states, and preserved mobile drawer behavior.
+- Reorganized the right inspector into Design and Effects tabs.
+- Moved the effect chain from the bottom bar into a vertical Effect Stack.
+- Removed Modifier as a separate left-panel category and grouped those processors with effects.
+- Reserved the left side for layers, composition/source controls, audio, and quality.
+- Replaced the fluorescent green UI accent with a Figma-like blue selection color.
+- Kept Export PNG as the visually prominent blue primary action.
+- Tightened toolbar, panel, row, button, label, and control spacing to match a dense desktop editor.
 
 ## Required fidelity surfaces
 
-- Typography: compact uppercase labels, strong selected-layer title, and dense control hierarchy remain consistent with the reference; editable artwork text uses a deliberately heavier display weight.
-- Spacing and layout: the five-region studio frame is unchanged; the layer panel uses the same 14–16px panel rhythm and compact control density.
-- Colors and tokens: existing near-black surfaces, thin gray dividers, and lime active state are reused throughout all new controls.
-- Image quality: imported images retain their source file and use cover cropping; no placeholder imagery is introduced.
-- Copy and content: layer actions use short editor terminology—Image, Circle, Wave, Text, Transform, Style & Audio, and Arrange.
+- Fonts and typography: code-reviewed only; browser rendering unavailable.
+- Spacing and layout rhythm: code-reviewed only; browser rendering unavailable.
+- Colors and visual tokens: neutral dark gray palette and blue semantic accent implemented.
+- Image quality and asset fidelity: no new raster assets required; existing Phosphor icon library retained.
+- Copy and content: existing application terminology retained, with Design, Effects, and Effect Stack added.
+
+## Findings
+
+- [P1] Visual comparison is unavailable.
+  - Evidence: no browser is connected to the execution environment.
+  - Impact: exact spacing, overflow, and viewport fidelity cannot be confirmed.
+  - Fix: capture the deployed application at the reference viewport and compare it with the supplied
+    Figma screenshot.
+
+## Primary interactions tested
+
+- Not browser-tested because no browser is connected.
+- TypeScript, ESLint, Vite production build, and local HTTP 200 checks passed.
+- Browser console errors could not be checked.
 
 ## Comparison history
 
-- Earlier P1: text and image authoring visible in the reference were absent. Fixed with the multi-layer canvas and layer inspector.
-- Earlier P1: layered artwork could not be exported. Fixed with composited PNG output.
-- Earlier P1: layer deletion was hidden below the fold. Fixed with an always-visible row action; post-fix browser evidence showed one delete button for one layer and zero rows after activation.
-- Earlier P2: keyboard deletion was unavailable. Fixed and verified for both layer deletion and text-input protection.
-- Earlier P1: the default wave was outside the layer stack. Fixed and verified through browser-visible ordering, row deletion, keyboard deletion, and a clean console.
-- Earlier P1: desktop side panels remained permanently visible. Fixed and verified for left-only, right-only, both-closed, both-open, and mobile drawer states with no console errors.
-- Post-fix evidence: browser-rendered desktop state with circle plus text, image-import interaction state, mobile 390 × 844 state, and clean console were inspected during this QA pass. The existing 1600 × 1000 screenshot remains the normalized shell-layout reference because the outer layout did not change.
+- Initial implementation: structural and token changes completed.
+- Post-fix visual evidence: unavailable because browser capture is blocked.
 
-## Final result
-
-passed
+final result: blocked

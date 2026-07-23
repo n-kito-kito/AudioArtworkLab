@@ -342,7 +342,8 @@ export class LayerEditor {
   };
 
   private buildInspector(layer: DesignLayer): void {
-    const panel = this.shell.rightPanel;
+    const panel = this.shell.designPanel;
+    this.shell.setInspectorTab('design');
     panel.replaceChildren();
     const header = document.createElement('div');
     header.className = 'inspector-header';
