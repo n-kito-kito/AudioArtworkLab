@@ -169,6 +169,7 @@ export class LayerEditor {
   private readonly loadedGoogleFonts = new Set<string>();
   private drag: { layer: DesignLayer; startX: number; startY: number; x: number; y: number } | null =
     null;
+  private listDragLayer: DesignLayer | null = null;
   private directManipulation:
     | {
         mode: 'move' | 'resize';
@@ -474,10 +475,59 @@ export class LayerEditor {
       selectButton.type = 'button';
       selectButton.className = 'layer-row__select';
       selectButton.setAttribute('aria-label', `Select ${layer.name}`);
-      selectButton.innerHTML = `<i class="ph ${icon}"></i><span>${layer.name}</span><i class="ph ph-dots-six-vertical layer-row__handle"></i>`;
+      selectButton.innerHTML = `<i class="ph ${icon}"></i><span>${layer.name}</span>`;
       selectButton.addEventListener('click', (event) =>
         this.select(layer, event instanceof MouseEvent && event.shiftKey),
       );
+      const handle = document.createElement('button');
+      handle.type = 'button';
+      handle.className = 'layer-row__handle';
+      handle.draggable = true;
+      handle.dataset.layerId = layer.id;
+      handle.title = 'Drag to reorder layer';
+      handle.setAttribute('aria-label', `Reorder ${layer.name}`);
+      handle.innerHTML = '<i class="ph ph-dots-six-vertical"></i>';
+      handle.addEventListener('click', (event) => event.stopPropagation());
+      handle.addEventListener('dragstart', (event) => {
+        this.listDragLayer = layer;
+        row.classList.add('is-dragging');
+        this.list.classList.add('is-reordering');
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', layer.id);
+        }
+      });
+      handle.addEventListener('dragend', () => this.finishListDrag());
+      handle.addEventListener('keydown', (event) => {
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+        event.preventDefault();
+        this.move(layer, event.key === 'ArrowUp' ? 1 : -1);
+        const handles = [...this.list.querySelectorAll<HTMLButtonElement>('.layer-row__handle')];
+        const nextHandle = handles.find((item) => item.dataset.layerId === layer.id);
+        nextHandle?.focus();
+      });
+      row.addEventListener('dragover', (event) => {
+        if (!this.listDragLayer || this.listDragLayer === layer) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+        const bounds = row.getBoundingClientRect();
+        const placeBefore = event.clientY < bounds.top + bounds.height / 2;
+        this.list
+          .querySelectorAll('.layer-row')
+          .forEach((item) => item.classList.remove('is-drop-before', 'is-drop-after'));
+        row.classList.add(placeBefore ? 'is-drop-before' : 'is-drop-after');
+      });
+      row.addEventListener('drop', (event) => {
+        if (!this.listDragLayer || this.listDragLayer === layer) return;
+        event.preventDefault();
+        const bounds = row.getBoundingClientRect();
+        this.reorderLayer(
+          this.listDragLayer,
+          layer,
+          event.clientY < bounds.top + bounds.height / 2,
+        );
+        this.finishListDrag();
+      });
       const deleteButton = document.createElement('button');
       deleteButton.type = 'button';
       deleteButton.className = 'layer-row__delete';
@@ -485,9 +535,33 @@ export class LayerEditor {
       deleteButton.title = 'Delete layer';
       deleteButton.innerHTML = '<i class="ph ph-trash"></i>';
       deleteButton.addEventListener('click', () => this.remove(layer));
-      row.append(selectButton, deleteButton);
+      row.append(handle, selectButton, deleteButton);
       this.list.append(row);
     });
+  }
+
+  private reorderLayer(dragged: DesignLayer, target: DesignLayer, placeBefore: boolean): void {
+    const displayed = [...this.layers].reverse();
+    const from = displayed.indexOf(dragged);
+    if (from < 0) return;
+    displayed.splice(from, 1);
+    const targetIndex = displayed.indexOf(target);
+    if (targetIndex < 0) return;
+    displayed.splice(targetIndex + (placeBefore ? 0 : 1), 0, dragged);
+    this.layers.splice(0, this.layers.length, ...displayed.reverse());
+    this.compositeRefreshPending = true;
+    this.syncStack();
+    this.renderList();
+  }
+
+  private finishListDrag(): void {
+    this.listDragLayer = null;
+    this.list.classList.remove('is-reordering');
+    this.list
+      .querySelectorAll('.layer-row')
+      .forEach((item) =>
+        item.classList.remove('is-dragging', 'is-drop-before', 'is-drop-after'),
+      );
   }
 
   private onKeyDown = (event: KeyboardEvent): void => {

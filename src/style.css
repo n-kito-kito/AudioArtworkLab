@@ -1672,6 +1672,8 @@ textarea:focus-visible {
 }
 
 .layer-row {
+  position: relative;
+  grid-template-columns: 24px minmax(0, 1fr) 32px;
   min-height: 32px;
   border-color: transparent;
   border-radius: 3px;
@@ -1688,6 +1690,64 @@ textarea:focus-visible {
   border-color: transparent;
   background: #0d99ff;
   color: #fff;
+}
+
+.layer-row__select {
+  grid-template-columns: 20px minmax(0, 1fr);
+  padding-left: 2px;
+}
+
+.layer-row__handle {
+  display: grid;
+  width: 24px;
+  min-height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #777;
+  cursor: grab;
+}
+
+.layer-row__handle:hover {
+  color: #d5d5d5;
+}
+
+.layer-row__handle:active {
+  cursor: grabbing;
+}
+
+.layer-row.is-selected .layer-row__handle {
+  color: rgb(255 255 255 / 72%);
+}
+
+.layer-row.is-dragging {
+  opacity: 0.42;
+}
+
+.layer-row.is-drop-before::before,
+.layer-row.is-drop-after::after {
+  position: absolute;
+  z-index: 2;
+  right: 2px;
+  left: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  content: '';
+  pointer-events: none;
+}
+
+.layer-row.is-drop-before::before {
+  top: -2px;
+}
+
+.layer-row.is-drop-after::after {
+  bottom: -2px;
+}
+
+.layer-list.is-reordering .layer-row {
+  user-select: none;
 }
 
 .layer-row__delete {

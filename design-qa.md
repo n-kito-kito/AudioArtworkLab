@@ -52,6 +52,8 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
   floating settings popover.
 - The effect popover keeps Enabled, Intensity, React to, effect order, and Quick looks together,
   and supports outside-click, close-button, and Escape dismissal.
+- Added direct layer reordering from the six-dot handle, with a visible insertion line, immediate
+  canvas stack synchronization, and keyboard Arrow Up/Down support on the handle.
 - Added automatic migration from legacy percentage-based layer presets to pixel coordinates.
 - Replaced the fluorescent green UI accent with a Figma-like blue selection color.
 - Kept Export PNG as the visually prominent blue primary action.
@@ -70,7 +72,8 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
 - [P1] Visual comparison is unavailable.
   - Evidence: no browser is connected to the execution environment.
   - Impact: per-layer effect bypass, remote/local font loading, font fallback feedback, effect
-    popover placement and dismissal, and inspector layout cannot be confirmed in a real browser.
+    popover placement and dismissal, layer drag-and-drop ordering, and inspector layout cannot be
+    confirmed in a real browser.
   - Fix: capture the deployed application at the reference viewport and compare it with the supplied
     Figma screenshot.
 
