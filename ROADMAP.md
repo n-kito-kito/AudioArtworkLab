@@ -100,7 +100,7 @@ Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育�
 - [x] Effect の適用順序を変更可能にする
 - [x] Effect パラメーターへ音声値を接続する
 - [x] Effect パラメータースキーマを導入する
-- [ ] Effect の各パラメーターへ Audio Mapping を設定可能にする
+- [x] Effect の各パラメーターへ Audio Mapping を設定可能にする
 - [ ] Effect の Dry/Wet・Blend Mode・Opacity を共通化する
 - [ ] Effect チェーンの複製・グループ化・部分バイパスを追加する
 

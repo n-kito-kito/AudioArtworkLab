@@ -1,11 +1,15 @@
-import type { AudioSource, EffectParameterValues } from '../effects/Effect';
+import type {
+  AudioSource,
+  EffectAudioMappings,
+  EffectParameterValues,
+} from '../effects/Effect';
 import type { SineWaveBasic } from '../compositions/SineWaveBasic';
 import type { LayerEditor, LayerEditorSnapshot } from './LayerEditor';
 
-export const STUDIO_PRESET_VERSION = 2;
+export const STUDIO_PRESET_VERSION = 3;
 
 export interface StudioPreset {
-  version: 2;
+  version: 3;
   savedAt: string;
   compositionName?: string;
   artworkName?: string;
@@ -16,13 +20,23 @@ export interface StudioPreset {
   effects: Array<{
     name: string;
     enabled: boolean;
-    audioSource: AudioSource;
     parameters: EffectParameterValues;
+    audioMappings: EffectAudioMappings;
   }>;
   layers: LayerEditorSnapshot;
 }
 
-interface LegacyStudioPresetV1 extends Omit<StudioPreset, 'version' | 'effects'> {
+interface LegacyStudioPresetV2 extends Omit<StudioPreset, 'version' | 'effects'> {
+  version: 2;
+  effects: Array<{
+    name: string;
+    enabled: boolean;
+    audioSource: AudioSource;
+    parameters: EffectParameterValues;
+  }>;
+}
+
+interface LegacyStudioPresetV1 extends Omit<LegacyStudioPresetV2, 'version' | 'effects'> {
   version: 1;
   effects: Array<{
     name: string;
@@ -32,14 +46,42 @@ interface LegacyStudioPresetV1 extends Omit<StudioPreset, 'version' | 'effects'>
   }>;
 }
 
-export type CompatibleStudioPreset = StudioPreset | LegacyStudioPresetV1;
+export type CompatibleStudioPreset =
+  | StudioPreset
+  | LegacyStudioPresetV2
+  | LegacyStudioPresetV1;
 
 export function migrateStudioPreset(preset: CompatibleStudioPreset): StudioPreset {
   if (preset.version === STUDIO_PRESET_VERSION) return preset;
-  if (preset.version === 1) {
+  if (preset.version === 2) {
     return {
       ...preset,
       version: STUDIO_PRESET_VERSION,
+      effects: preset.effects.map(({ name, enabled, audioSource, parameters }) => ({
+        name,
+        enabled,
+        parameters,
+        audioMappings:
+          audioSource === 'none'
+            ? ({} as EffectAudioMappings)
+            : {
+                intensity: {
+                  source: audioSource,
+                  amount:
+                    typeof parameters.intensity === 'number' ? parameters.intensity : 0.5,
+                  min: 0,
+                  max: 1,
+                  smoothing: 0.7,
+                  invert: false,
+                },
+              },
+      })),
+    };
+  }
+  if (preset.version === 1) {
+    const version2: LegacyStudioPresetV2 = {
+      ...preset,
+      version: 2,
       effects: preset.effects.map(({ name, enabled, intensity, audioSource }) => ({
         name,
         enabled,
@@ -47,6 +89,7 @@ export function migrateStudioPreset(preset: CompatibleStudioPreset): StudioPrese
         parameters: { intensity },
       })),
     };
+    return migrateStudioPreset(version2);
   }
   throw new Error(`Unsupported preset version: ${(preset as { version?: unknown }).version}`);
 }
@@ -68,8 +111,8 @@ export function createStudioPreset(
     effects: composition.getEffects().map((effect) => ({
       name: effect.name,
       enabled: effect.enabled,
-      audioSource: effect.audioSource,
       parameters: effect.getParameterValues(),
+      audioMappings: effect.getAudioMappings(),
     })),
     layers: layerEditor.getSnapshot(),
   };
@@ -91,8 +134,8 @@ export function applyStudioPreset(
     const effect = composition.getEffects().find((candidate) => candidate.name === saved.name);
     if (!effect) continue;
     effect.enabled = saved.enabled;
-    effect.audioSource = saved.audioSource;
     effect.setParameterValues(saved.parameters);
+    effect.setAudioMappings(saved.audioMappings);
   }
   layerEditor.restoreSnapshot(preset.layers);
 }

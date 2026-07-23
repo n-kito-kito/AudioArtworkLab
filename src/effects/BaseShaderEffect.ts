@@ -4,6 +4,8 @@ import type { AudioParameters } from '../audio/AudioEngine';
 import type {
   AudioSource,
   Effect,
+  EffectAudioMapping,
+  EffectAudioMappings,
   EffectParameterSchema,
   EffectParameterValue,
   EffectParameterValues,
@@ -21,7 +23,8 @@ export abstract class BaseShaderEffect implements Effect {
   readonly pass: ShaderPass;
   readonly parameterSchema: readonly EffectParameterSchema[];
   intensity: number;
-  audioSource: AudioSource = 'none';
+  private readonly audioMappings: EffectAudioMappings = {};
+  private readonly smoothedAudioValues = new Map<string, number>();
 
   constructor(shader: EffectShader, intensity: Omit<NumberEffectParameter, 'key' | 'type'>) {
     this.pass = new ShaderPass(shader);
@@ -36,6 +39,31 @@ export abstract class BaseShaderEffect implements Effect {
 
   set enabled(value: boolean) {
     this.pass.enabled = value;
+  }
+
+  get audioSource(): AudioSource {
+    return this.audioMappings.intensity?.source ?? 'none';
+  }
+
+  set audioSource(source: AudioSource) {
+    if (source === 'none') {
+      delete this.audioMappings.intensity;
+      this.smoothedAudioValues.delete('intensity');
+      return;
+    }
+    const parameter = this.parameterSchema.find(
+      (item): item is NumberEffectParameter =>
+        item.key === 'intensity' && item.type === 'number',
+    );
+    if (!parameter) return;
+    this.audioMappings.intensity = {
+      source,
+      amount: this.intensity,
+      min: parameter.min,
+      max: parameter.max,
+      smoothing: 0.7,
+      invert: false,
+    };
   }
 
   getParameterValues(): EffectParameterValues {
@@ -54,11 +82,36 @@ export abstract class BaseShaderEffect implements Effect {
     }
   }
 
+  getAudioMappings(): EffectAudioMappings {
+    return Object.fromEntries(
+      Object.entries(this.audioMappings).map(([key, mapping]) => [key, { ...mapping }]),
+    );
+  }
+
+  setAudioMappings(mappings: EffectAudioMappings): void {
+    for (const key of Object.keys(this.audioMappings)) delete this.audioMappings[key];
+    this.smoothedAudioValues.clear();
+    for (const [key, mapping] of Object.entries(mappings)) {
+      const parameter = this.parameterSchema.find(
+        (item): item is NumberEffectParameter => item.key === key && item.type === 'number',
+      );
+      if (!parameter) continue;
+      this.audioMappings[key] = this.normalizeAudioMapping(mapping, parameter);
+    }
+  }
+
   update(audio: AudioParameters, elapsed: number): void {
-    const audioAmount = this.audioSource === 'none' ? 0 : (audio[this.audioSource] ?? 0);
-    const uniforms = this.pass.uniforms;
-    if (uniforms.uIntensity) uniforms.uIntensity.value = this.intensity * (1 + audioAmount);
-    if (uniforms.uTime) uniforms.uTime.value = elapsed;
+    for (const parameter of this.parameterSchema) {
+      if (parameter.type !== 'number') continue;
+      const baseValue = this.readParameter(parameter.key);
+      if (typeof baseValue !== 'number') continue;
+      const mapping = this.audioMappings[parameter.key];
+      const mappedValue = mapping
+        ? this.mapAudioValue(parameter.key, baseValue, mapping, audio)
+        : baseValue;
+      this.writeUniform(parameter.key, mappedValue);
+    }
+    if (this.pass.uniforms.uTime) this.pass.uniforms.uTime.value = elapsed;
   }
 
   resize(width: number, height: number): void {
@@ -102,5 +155,50 @@ export abstract class BaseShaderEffect implements Effect {
       `u${parameter.key.charAt(0).toUpperCase()}${parameter.key.slice(1)}`
     ];
     if (uniform) uniform.value = safeValue;
+  }
+
+  private mapAudioValue(
+    key: string,
+    baseValue: number,
+    mapping: EffectAudioMapping,
+    audio: AudioParameters,
+  ): number {
+    const sourceValue = mapping.source === 'none' ? 0 : (audio[mapping.source] ?? 0);
+    const input = mapping.invert ? 1 - sourceValue : sourceValue;
+    const target = Math.min(Math.max(baseValue + input * mapping.amount, mapping.min), mapping.max);
+    const previous = this.smoothedAudioValues.get(key) ?? target;
+    const value = previous * mapping.smoothing + target * (1 - mapping.smoothing);
+    const safeValue = Number.isFinite(value) ? value : baseValue;
+    this.smoothedAudioValues.set(key, safeValue);
+    return safeValue;
+  }
+
+  private normalizeAudioMapping(
+    mapping: EffectAudioMapping,
+    parameter: NumberEffectParameter,
+  ): EffectAudioMapping {
+    const min = Number.isFinite(mapping.min)
+      ? Math.min(Math.max(mapping.min, parameter.min), parameter.max)
+      : parameter.min;
+    const max = Number.isFinite(mapping.max)
+      ? Math.min(Math.max(mapping.max, min), parameter.max)
+      : parameter.max;
+    return {
+      source: ['none', 'volume', 'bass', 'mid', 'treble', 'beat'].includes(mapping.source)
+        ? mapping.source
+        : 'none',
+      amount: Number.isFinite(mapping.amount) ? mapping.amount : 0,
+      min,
+      max,
+      smoothing: Number.isFinite(mapping.smoothing)
+        ? Math.min(Math.max(mapping.smoothing, 0), 0.99)
+        : 0.7,
+      invert: Boolean(mapping.invert),
+    };
+  }
+
+  private writeUniform(key: string, value: number): void {
+    const uniform = this.pass.uniforms[`u${key.charAt(0).toUpperCase()}${key.slice(1)}`];
+    if (uniform) uniform.value = value;
   }
 }

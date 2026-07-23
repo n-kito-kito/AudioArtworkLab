@@ -4,6 +4,7 @@ import type { App } from '../core/App';
 import type {
   AudioSource,
   Effect,
+  EffectAudioMapping,
   EffectParameterSchema,
   EffectParameterValue,
   NumberEffectParameter,
@@ -354,17 +355,15 @@ export class StudioControls {
         const status = anchor.querySelector('small');
         if (status) status.textContent = value ? 'On' : 'Off';
       }),
-      this.selectControl(
-        'React to',
-        AUDIO_SOURCES,
-        this.selectedEffect.audioSource,
-        (value) => {
-          this.selectedEffect.audioSource = value as AudioSource;
-        },
-      ),
     );
     for (const parameter of this.selectedEffect.parameterSchema) {
-      parameters.append(this.effectParameterControl(this.selectedEffect, parameter));
+      const block = document.createElement('div');
+      block.className = 'effect-parameter-block';
+      block.append(this.effectParameterControl(this.selectedEffect, parameter));
+      if (parameter.type === 'number') {
+        block.append(this.effectAudioMappingControl(this.selectedEffect, parameter));
+      }
+      parameters.append(block);
     }
 
     const order = document.createElement('div');
@@ -562,6 +561,53 @@ export class StudioControls {
     input.addEventListener('input', () => update(input.value));
     label.append(text, input);
     return label;
+  }
+
+  private effectAudioMappingControl(
+    effect: Effect,
+    parameter: NumberEffectParameter,
+  ): HTMLElement {
+    const root = document.createElement('div');
+    root.className = 'effect-audio-mapping';
+    const title = document.createElement('h4');
+    title.textContent = `${parameter.label} audio mapping`;
+    const span = Math.max(parameter.max - parameter.min, parameter.step);
+    const fallback: EffectAudioMapping = {
+      source: 'none',
+      amount: 0,
+      min: parameter.min,
+      max: parameter.max,
+      smoothing: 0.7,
+      invert: false,
+    };
+    const mapping = effect.getAudioMappings()[parameter.key] ?? fallback;
+    const update = (change: Partial<EffectAudioMapping>): void => {
+      const current = effect.getAudioMappings()[parameter.key] ?? mapping;
+      effect.setAudioMappings({
+        ...effect.getAudioMappings(),
+        [parameter.key]: { ...current, ...change },
+      });
+    };
+    root.append(
+      title,
+      this.selectControl('Source', AUDIO_SOURCES, mapping.source, (value) =>
+        update({ source: value as AudioSource }),
+      ),
+      this.range('Amount', mapping.amount, -span, span, parameter.step, (value) =>
+        update({ amount: value }),
+      ),
+      this.range('Minimum', mapping.min, parameter.min, parameter.max, parameter.step, (value) =>
+        update({ min: value }),
+      ),
+      this.range('Maximum', mapping.max, parameter.min, parameter.max, parameter.step, (value) =>
+        update({ max: value }),
+      ),
+      this.range('Smoothing', mapping.smoothing, 0, 0.99, 0.01, (value) =>
+        update({ smoothing: value }),
+      ),
+      this.toggle('Invert', mapping.invert, (value) => update({ invert: value })),
+    );
+    return root;
   }
 
   private colorControl(labelText: string, value: string): HTMLElement {

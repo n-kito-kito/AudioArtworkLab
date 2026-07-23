@@ -6,6 +6,17 @@ export type AudioSource = 'none' | 'volume' | 'bass' | 'mid' | 'treble' | 'beat'
 export type EffectParameterValue = number | boolean | string;
 export type EffectParameterValues = Record<string, EffectParameterValue>;
 
+export interface EffectAudioMapping {
+  source: AudioSource;
+  amount: number;
+  min: number;
+  max: number;
+  smoothing: number;
+  invert: boolean;
+}
+
+export type EffectAudioMappings = Record<string, EffectAudioMapping>;
+
 interface EffectParameterBase {
   key: string;
   label: string;
@@ -52,6 +63,8 @@ export interface Effect {
   audioSource: AudioSource;
   getParameterValues(): EffectParameterValues;
   setParameterValues(values: EffectParameterValues): void;
+  getAudioMappings(): EffectAudioMappings;
+  setAudioMappings(mappings: EffectAudioMappings): void;
   update(audio: AudioParameters, elapsed: number): void;
   resize(width: number, height: number): void;
   dispose(): void;

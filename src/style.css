@@ -2004,6 +2004,35 @@ textarea:focus-visible {
   margin-top: 0;
 }
 
+.effect-parameter-block {
+  padding: 2px 0 12px;
+  border-bottom: 1px solid #414141;
+}
+
+.effect-parameter-block:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.effect-audio-mapping {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 5px;
+  background: #242424;
+}
+
+.effect-audio-mapping h4 {
+  margin: 0 0 8px;
+  color: #888;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.effect-audio-mapping .control-row {
+  margin-top: 8px;
+}
+
 .look-button {
   min-height: 36px;
   border: 1px solid var(--border);

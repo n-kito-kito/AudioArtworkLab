@@ -56,6 +56,8 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
   canvas stack synchronization, and keyboard Arrow Up/Down support on the handle.
 - Added schema-driven Effect controls so number, boolean, color, and select parameters render
   without Effect-specific StudioControls code.
+- Added per-number-parameter Audio Mapping controls for source, amount, min/max, smoothing, and
+  inversion, allowing one Effect to react to multiple audio bands independently.
 - Added automatic migration from legacy percentage-based layer presets to pixel coordinates.
 - Replaced the fluorescent green UI accent with a Figma-like blue selection color.
 - Kept Export PNG as the visually prominent blue primary action.
