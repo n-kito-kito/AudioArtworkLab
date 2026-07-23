@@ -48,6 +48,10 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
   Google Fonts and common system fonts.
 - Retained Custom font as a fallback for exact local font-family names, with availability feedback
   and preset persistence for font source and effect routing.
+- Replaced the long, scroll-dependent effect inspector with a compact Effect Stack and contextual
+  floating settings popover.
+- The effect popover keeps Enabled, Intensity, React to, effect order, and Quick looks together,
+  and supports outside-click, close-button, and Escape dismissal.
 - Added automatic migration from legacy percentage-based layer presets to pixel coordinates.
 - Replaced the fluorescent green UI accent with a Figma-like blue selection color.
 - Kept Export PNG as the visually prominent blue primary action.
@@ -65,8 +69,8 @@ resizable left Source/Layers split, the top toolbar, and the right Design/Effect
 
 - [P1] Visual comparison is unavailable.
   - Evidence: no browser is connected to the execution environment.
-  - Impact: per-layer effect bypass, remote/local font loading, font fallback feedback, and
-    inspector layout cannot be confirmed in a real browser.
+  - Impact: per-layer effect bypass, remote/local font loading, font fallback feedback, effect
+    popover placement and dismissal, and inspector layout cannot be confirmed in a real browser.
   - Fix: capture the deployed application at the reference viewport and compare it with the supplied
     Figma screenshot.
 

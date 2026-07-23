@@ -42,6 +42,8 @@ export class StudioControls {
   private readonly presetInput = document.createElement('input');
   private readonly toolbarActions = document.createElement('div');
   private readonly effectStack = document.createElement('div');
+  private readonly effectPopover = document.createElement('div');
+  private effectPopoverAnchor: HTMLElement | null = null;
   private leftPanelButton: HTMLButtonElement | null = null;
   private rightPanelButton: HTMLButtonElement | null = null;
   private selectedEffect: Effect;
@@ -82,8 +84,15 @@ export class StudioControls {
     this.buildLeftPanel();
     this.buildInspector();
     this.buildChain();
+    this.effectPopover.className = 'effect-popover';
+    this.effectPopover.hidden = true;
+    this.effectPopover.setAttribute('role', 'dialog');
+    this.effectPopover.setAttribute('aria-modal', 'false');
+    this.shell.root.append(this.effectPopover);
     this.shell.root.addEventListener('studio:restore-effect', this.restoreEffect);
     window.addEventListener('resize', this.updatePanelButtons);
+    document.addEventListener('pointerdown', this.dismissEffectPopover);
+    document.addEventListener('keydown', this.closeEffectPopoverOnEscape);
     document.addEventListener('keydown', this.onHistoryShortcut);
     this.presetInput.type = 'file';
     this.presetInput.accept = 'application/json,.json';
@@ -100,11 +109,14 @@ export class StudioControls {
     this.toolbarActions.remove();
     this.shell.root.removeEventListener('studio:restore-effect', this.restoreEffect);
     window.removeEventListener('resize', this.updatePanelButtons);
+    document.removeEventListener('pointerdown', this.dismissEffectPopover);
+    document.removeEventListener('keydown', this.closeEffectPopoverOnEscape);
     document.removeEventListener('keydown', this.onHistoryShortcut);
     window.clearInterval(this.autosaveTimer);
     window.clearInterval(this.historyTimer);
     this.presetInput.removeEventListener('change', this.importPreset);
     this.presetInput.remove();
+    this.effectPopover.remove();
     this.shell.leftTop
       .querySelectorAll('.visual-section:not(.layer-panel):not(.quality-panel)')
       .forEach((element) => element.remove());
@@ -178,6 +190,7 @@ export class StudioControls {
       : !this.shell.root.classList.contains('right-collapsed');
     this.setPanelButtonState(this.leftPanelButton, leftVisible);
     this.setPanelButtonState(this.rightPanelButton, rightVisible);
+    if (!this.effectPopover.hidden) this.positionEffectPopover();
   };
 
   private setPanelButtonState(button: HTMLButtonElement | null, visible: boolean): void {
@@ -266,24 +279,86 @@ export class StudioControls {
         (value) => this.switchArtwork(value),
       ),
     );
-    const header = document.createElement('div');
-    header.className = 'inspector-header';
-    const eyebrow = document.createElement('span');
-    eyebrow.textContent = 'Selected effect';
-    const title = document.createElement('strong');
-    title.textContent = this.selectedEffect.name;
-    header.append(eyebrow, title);
-
     const stack = this.section('Effect stack', 'ph-stack');
     this.effectStack.className = 'effect-stack';
     stack.append(this.effectStack);
     this.renderEffectStack();
+    const hint = document.createElement('p');
+    hint.className = 'effect-stack__hint';
+    hint.textContent = 'Select an effect to adjust its settings.';
+    stack.append(hint);
+    this.shell.effectsPanel.append(artwork, stack);
+  }
 
-    const controls = this.section('Parameters', 'ph-sliders');
-    controls.append(
+  private buildChain(): void {
+    this.shell.chain.replaceChildren();
+    this.renderEffectStack();
+  }
+
+  private renderEffectStack(): void {
+    this.effectStack.replaceChildren();
+    for (const [index, effect] of this.composition.getEffects().entries()) {
+      const node = document.createElement('button');
+      node.type = 'button';
+      node.className = 'effect-stack__item';
+      node.classList.toggle('is-active', effect.enabled);
+      node.classList.toggle('is-selected', effect === this.selectedEffect);
+      const state = document.createElement('i');
+      state.className = 'effect-stack__state';
+      const name = document.createElement('span');
+      name.textContent = effect.name;
+      const status = document.createElement('small');
+      status.textContent = effect.enabled ? 'On' : 'Off';
+      node.append(state, name);
+      node.append(status);
+      node.addEventListener('click', () => {
+        this.shell.root.dispatchEvent(new CustomEvent('studio:effect-selected'));
+        this.selectedEffect = effect;
+        this.renderEffectStack();
+        this.shell.setInspectorTab('effects');
+        this.shell.root.classList.add('right-open');
+        const selectedNode = this.effectStack.children.item(index);
+        if (selectedNode instanceof HTMLElement) this.openEffectPopover(selectedNode);
+      });
+      this.effectStack.append(node);
+    }
+  }
+
+  private restoreEffect = (): void => {
+    this.closeEffectPopover();
+    this.buildInspector();
+  };
+
+  private openEffectPopover(anchor: HTMLElement): void {
+    this.effectPopoverAnchor = anchor;
+    this.effectPopover.replaceChildren();
+    this.effectPopover.setAttribute('aria-label', `${this.selectedEffect.name} settings`);
+
+    const header = document.createElement('div');
+    header.className = 'effect-popover__header';
+    const heading = document.createElement('div');
+    const eyebrow = document.createElement('span');
+    eyebrow.textContent = 'Effect';
+    const title = document.createElement('strong');
+    title.textContent = this.selectedEffect.name;
+    heading.append(eyebrow, title);
+    const close = this.iconButton('ph-x', 'Close effect settings', () =>
+      this.closeEffectPopover(),
+    );
+    close.classList.add('effect-popover__close');
+    header.append(heading, close);
+
+    const parameters = document.createElement('div');
+    parameters.className = 'effect-popover__section';
+    const parameterTitle = document.createElement('h3');
+    parameterTitle.textContent = 'Parameters';
+    parameters.append(
+      parameterTitle,
       this.toggle('Enabled', this.selectedEffect.enabled, (value) => {
         this.selectedEffect.enabled = value;
-        this.buildChain();
+        anchor.classList.toggle('is-active', value);
+        const status = anchor.querySelector('small');
+        if (status) status.textContent = value ? 'On' : 'Off';
       }),
       this.range(
         'Intensity',
@@ -305,16 +380,28 @@ export class StudioControls {
       ),
     );
 
-    const order = this.section('Chain position', 'ph-path');
+    const order = document.createElement('div');
+    order.className = 'effect-popover__section';
+    const orderTitle = document.createElement('h3');
+    orderTitle.textContent = 'Effect order';
     const orderActions = document.createElement('div');
     orderActions.className = 'button-row';
     orderActions.append(
-      this.iconButton('ph-arrow-left', 'Move earlier', () => this.moveSelected(-1)),
-      this.iconButton('ph-arrow-right', 'Move later', () => this.moveSelected(1)),
+      this.iconButton('ph-arrow-up', 'Move earlier', () => {
+        this.moveSelected(-1);
+        this.closeEffectPopover();
+      }),
+      this.iconButton('ph-arrow-down', 'Move later', () => {
+        this.moveSelected(1);
+        this.closeEffectPopover();
+      }),
     );
-    order.append(orderActions);
+    order.append(orderTitle, orderActions);
 
-    const looks = this.section('Quick looks', 'ph-sparkle');
+    const looks = document.createElement('div');
+    looks.className = 'effect-popover__section';
+    const looksTitle = document.createElement('h3');
+    looksTitle.textContent = 'Quick looks';
     const lookGrid = document.createElement('div');
     lookGrid.className = 'look-grid';
     for (const [name, amount, source] of [
@@ -323,54 +410,60 @@ export class StudioControls {
       ['Air', 0.35, 'treble'],
       ['Broken', 0.8, 'beat'],
     ] as const) {
-      const button = this.textButton(name, () => {
-        const max = EFFECT_MAX[this.selectedEffect.name] ?? 1;
-        this.selectedEffect.intensity = amount * max;
-        this.selectedEffect.audioSource = source;
-        this.selectedEffect.enabled = true;
-        this.buildInspector();
-        this.buildChain();
-      });
-      lookGrid.append(button);
+      lookGrid.append(
+        this.textButton(name, () => {
+          const max = EFFECT_MAX[this.selectedEffect.name] ?? 1;
+          this.selectedEffect.intensity = amount * max;
+          this.selectedEffect.audioSource = source;
+          this.selectedEffect.enabled = true;
+          anchor.classList.add('is-active');
+          const status = anchor.querySelector('small');
+          if (status) status.textContent = 'On';
+          this.openEffectPopover(anchor);
+        }),
+      );
     }
-    looks.append(lookGrid);
-    this.shell.effectsPanel.append(artwork, header, stack, controls, order, looks);
+    looks.append(looksTitle, lookGrid);
+
+    this.effectPopover.append(header, parameters, order, looks);
+    this.effectPopover.hidden = false;
+    this.positionEffectPopover();
+    close.focus();
   }
 
-  private buildChain(): void {
-    this.shell.chain.replaceChildren();
-    this.renderEffectStack();
+  private positionEffectPopover(): void {
+    if (!this.effectPopoverAnchor) return;
+    const anchor = this.effectPopoverAnchor.getBoundingClientRect();
+    const width = this.effectPopover.offsetWidth || 300;
+    const height = this.effectPopover.offsetHeight || 460;
+    const gap = 10;
+    const left =
+      anchor.left - width - gap >= 8
+        ? anchor.left - width - gap
+        : Math.min(anchor.right + gap, window.innerWidth - width - 8);
+    const top = Math.min(
+      Math.max(anchor.top - 8, 8),
+      Math.max(window.innerHeight - height - 8, 8),
+    );
+    this.effectPopover.style.left = `${left}px`;
+    this.effectPopover.style.top = `${top}px`;
   }
 
-  private renderEffectStack(): void {
-    this.effectStack.replaceChildren();
-    for (const effect of this.composition.getEffects()) {
-      const node = document.createElement('button');
-      node.type = 'button';
-      node.className = 'effect-stack__item';
-      node.classList.toggle('is-active', effect.enabled);
-      node.classList.toggle('is-selected', effect === this.selectedEffect);
-      const state = document.createElement('i');
-      state.className = 'effect-stack__state';
-      const name = document.createElement('span');
-      name.textContent = effect.name;
-      const status = document.createElement('small');
-      status.textContent = effect.enabled ? 'On' : 'Off';
-      node.append(state, name);
-      node.append(status);
-      node.addEventListener('click', () => {
-        this.shell.root.dispatchEvent(new CustomEvent('studio:effect-selected'));
-        this.selectedEffect = effect;
-        this.buildInspector();
-        this.shell.setInspectorTab('effects');
-        this.shell.root.classList.add('right-open');
-      });
-      this.effectStack.append(node);
-    }
+  private closeEffectPopover(): void {
+    this.effectPopover.hidden = true;
+    this.effectPopoverAnchor = null;
   }
 
-  private restoreEffect = (): void => {
-    this.buildInspector();
+  private dismissEffectPopover = (event: PointerEvent): void => {
+    if (this.effectPopover.hidden) return;
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    if (this.effectPopover.contains(target) || this.effectStack.contains(target)) return;
+    this.closeEffectPopover();
+  };
+
+  private closeEffectPopoverOnEscape = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && !this.effectPopover.hidden) this.closeEffectPopover();
   };
 
   private section(titleText: string, iconClass: string): HTMLElement {
