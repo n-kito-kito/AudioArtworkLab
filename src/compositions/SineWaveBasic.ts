@@ -22,7 +22,7 @@ import { GlassEffect } from '../effects/GlassEffect';
 import { BloomEffect } from '../effects/BloomEffect';
 
 export class SineWaveBasic extends BaseComposition {
-  readonly name = 'SineWaveBasic';
+  readonly name: string = 'SineWaveBasic';
   readonly animated = true;
 
   readonly sineWave = new SineWave();
