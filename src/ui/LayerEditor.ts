@@ -71,8 +71,6 @@ export class LayerEditor {
   private readonly audioEngine: AudioEngine;
   private readonly app: App;
   private readonly surface = document.createElement('div');
-  private readonly backCanvas = document.createElement('canvas');
-  private readonly frontCanvas = document.createElement('canvas');
   private readonly selectionOutline = document.createElement('div');
   private readonly section = document.createElement('section');
   private readonly list = document.createElement('div');
@@ -89,7 +87,7 @@ export class LayerEditor {
     this.shell = shell;
     this.audioEngine = audioEngine;
     this.app = app;
-    this.surface.className = 'layer-surface is-composited';
+    this.surface.className = 'layer-surface';
     this.selectionOutline.className = 'layer-selection-outline';
     this.section.className = 'panel-section visual-section layer-panel';
     this.list.className = 'layer-list';
@@ -99,7 +97,6 @@ export class LayerEditor {
     this.buildPanel();
     this.surface.append(this.selectionOutline);
     this.shell.canvasHost.append(this.surface);
-    this.app.setDesignLayerCanvases([this.backCanvas, this.frontCanvas]);
     this.registerDefaultGenerator();
     this.shell.leftPanel.prepend(this.section);
     this.bindDrag();
@@ -614,7 +611,6 @@ export class LayerEditor {
   private update = (): void => {
     const audio = this.audioEngine.getParameters();
     this.layers.forEach((layer) => this.applyLayer(layer, this.audioValue(audio, layer.reactTo)));
-    this.renderComposite(audio);
     this.frame = requestAnimationFrame(this.update);
   };
 
@@ -661,118 +657,6 @@ export class LayerEditor {
     link.download = `audio-artwork-${Date.now()}.png`;
     link.href = output.toDataURL('image/png');
     link.click();
-  }
-
-  private drawLayer(
-    context: CanvasRenderingContext2D,
-    layer: DesignLayer,
-    size: number,
-    audioValue: number,
-  ): void {
-    const x = (layer.x / 100) * size;
-    const y = (layer.y / 100) * size;
-    const width = (layer.baseWidth / 100) * size;
-    context.save();
-    context.translate(x, y);
-    const { pulse, wobble } = this.getLayerMotion(layer, audioValue);
-    context.rotate(((layer.rotation + wobble) * Math.PI) / 180);
-    context.scale(layer.scale * pulse, layer.scale * pulse);
-    context.globalAlpha = layer.opacity;
-    context.filter = `blur(${layer.blur}px) contrast(${layer.contrast})`;
-    if (layer.kind === 'image' && layer.element instanceof HTMLImageElement) {
-      const image = layer.element;
-      const sourceRatio = image.naturalWidth / Math.max(image.naturalHeight, 1);
-      const targetRatio = width / size;
-      let sourceWidth = image.naturalWidth;
-      let sourceHeight = image.naturalHeight;
-      let sourceX = 0;
-      let sourceY = 0;
-      if (sourceRatio > targetRatio) {
-        sourceWidth = image.naturalHeight * targetRatio;
-        sourceX = (image.naturalWidth - sourceWidth) / 2;
-      } else {
-        sourceHeight = image.naturalWidth / targetRatio;
-        sourceY = (image.naturalHeight - sourceHeight) / 2;
-      }
-      context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, -width / 2, -size / 2, width, size);
-    } else if (layer.kind === 'circle') {
-      context.strokeStyle = layer.color;
-      context.fillStyle = `${layer.color}22`;
-      context.lineWidth = Math.max(size * 0.008, 3);
-      context.beginPath(); context.arc(0, 0, width / 2, 0, Math.PI * 2); context.fill(); context.stroke();
-    } else if (layer.kind === 'wave') {
-      context.strokeStyle = layer.color; context.lineWidth = Math.max(size * 0.003, 2); context.beginPath();
-      for (let index = 0; index <= 100; index++) {
-        const px = -width / 2 + (index / 100) * width;
-        const py = Math.sin((index / 100) * Math.PI * 6) * size * 0.055;
-        if (index === 0) context.moveTo(px, py); else context.lineTo(px, py);
-      }
-      context.stroke();
-    } else if (layer.kind === 'text') {
-      context.fillStyle = layer.color; context.textAlign = 'center'; context.textBaseline = 'middle';
-      context.font = `${layer.fontWeight ?? 800} ${size * 0.075}px ${layer.fontFamily ?? 'Inter'}, sans-serif`;
-      const lines = (layer.text ?? '').split('\n');
-      const lineHeight = size * 0.075 * (layer.lineHeight ?? 1);
-      lines.forEach((line, index) =>
-        context.fillText(line, 0, (index - (lines.length - 1) / 2) * lineHeight),
-      );
-    } else if (layer.kind === 'rectangle') {
-      context.strokeStyle = layer.color;
-      context.lineWidth = Math.max(size * 0.005, 2);
-      context.strokeRect(-width / 2, -width / 3, width, (width * 2) / 3);
-    } else if (layer.kind === 'line') {
-      context.strokeStyle = layer.color;
-      context.lineWidth = Math.max(size * 0.005, 2);
-      context.beginPath();
-      context.moveTo(-width / 2, 0);
-      context.lineTo(width / 2, 0);
-      context.stroke();
-    } else if (layer.kind === 'polygon') {
-      context.strokeStyle = layer.color;
-      context.lineWidth = Math.max(size * 0.005, 2);
-      context.beginPath();
-      for (let index = 0; index < 6; index++) {
-        const angle = -Math.PI / 2 + (index / 6) * Math.PI * 2;
-        const px = Math.cos(angle) * width * 0.45;
-        const py = Math.sin(angle) * width * 0.45;
-        if (index === 0) context.moveTo(px, py);
-        else context.lineTo(px, py);
-      }
-      context.closePath();
-      context.stroke();
-    } else if (layer.kind === 'freehand' && layer.path) {
-      context.strokeStyle = layer.color;
-      context.lineWidth = Math.max(size * 0.004, 2);
-      context.scale(width / 100, width / 100);
-      context.stroke(new Path2D(layer.path));
-    }
-    context.restore();
-  }
-
-  private renderComposite(audio: AudioParameters): void {
-    const size = Math.min(
-      Math.max(Math.round(this.shell.canvasHost.getBoundingClientRect().width * devicePixelRatio), 1),
-      1600,
-    );
-    const canvases = [this.backCanvas, this.frontCanvas];
-    const contexts = canvases.map((canvas) => {
-      if (canvas.width !== size || canvas.height !== size) {
-        canvas.width = size;
-        canvas.height = size;
-      }
-      const context = canvas.getContext('2d');
-      context?.clearRect(0, 0, size, size);
-      return context;
-    });
-    const generatorIndex = this.layers.findIndex((layer) => layer.kind === 'generator');
-    this.layers.forEach((layer, index) => {
-      if (layer.kind === 'generator') return;
-      const context = contexts[index < generatorIndex ? 0 : 1];
-      if (context) {
-        this.drawLayer(context, layer, size, this.audioValue(audio, layer.reactTo));
-      }
-    });
-    this.app.updateDesignLayerCanvases();
   }
 
   private getLayerMotion(
