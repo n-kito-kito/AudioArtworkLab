@@ -6,11 +6,15 @@ import type { Field, FieldUniforms } from '../engine/Field';
  *
  * 平板の定在波が作る節線。音がこの図形を決める（DESIGN.md「4. 音 → パラメータの写像」）。
  *
- *   L2 量子化  音程   → モード (n, m)。音程が変わると図形が別の形へ跳ぶ
+ *   L2 量子化  音程   → モード (n, m)。音程が変わると図形が別の形へ「移行」する
  *   L1 連続    明るさ → 場の細かさ
  *   L1 連続    低域   → 場の歪み
  *              ノイズ性 → 節線の崩れ
  *   L3 ハッシュ シード → 対称性の種類・向き・中心のずれ。音の出来事ごとに引き直される
+ *
+ * 移行はモード A とモード B の場を混ぜながら約 2 秒かける。共振周波数の間では
+ * 複数モードが重なるという実際の板の挙動と一致し、砂が移動していくように見える。
+ * 瞬時に差し替えない（2026-07-24 の調整記録を参照）。
  */
 
 /**
@@ -25,8 +29,14 @@ for (let n = 2; n <= 9; n++) {
 }
 MODES.sort((left, right) => left[0] ** 2 + left[1] ** 2 - (right[0] ** 2 + right[1] ** 2));
 
-/** モードが確定するまでに音程が留まるべき秒数。音程の震えで図形がちらつくのを防ぐ。 */
-const MODE_HOLD = 0.09;
+/** モード候補が確定するまでに音程が留まるべき秒数。音程の震えでの誤発火を防ぐ。 */
+const MODE_HOLD = 0.25;
+/** モード移行にかける秒数。砂が次の図形へ移動していく時間。 */
+const MORPH_DURATION = 2.0;
+/** 移行完了から次の移行を受け付けるまでの秒数。 */
+const MODE_COOLDOWN = 0.8;
+/** 構図（向き・中心・対称性）を引き直す最短間隔。オンセット毎に暴れないための沈静。 */
+const SEED_COOLDOWN = 2.4;
 
 /** フレームレートに依存しない指数追従。 */
 function approach(current: number, target: number, rate: number, delta: number): number {
@@ -48,6 +58,9 @@ export class Cymatics implements Field {
   readonly uniforms: FieldUniforms = {
     uOrderN: { value: MODES[0]![0] },
     uOrderM: { value: MODES[0]![1] },
+    uOrderN2: { value: MODES[0]![0] },
+    uOrderM2: { value: MODES[0]![1] },
+    uMorph: { value: 0 },
     uScale: { value: 0.9 },
     uWarp: { value: 0 },
     uBreak: { value: 0 },
@@ -60,6 +73,9 @@ export class Cymatics implements Field {
   readonly glsl = /* glsl */ `
     uniform float uOrderN;
     uniform float uOrderM;
+    uniform float uOrderN2;
+    uniform float uOrderM2;
+    uniform float uMorph;
     uniform float uScale;
     uniform float uWarp;
     uniform float uBreak;
@@ -67,6 +83,13 @@ export class Cymatics implements Field {
     uniform float uVariant;
     uniform float uOffsetX;
     uniform float uOffsetY;
+
+    float chladni(vec2 q, float n, float m) {
+      float a = cos(n * PI * q.x) * cos(m * PI * q.y);
+      float b = cos(m * PI * q.x) * cos(n * PI * q.y);
+      // 対称性の異なる 2 つのクラドニ形。シードがどちらの世界かを決める。
+      return mix(a - b, a + b, uVariant);
+    }
 
     float field(vec2 p) {
       // L3: 音の出来事が向きと中心を決める。
@@ -87,48 +110,93 @@ export class Cymatics implements Field {
         cos(q.x * 5.3 - q.y * 8.9 - uTime * 1.1)
       ) * uBreak;
 
-      // 対称性の異なる 2 つのクラドニ形。シードがどちらの世界かを決める。
-      float a = cos(uOrderN * PI * q.x) * cos(uOrderM * PI * q.y);
-      float b = cos(uOrderM * PI * q.x) * cos(uOrderN * PI * q.y);
-      return mix(a - b, a + b, uVariant);
+      // L2: 前のモードから次のモードへ、場を混ぜながら移行する。
+      float from = chladni(q, uOrderN, uOrderM);
+      float to = chladni(q, uOrderN2, uOrderM2);
+      return mix(from, to, smoothstep(0.0, 1.0, uMorph));
     }
   `;
 
-  private modeIndex = 0;
+  private fromIndex = 0;
+  private toIndex = 0;
+  private morph = 0;
+  private morphing = false;
+  private lastMorphEnd = -Infinity;
   private pendingIndex = 0;
   private pendingSince = 0;
   private previousElapsed = 0;
   private appliedSeed = -1;
+  private lastSeedTime = -Infinity;
+  private targetRotate = 0;
+  private targetVariant = 0;
+  private targetOffsetX = 0;
+  private targetOffsetY = 0;
 
   update(audio: AudioParameters, elapsed: number): void {
     const delta = Math.min(Math.max(elapsed - this.previousElapsed, 0), 0.1);
     this.previousElapsed = elapsed;
 
-    // L2: 音程をモード番号へ量子化する。跳ぶのは正しい挙動だが、
-    // 音程の細かな震えで図形がちらつかないよう、少し留まってから確定させる。
+    // L2: 音程をモード番号へ量子化する。候補が少し留まってから、移行を開始する。
     const pitch = Math.min(Math.max(audio.pitch ?? 0, 0), 1);
     const candidate = Math.round(pitch * (MODES.length - 1));
     if (candidate !== this.pendingIndex) {
       this.pendingIndex = candidate;
       this.pendingSince = elapsed;
-    } else if (candidate !== this.modeIndex && elapsed - this.pendingSince >= MODE_HOLD) {
-      this.modeIndex = candidate;
+    } else if (
+      !this.morphing &&
+      candidate !== this.toIndex &&
+      elapsed - this.pendingSince >= MODE_HOLD &&
+      elapsed - this.lastMorphEnd >= MODE_COOLDOWN
+    ) {
+      this.fromIndex = this.toIndex;
+      this.toIndex = candidate;
+      this.morph = 0;
+      this.morphing = true;
     }
-    const mode = MODES[this.modeIndex] ?? MODES[0]!;
-    this.uniforms.uOrderN!.value = mode[0];
-    this.uniforms.uOrderM!.value = mode[1];
 
-    // L3: 音の出来事ごとに、対称性・向き・中心を引き直す。
+    if (this.morphing) {
+      this.morph = Math.min(this.morph + delta / MORPH_DURATION, 1);
+      if (this.morph >= 1) {
+        this.morphing = false;
+        this.fromIndex = this.toIndex;
+        this.morph = 0;
+        this.lastMorphEnd = elapsed;
+      }
+    }
+
+    const from = MODES[this.fromIndex] ?? MODES[0]!;
+    const to = MODES[this.toIndex] ?? MODES[0]!;
+    this.uniforms.uOrderN!.value = from[0];
+    this.uniforms.uOrderM!.value = from[1];
+    this.uniforms.uOrderN2!.value = to[0];
+    this.uniforms.uOrderM2!.value = to[1];
+    this.uniforms.uMorph!.value = this.morphing ? this.morph : 0;
+
+    // L3: 音の出来事が構図（対称性・向き・中心）を引き直す。
+    // ただしクールダウンを設け、値へは数秒かけて滑らかに追従する。
     // 同じ音なら同じ構図に、違う音なら予測できない構図になる。
     const seed = audio.seed ?? 0;
-    if (seed !== this.appliedSeed) {
+    if (seed !== this.appliedSeed && elapsed - this.lastSeedTime >= SEED_COOLDOWN) {
       this.appliedSeed = seed;
-      this.uniforms.uVariant!.value = derive(seed, 0) < 0.5 ? 0 : 1;
-      this.uniforms.uRotate!.value = Math.floor(derive(seed, 1) * 4) * (Math.PI / 4)
+      this.lastSeedTime = elapsed;
+      this.targetVariant = derive(seed, 0) < 0.5 ? 0 : 1;
+      this.targetRotate = Math.floor(derive(seed, 1) * 4) * (Math.PI / 4)
         + (derive(seed, 2) - 0.5) * 0.12;
-      this.uniforms.uOffsetX!.value = (derive(seed, 3) - 0.5) * 0.3;
-      this.uniforms.uOffsetY!.value = (derive(seed, 4) - 0.5) * 0.3;
+      this.targetOffsetX = (derive(seed, 3) - 0.5) * 0.3;
+      this.targetOffsetY = (derive(seed, 4) - 0.5) * 0.3;
     }
+    this.uniforms.uRotate!.value = approach(
+      this.uniforms.uRotate!.value as number, this.targetRotate, 0.9, delta,
+    );
+    this.uniforms.uVariant!.value = approach(
+      this.uniforms.uVariant!.value as number, this.targetVariant, 0.7, delta,
+    );
+    this.uniforms.uOffsetX!.value = approach(
+      this.uniforms.uOffsetX!.value as number, this.targetOffsetX, 0.9, delta,
+    );
+    this.uniforms.uOffsetY!.value = approach(
+      this.uniforms.uOffsetY!.value as number, this.targetOffsetY, 0.9, delta,
+    );
 
     // L1: 明るさが場の細かさ、低域が歪み、ノイズ性が崩れを決める。
     this.uniforms.uScale!.value = approach(
