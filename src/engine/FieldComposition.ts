@@ -28,6 +28,8 @@ export class FieldComposition implements Composition {
   private pipeline: EffectPipeline | null = null;
 
   private theme: Theme;
+  private depthAmount = 0;
+  private smoothedBass = 0;
 
   constructor(field: Field, renderer: FieldRenderer, effects: Effect[] = [], theme?: Theme) {
     this.field = field;
@@ -59,6 +61,7 @@ export class FieldComposition implements Composition {
         uThemeDark: { value: new THREE.Vector3(...this.theme.dark) },
         uThemeLight: { value: new THREE.Vector3(...this.theme.light) },
         uThemeAccent: { value: new THREE.Vector3(...this.theme.accent) },
+        uDepthAmount: { value: 0 },
         ...this.field.uniforms,
         ...this.renderer.uniforms,
       },
@@ -86,6 +89,12 @@ export class FieldComposition implements Composition {
     this.material.uniforms.uActive!.value = audio.active === 1 ? 1 : 0;
     this.material.uniforms.uTime!.value = elapsed;
 
+    // L1: 低域が層の分離をわずかに押し広げる。基準量はユーザーが決めた範囲。
+    const bass = Math.min(Math.max(audio.bass ?? 0, 0), 1);
+    this.smoothedBass += (bass - this.smoothedBass) * 0.12;
+    this.material.uniforms.uDepthAmount!.value =
+      this.depthAmount * (0.85 + this.smoothedBass * 0.3);
+
     this.field.update(audio, elapsed);
     this.renderer.update(audio, elapsed);
     this.pipeline?.update(audio, elapsed);
@@ -111,6 +120,15 @@ export class FieldComposition implements Composition {
 
   getTheme(): Theme {
     return this.theme;
+  }
+
+  getDepth(): number {
+    return this.depthAmount;
+  }
+
+  /** 奥行きの量。0 で従来どおりの 1 層になる。実際の分離量は低域が揺らす。 */
+  setDepth(amount: number): void {
+    this.depthAmount = Math.min(Math.max(amount, 0), 1);
   }
 
   /** テーマは uniform の差し替えだけで反映される（再コンパイル不要）。 */

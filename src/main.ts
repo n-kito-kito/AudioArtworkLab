@@ -41,18 +41,24 @@ const setRenderer = (name: string): FieldComposition => {
   // Effect の設定とテーマは表現をまたいで保つ。
   const effects = createEffects();
   transferEffectState(composition.getEffects(), effects);
+  const depth = composition.getDepth();
   composition = new FieldComposition(
     new Cymatics(),
     createRenderer(name),
     effects,
     composition.getTheme(),
   );
+  composition.setDepth(depth);
   app.setComposition(composition);
   return composition;
 };
 
 const setTheme = (name: string): void => {
   composition.setTheme(findTheme(name));
+};
+
+const setDepth = (amount: number): void => {
+  composition.setDepth(amount);
 };
 const audioControls = new AudioControls(shell.leftTop, audioEngine);
 const recordingController = new RecordingController(shell, audioEngine);
@@ -61,6 +67,7 @@ const labControls = new LabControls(
   composition,
   setRenderer,
   setTheme,
+  setDepth,
   () => app.exportPng(),
   () => recordingController.toggle(),
 );

@@ -36,8 +36,8 @@ export class LightWave implements FieldRenderer {
     vec3 render(vec2 p) {
       float v = field(p);
 
-      // 節線（v = 0）の近くに光が溜まる。
-      float glow = exp(-abs(v) * uGlow);
+      // 節線（v = 0）の近くに光が溜まる。奥の層ほど焦点が外れて柔らかい。
+      float glow = exp(-abs(v) * uGlow * (1.0 - gDepth * 0.4));
 
       // 場の等高線に沿って光の波がゆっくり流れる。
       float bands = 0.5 + 0.5 * cos(v * uBand * PI - uTime * 1.2);

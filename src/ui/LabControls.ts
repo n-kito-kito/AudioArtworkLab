@@ -27,6 +27,7 @@ export class LabControls {
   private composition: FieldComposition;
   private readonly onRendererChange: (name: string) => FieldComposition;
   private readonly onThemeChange: (name: string) => void;
+  private readonly onDepthChange: (amount: number) => void;
   private readonly exportPng: () => void;
   private readonly recordToggle: () => boolean;
   private readonly toolbarActions = document.createElement('div');
@@ -41,6 +42,7 @@ export class LabControls {
     composition: FieldComposition,
     onRendererChange: (name: string) => FieldComposition,
     onThemeChange: (name: string) => void,
+    onDepthChange: (amount: number) => void,
     exportPng: () => void,
     recordToggle: () => boolean,
   ) {
@@ -48,6 +50,7 @@ export class LabControls {
     this.composition = composition;
     this.onRendererChange = onRendererChange;
     this.onThemeChange = onThemeChange;
+    this.onDepthChange = onDepthChange;
     this.exportPng = exportPng;
     this.recordToggle = recordToggle;
     this.selectedEffectName = composition.getEffects()[0]?.name ?? '';
@@ -138,7 +141,11 @@ export class LabControls {
     themeSelect.addEventListener('change', () => this.onThemeChange(themeSelect.value));
     theme.append(themeName, themeSelect);
 
-    this.compositionSection.append(field, renderer, theme);
+    const depth = this.range('Depth', this.composition.getDepth(), 0, 1, 0.01, (value) =>
+      this.onDepthChange(value),
+    );
+
+    this.compositionSection.append(field, renderer, theme, depth);
   }
 
   private renderEffectStack(): void {

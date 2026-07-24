@@ -44,7 +44,8 @@ export class MinimalShape implements FieldRenderer {
       vec2 gradient = vec2(dFdx(v), dFdy(v));
       float distance = abs(v) / max(length(gradient), 1e-5);
 
-      float width = max(uLineWidth, 0.01);
+      // 奥の層ほど線が太く滲み（焦点が外れる)、砂は薄く沈む。
+      float width = max(uLineWidth, 0.01) * (1.0 + gDepth * 2.2);
 
       // 実物の板の砂と同じ積もり方にする:
       // 節線の芯に密に積もり、周辺に粒がまばらに散る。
@@ -60,7 +61,8 @@ export class MinimalShape implements FieldRenderer {
       // 粒だけだと芯が痩せるため、節線そのものの淡い連続光を下に敷く。
       float bed = core * core * 0.30;
 
-      return vec3((sand * 0.78 + bed) * clamp(uInk, 0.0, 1.0));
+      float focus = 1.0 - gDepth * 0.35;
+      return vec3((sand * 0.78 + bed) * clamp(uInk, 0.0, 1.0) * focus);
     }
   `;
 
