@@ -38,7 +38,11 @@ const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 
 const setRenderer = (name: string): FieldComposition => {
-  // Effect の設定とテーマは表現をまたいで保つ。
+  const from = composition.getRenderer();
+  if (from.name === name) return composition;
+
+  // Effect の設定とテーマ・奥行きは表現をまたいで保つ。
+  // 前の Renderer を渡すことで、切り替えはリニアトランジションになる。
   const effects = createEffects();
   transferEffectState(composition.getEffects(), effects);
   const depth = composition.getDepth();
@@ -47,6 +51,7 @@ const setRenderer = (name: string): FieldComposition => {
     createRenderer(name),
     effects,
     composition.getTheme(),
+    from,
   );
   composition.setDepth(depth);
   app.setComposition(composition);

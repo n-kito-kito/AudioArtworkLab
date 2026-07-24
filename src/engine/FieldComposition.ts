@@ -30,12 +30,25 @@ export class FieldComposition implements Composition {
   private theme: Theme;
   private depthAmount = 0;
   private smoothedBass = 0;
+  private readonly transitionFrom: FieldRenderer | null;
+  private transitionMix = 0;
+  private previousElapsed = -1;
 
-  constructor(field: Field, renderer: FieldRenderer, effects: Effect[] = [], theme?: Theme) {
+  /** リニアトランジションの長さ（秒）。前の表現から新しい表現へ混ざりきるまで。 */
+  private static readonly TRANSITION_DURATION = 1.6;
+
+  constructor(
+    field: Field,
+    renderer: FieldRenderer,
+    effects: Effect[] = [],
+    theme?: Theme,
+    transitionFrom?: FieldRenderer,
+  ) {
     this.field = field;
     this.renderer = renderer;
     this.effects = effects;
     this.theme = theme ?? THEMES[0]!;
+    this.transitionFrom = transitionFrom ?? null;
   }
 
   get name(): string {
@@ -62,11 +75,13 @@ export class FieldComposition implements Composition {
         uThemeLight: { value: new THREE.Vector3(...this.theme.light) },
         uThemeAccent: { value: new THREE.Vector3(...this.theme.accent) },
         uDepthAmount: { value: 0 },
+        uRendererMix: { value: this.transitionFrom ? 0 : 1 },
         ...this.field.uniforms,
         ...this.renderer.uniforms,
+        ...(this.transitionFrom?.uniforms ?? {}),
       },
       vertexShader,
-      fragmentShader: composeFragmentShader(this.field, this.renderer),
+      fragmentShader: composeFragmentShader(this.field, this.renderer, this.transitionFrom ?? undefined),
     });
 
     this.geometry = new THREE.PlaneGeometry(2, 2);
@@ -95,6 +110,22 @@ export class FieldComposition implements Composition {
     this.material.uniforms.uDepthAmount!.value =
       this.depthAmount * (0.85 + this.smoothedBass * 0.3);
 
+    // リニアトランジション: 前の表現から新しい表現へ一定速度で混ざる。
+    // 初回フレームは基準時刻がないため進めない。
+    const delta =
+      this.previousElapsed < 0
+        ? 0
+        : Math.min(Math.max(elapsed - this.previousElapsed, 0), 0.1);
+    this.previousElapsed = elapsed;
+    if (this.transitionFrom && this.transitionMix < 1) {
+      this.transitionMix = Math.min(
+        this.transitionMix + delta / FieldComposition.TRANSITION_DURATION,
+        1,
+      );
+      this.material.uniforms.uRendererMix!.value = this.transitionMix;
+      this.transitionFrom.update(audio, elapsed);
+    }
+
     this.field.update(audio, elapsed);
     this.renderer.update(audio, elapsed);
     this.pipeline?.update(audio, elapsed);
@@ -116,6 +147,10 @@ export class FieldComposition implements Composition {
 
   moveEffect(effect: Effect, direction: -1 | 1): void {
     this.pipeline?.move(effect, direction);
+  }
+
+  getRenderer(): FieldRenderer {
+    return this.renderer;
   }
 
   getTheme(): Theme {
@@ -158,6 +193,7 @@ export class FieldComposition implements Composition {
     this.material?.dispose();
     this.field.dispose();
     this.renderer.dispose();
+    this.transitionFrom?.dispose();
 
     this.pipeline = null;
     this.geometry = null;

@@ -10,6 +10,7 @@ export const RESERVED_UNIFORMS = [
   'uThemeLight',
   'uThemeAccent',
   'uDepthAmount',
+  'uRendererMix',
 ] as const;
 
 const FIELD_SIGNATURE = /float\s+field\s*\(/;
@@ -23,35 +24,73 @@ export const vertexShader = /* glsl */ `
   }
 `;
 
+function assertNoCollision(
+  left: { name: string; uniforms: Record<string, unknown> },
+  right: { name: string; uniforms: Record<string, unknown> },
+): void {
+  for (const name of Object.keys(left.uniforms)) {
+    if (name in right.uniforms) {
+      throw new Error(`Uniform ${name} is declared by both "${left.name}" and "${right.name}"`);
+    }
+  }
+}
+
 /**
  * Field の GLSL と Renderer の GLSL を 1 本のフラグメントシェーダーへ合成する。
  *
+ * transitionFrom を渡すと前の Renderer も同じシェーダーに含まれ、
+ * uRendererMix (0..1) で 2 つの表現をクロスフェードできる（リニアトランジション）。
+ *
  * 音が鳴っていないとき（uActive < 0.5）は何も生成しない。黒画面が正しい挙動。
  */
-export function composeFragmentShader(field: Field, renderer: FieldRenderer): string {
+export function composeFragmentShader(
+  field: Field,
+  renderer: FieldRenderer,
+  transitionFrom?: FieldRenderer,
+): string {
   if (!FIELD_SIGNATURE.test(field.glsl)) {
     throw new Error(`Field "${field.name}" must define float field(vec2 p)`);
   }
   if (!RENDER_SIGNATURE.test(renderer.glsl)) {
     throw new Error(`Renderer "${renderer.name}" must define vec3 render(vec2 p)`);
   }
-
-  for (const name of RESERVED_UNIFORMS) {
-    if (name in field.uniforms) {
-      throw new Error(`Field "${field.name}" must not declare the reserved uniform ${name}`);
-    }
-    if (name in renderer.uniforms) {
-      throw new Error(`Renderer "${renderer.name}" must not declare the reserved uniform ${name}`);
-    }
+  if (transitionFrom && !RENDER_SIGNATURE.test(transitionFrom.glsl)) {
+    throw new Error(`Renderer "${transitionFrom.name}" must define vec3 render(vec2 p)`);
   }
 
-  for (const name of Object.keys(field.uniforms)) {
-    if (name in renderer.uniforms) {
-      throw new Error(
-        `Uniform ${name} is declared by both field "${field.name}" and renderer "${renderer.name}"`,
-      );
+  const parts = transitionFrom ? [field, renderer, transitionFrom] : [field, renderer];
+  for (const part of parts) {
+    for (const name of RESERVED_UNIFORMS) {
+      if (name in part.uniforms) {
+        throw new Error(`"${part.name}" must not declare the reserved uniform ${name}`);
+      }
     }
   }
+  assertNoCollision(field, renderer);
+  if (transitionFrom) {
+    assertNoCollision(field, transitionFrom);
+    assertNoCollision(transitionFrom, renderer);
+  }
+
+  // 表現の描画部。トランジション中は前後 2 つの Renderer を混ぜる。
+  const shapeSource = transitionFrom
+    ? /* glsl */ `
+      ${transitionFrom.glsl.replace(RENDER_SIGNATURE, 'vec3 renderFrom(')}
+
+      ${renderer.glsl.replace(RENDER_SIGNATURE, 'vec3 renderTo(')}
+
+      vec3 drawShape(vec2 q) {
+        float mixAmount = clamp(uRendererMix, 0.0, 1.0);
+        return mix(sanitize(renderFrom(q)), sanitize(renderTo(q)), mixAmount);
+      }
+    `
+    : /* glsl */ `
+      ${renderer.glsl}
+
+      vec3 drawShape(vec2 q) {
+        return sanitize(render(q));
+      }
+    `;
 
   return /* glsl */ `
     precision highp float;
@@ -65,6 +104,7 @@ export function composeFragmentShader(field: Field, renderer: FieldRenderer): st
     uniform vec3 uThemeLight;
     uniform vec3 uThemeAccent;
     uniform float uDepthAmount;
+    uniform float uRendererMix;
 
     const float PI = 3.141592653589793;
 
@@ -84,7 +124,7 @@ export function composeFragmentShader(field: Field, renderer: FieldRenderer): st
 
     ${field.glsl}
 
-    ${renderer.glsl}
+    ${shapeSource}
 
     void main() {
       if (uActive < 0.5) {
@@ -110,7 +150,7 @@ export function composeFragmentShader(field: Field, renderer: FieldRenderer): st
           cos(uTime * (0.04 + fi * 0.017) - fi * 1.7)
         ) * 0.1 * separation * fi;
         vec2 q = p * (1.0 + separation * fi * 0.5) + drift;
-        vec3 layer = sanitize(render(q)) * weight;
+        vec3 layer = drawShape(q) * weight;
         // スクリーン合成。手前の光が奥を飛ばさず、重なりが自然に明るくなる。
         shape = 1.0 - (1.0 - shape) * (1.0 - layer);
       }
