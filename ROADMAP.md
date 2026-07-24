@@ -158,7 +158,7 @@ Spotify と Apple Music は、認証、DRM、音声解析の可否、利用規�
 Effect チェーン（③）と Audio、Core は流用する。
 
 - [x] `engine/` — Field × Renderer のシェーダー合成
-- [ ] 音声解析の追加（dominant frequency / spectral centroid / flatness / onset / sustain）
+- [x] 音声解析の追加（dominant frequency / spectral centroid / flatness / onset / sustain）
 - [ ] Field: Cymatics へ L1・L2 写像を接続する
 - [ ] Renderer: ミニマルな図形の閾値を音へ接続する
 - [ ] L3 ハッシュ写像（音のスペクトル形状をシードにする）
