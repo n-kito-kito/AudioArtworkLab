@@ -4,7 +4,7 @@ import { REFERENCE_AUDIO_NAME, REFERENCE_AUDIO_URL } from './audio/referenceAudi
 import { App } from './core/App';
 import { Cymatics } from './fields/Cymatics';
 import { FieldComposition } from './engine/FieldComposition';
-import { MinimalShape } from './renderers/MinimalShape';
+import { RENDERERS, createRenderer } from './renderers/catalog';
 import { AudioControls } from './ui/AudioControls';
 import { StudioShell } from './ui/StudioShell';
 
@@ -20,9 +20,22 @@ if (!container) {
 }
 
 const audioEngine = new FileAudioEngine();
-const composition = new FieldComposition(new Cymatics(), new MinimalShape());
+
+// Renderer の選択 UI ができるまでは、URL の ?renderer= で表現を切り替えられる。
+// 例: http://localhost:5173/?renderer=Light%20wave
+const rendererParam = new URLSearchParams(location.search).get('renderer');
+let composition = new FieldComposition(
+  new Cymatics(),
+  createRenderer(rendererParam ?? RENDERERS[0]!.name),
+);
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
+
+const setRenderer = (name: string): FieldComposition => {
+  composition = new FieldComposition(new Cymatics(), createRenderer(name));
+  app.setComposition(composition);
+  return composition;
+};
 const audioControls = new AudioControls(shell.leftTop, audioEngine);
 let disposed = false;
 
@@ -41,7 +54,14 @@ const dispose = (): void => {
 // 開発時のみ。音がないと何も描かれない仕様のため、
 // 解析値を差し替えて描画を確認できるようにしておく。本番ビルドには含まれない。
 if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__lab = { app, composition, audioEngine };
+  (window as unknown as Record<string, unknown>).__lab = {
+    app,
+    audioEngine,
+    setRenderer,
+    get composition() {
+      return composition;
+    },
+  };
 }
 
 window.addEventListener('beforeunload', dispose, { once: true });
