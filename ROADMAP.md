@@ -163,12 +163,12 @@ Effect チェーン（③）と Audio、Core は流用する。
 - [x] Renderer: ミニマルな図形の閾値を音へ接続する
 - [x] L3 ハッシュ写像（音のスペクトル形状をシードにする）
 - [x] Renderer: 光と波 / グラフ
-- [ ] 既存 Effect チェーンを接続する
+- [x] 既存 Effect チェーンを接続する（LabControls: Field / Renderer 選択・スキーマ駆動 Effect UI・録画・品質モニター再接続)
 - [ ] VHS 統合 Effect / 色テーマの横断化
 - [ ] 奥行き → トランジション
 
-再構築中は Field / Renderer の選択 UI ができるまで、StudioControls・LayerEditor・
-RecordingController・QualityMonitor を接続しない。LayerEditor は D1 により温存する。
+再構築後の UI は LabControls に集約した。旧 StudioControls・LayerEditor は D1 により未接続のまま温存し、
+RecordingController・QualityMonitor は再接続済み。
 
 ## 共通の完了条件
 

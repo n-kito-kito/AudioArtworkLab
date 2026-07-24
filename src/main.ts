@@ -7,6 +7,9 @@ import { FieldComposition } from './engine/FieldComposition';
 import { createEffects, transferEffectState } from './effects/catalog';
 import { RENDERERS, createRenderer } from './renderers/catalog';
 import { AudioControls } from './ui/AudioControls';
+import { LabControls } from './ui/LabControls';
+import { QualityMonitor } from './ui/QualityMonitor';
+import { RecordingController } from './ui/RecordingController';
 import { StudioShell } from './ui/StudioShell';
 
 // 再構築中（DESIGN.md 実装順序）。
@@ -42,6 +45,15 @@ const setRenderer = (name: string): FieldComposition => {
   return composition;
 };
 const audioControls = new AudioControls(shell.leftTop, audioEngine);
+const recordingController = new RecordingController(shell, audioEngine);
+const labControls = new LabControls(
+  shell,
+  composition,
+  setRenderer,
+  () => app.exportPng(),
+  () => recordingController.toggle(),
+);
+const qualityMonitor = new QualityMonitor(shell, app, () => composition.getEffects());
 let disposed = false;
 
 // 確認用音源を既定で読み込む。無ければ何もしない（起動は妨げない）。
@@ -52,6 +64,9 @@ const dispose = (): void => {
   if (disposed) return;
   disposed = true;
   audioControls.dispose();
+  recordingController.dispose();
+  qualityMonitor.dispose();
+  labControls.dispose();
   app.dispose();
   shell.dispose();
 };

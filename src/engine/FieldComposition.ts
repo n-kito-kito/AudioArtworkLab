@@ -98,6 +98,10 @@ export class FieldComposition implements Composition {
     return this.effects;
   }
 
+  moveEffect(effect: Effect, direction: -1 | 1): void {
+    this.pipeline?.move(effect, direction);
+  }
+
   setGeneratorsVisible(): void {
     // 生成レイヤーの表示切り替えは Field / Renderer の選択に置き換わるため何もしない。
   }
