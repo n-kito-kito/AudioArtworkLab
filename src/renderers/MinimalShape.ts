@@ -32,6 +32,10 @@ export class MinimalShape implements FieldRenderer {
     uniform float uThreshold;
     uniform float uInk;
 
+    float sandHash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
+
     vec3 render(vec2 p) {
       float v = field(p) - uThreshold;
 
@@ -40,8 +44,23 @@ export class MinimalShape implements FieldRenderer {
       vec2 gradient = vec2(dFdx(v), dFdy(v));
       float distance = abs(v) / max(length(gradient), 1e-5);
 
-      float line = 1.0 - smoothstep(0.0, max(uLineWidth, 0.01), distance);
-      return vec3(line * clamp(uInk, 0.0, 1.0));
+      float width = max(uLineWidth, 0.01);
+
+      // 実物の板の砂と同じ積もり方にする:
+      // 節線の芯に密に積もり、周辺に粒がまばらに散る。
+      float core = 1.0 - smoothstep(0.0, width, distance);
+      float halo = 1.0 - smoothstep(0.0, width * 7.0, distance);
+      float density = core * 0.92 + halo * 0.16;
+
+      // 画素ごとの確率で粒を落とす。板は振動しているので、粒はゆっくり入れ替わる。
+      vec2 cell = floor(gl_FragCoord.xy / 1.5);
+      float grain = sandHash(cell + floor(uTime * 2.5) * 0.37);
+      float sand = step(1.0 - density, grain);
+
+      // 粒だけだと芯が痩せるため、節線そのものの淡い連続光を下に敷く。
+      float bed = core * core * 0.30;
+
+      return vec3((sand * 0.78 + bed) * clamp(uInk, 0.0, 1.0));
     }
   `;
 
