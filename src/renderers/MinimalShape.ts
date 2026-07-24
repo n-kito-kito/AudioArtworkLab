@@ -3,19 +3,28 @@ import type { FieldUniforms } from '../engine/Field';
 import type { FieldRenderer } from '../engine/FieldRenderer';
 
 /**
- * ミニマルな図形。場のゼロ交差（節線）に砂が積もった様子を描く。
+ * ミニマルな図形。境界を「線」ではなく「粒子の密度」で描く。
  *
- * 場の傾きで距離を正規化するため、どこでも線幅が一定になる。
- * これにより CPU でジオメトリを作らずに細く均一な線が引ける。
+ * 美しさは模様ではなく境界に宿る、という観察に沿った実装。
+ * 場のゼロ交差までの符号付き距離（SDF）を求め、それをノイズで歪めてから
+ * 密度分布に変換する。粒子はその密度を確率として撒かれるため、
+ * 輪郭は一本線ではなく、密度の高い帯として浮かび上がる。
  *
- * 砂は「撒く」のではなく高さのある堆積として扱う。高さ場から法線を作り
- * 斜めからの光で陰影をつけるため、カメラを動かさずに立体として見える。
- * 粒は 1 画素以下まで細かく、粒ごとに明るさがばらつき、一部が強く光る。
+ *   一本線     ────────        ではなく
+ *   密度の帯   ░░░██████░░░    になる
  *
- * 音との対応（DESIGN.md「4. 音 → パラメータの写像」）:
- *   L1  音量 → 堆積の幅。大きな音ほど砂が太く溜まる
- *       持続 → 濃さ。鳴り続けるほど濃くなり、止むと褪せる
- *       高域 → 粒の細かさと輝き
+ * 守っている制約:
+ *   - 画面の 9 割は黒。明るいのは 1 割程度
+ *   - 境界はくっきりさせない。必ずぼそぼそ・ざらざらさせる
+ *   - 粒子は完全停止しない。常に微細に揺れる
+ *   - 強い発光や飛び散る粒子を作らない
+ *
+ * 音は形ではなく状態を変える（DESIGN.md「4. 音 → パラメータの写像」）:
+ *   低域   → 境界が太くなる
+ *   ビート → 粒子密度が上がる（一瞬だけ）
+ *   高域   → 細かな模様が増える
+ *   音量   → 全体が膨張する
+ *   持続   → 濃さ
  */
 
 /** フレームレートに依存しない指数追従。 */
@@ -27,73 +36,93 @@ export class MinimalShape implements FieldRenderer {
   readonly name = 'Minimal shape';
 
   readonly uniforms: FieldUniforms = {
-    uLineWidth: { value: 1.2 },
-    uThreshold: { value: 0 },
-    uInk: { value: 0.85 },
+    uBand: { value: 1.6 },
+    uEdgeNoise: { value: 0.85 },
+    uDetail: { value: 4 },
+    uDensity: { value: 0.8 },
+    uSpread: { value: 1 },
     uGrainSize: { value: 0.8 },
-    uRelief: { value: 26 },
-    uSheen: { value: 1.6 },
+    uInk: { value: 0.85 },
   };
 
   readonly glsl = /* glsl */ `
-    uniform float uLineWidth;
-    uniform float uThreshold;
-    uniform float uInk;
+    uniform float uBand;
+    uniform float uEdgeNoise;
+    uniform float uDetail;
+    uniform float uDensity;
+    uniform float uSpread;
     uniform float uGrainSize;
-    uniform float uRelief;
-    uniform float uSheen;
+    uniform float uInk;
 
-    float sandHash(vec2 p) {
+    float shapeHash(vec2 p) {
       return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
     }
 
+    float valueNoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(
+        mix(shapeHash(i), shapeHash(i + vec2(1.0, 0.0)), f.x),
+        mix(shapeHash(i + vec2(0.0, 1.0)), shapeHash(i + vec2(1.0, 1.0)), f.x),
+        f.y
+      );
+    }
+
+    float fbm(vec2 p) {
+      float sum = 0.0;
+      float amplitude = 0.58;
+      for (int i = 0; i < 3; i++) {
+        sum += amplitude * valueNoise(p);
+        p *= 2.07;
+        amplitude *= 0.5;
+      }
+      return sum;
+    }
+
     vec3 render(vec2 p) {
-      float v = field(p) - uThreshold;
+      float v = field(p);
 
-      // 場の勾配で割ることでゼロ集合までの近似距離になる。
-      // 勾配が消える点で発散しないよう下限を設ける。
+      // 場の勾配で割ると、節線までの近似距離（画素単位）になる。
       vec2 gradient = vec2(dFdx(v), dFdy(v));
-      float distance = abs(v) / max(length(gradient), 1e-5);
+      float signedDistance = abs(v) / max(length(gradient), 1e-5);
 
-      // 奥の層ほど堆積が広がって滲む（焦点が外れる）。
-      float width = max(uLineWidth, 0.01) * (1.0 + gDepth * 2.2);
+      float band = max(uBand, 0.6) * (1.0 + gDepth * 2.0);
 
-      // 砂山の高さ。節線で最も高く、裾を引いて外へ落ちる。
-      float ridge = exp(-distance / max(width, 0.35));
-      float skirt = exp(-distance / max(width * 6.0, 1.5)) * 0.28;
-      float height = clamp(ridge + skirt, 0.0, 1.0);
+      // 境界をノイズで歪める。ここが要。
+      // くっきりした縁をやめ、ぼそぼそと崩れた輪郭にする。
+      float edge = fbm(p * uDetail + vec2(0.0, uTime * 0.025));
+      float ragged = max(signedDistance + (edge - 0.5) * uEdgeNoise * band * 2.2, 0.0);
 
-      // 高さ場から法線を作り、斜めからの光で陰影をつける。
-      // これがカメラを固定したまま立体に見せている部分。
-      float relief = uRelief * (1.0 - gDepth * 0.45);
-      vec3 normal = normalize(vec3(-dFdx(height) * relief, -dFdy(height) * relief, 1.0));
-      vec3 lightDir = normalize(vec3(-0.42, 0.55, 0.72));
-      float diffuse = max(dot(normal, lightDir), 0.0);
-      float specular = pow(max(dot(reflect(-lightDir, normal), vec3(0.0, 0.0, 1.0)), 0.0), 30.0);
+      // 密度分布。芯はほぼ埋まった帯にし、その外側をざらついた裾にする。
+      //   ░░░██████░░░   芯が密、外周が粒
+      float core = 1.0 - smoothstep(band * 0.3, band * 1.15, ragged);
+      float fringe = exp(-max(ragged - band, 0.0) / (band * 2.4 * max(uSpread, 0.2))) * 0.5;
+      float density = (core * 0.98 + fringe) * uDensity;
 
-      // 粒。セルを 1 画素以下まで小さくして細かい砂にする。
-      // 板は振動しているので、粒はゆっくり入れ替わる。
-      vec2 cell = floor(gl_FragCoord.xy / max(uGrainSize, 0.35));
-      float shuffle = floor(uTime * 2.0) * 0.37;
-      float g1 = sandHash(cell + shuffle);
-      float g2 = sandHash(cell * 1.93 + shuffle + 11.7);
+      // 帯に沿った密度のむら。均一な帯にせず、濃淡を作る。
+      density *= 0.62 + 0.62 * fbm(p * uDetail * 2.3 + 17.0);
+      density = clamp(density, 0.0, 1.0);
 
-      // 高いところほど粒が密に載る。
-      float coverage = smoothstep(0.015, 0.8, height);
-      float sand = step(1.0 - coverage, g1);
+      // 粒子。常に微細に揺れ、完全には停止しない。
+      vec2 cell = gl_FragCoord.xy / max(uGrainSize, 0.35);
+      vec2 tremor = vec2(sin(uTime * 0.9), cos(uTime * 1.13)) * 0.4;
+      float grain = shapeHash(floor(cell + tremor) + floor(uTime * 3.0) * 0.13);
+      float shade = shapeHash(floor(cell) * 1.7 + 3.3);
 
-      // 粒ごとの明るさのばらつきと、一部の粒が強く光る反射。
-      float facet = 0.5 + 0.5 * g2;
-      float sparkle = step(0.94, g2) * specular * uSheen;
+      // 密度を確率として粒を撒く。粒ごとに明るさが違い、半透明に見える。
+      float particle = step(1.0 - density, grain) * (0.28 + 0.72 * shade);
 
-      float lit = 0.16 + diffuse * 0.98;
-      float grains = sand * facet * lit + sparkle;
+      // 粒だけだと遠目に消えるため、芯にごく淡い連続成分を敷く。
+      float bed = core * core * 0.09;
 
-      // 粒だけだと芯が痩せるため、堆積そのものの陰影を下に敷く。
-      float bed = ridge * ridge * 0.24 * lit;
+      // 密度の起伏から弱い陰影をつける。発光ではなく、ざらつきの立体感。
+      float relief = 14.0 * (1.0 - gDepth * 0.5);
+      vec3 normal = normalize(vec3(-dFdx(core) * relief, -dFdy(core) * relief, 1.0));
+      float lit = 0.58 + 0.42 * max(dot(normal, normalize(vec3(-0.4, 0.55, 0.73))), 0.0);
 
-      float focus = 1.0 - gDepth * 0.35;
-      return vec3(clamp((grains + bed) * clamp(uInk, 0.0, 1.0) * focus, 0.0, 1.0));
+      float focus = 1.0 - gDepth * 0.3;
+      return vec3(clamp((particle + bed) * lit * clamp(uInk, 0.0, 1.0) * focus, 0.0, 1.0));
     }
   `;
 
@@ -103,44 +132,53 @@ export class MinimalShape implements FieldRenderer {
     const delta = Math.min(Math.max(elapsed - this.previousElapsed, 0), 0.1);
     this.previousElapsed = elapsed;
 
-    // L1: 音量が線の太さを決める。無音に近いほど糸のように細くなる。
-    const volume = Math.min(Math.max(audio.volume ?? 0, 0), 1);
-    this.uniforms.uLineWidth!.value = approach(
-      this.uniforms.uLineWidth!.value as number,
-      0.5 + volume * 2.6,
-      7,
+    const clamp01 = (value: number | undefined): number =>
+      Math.min(Math.max(value ?? 0, 0), 1);
+
+    // 低域: 境界が太くなる。
+    this.uniforms.uBand!.value = approach(
+      this.uniforms.uBand!.value as number,
+      0.7 + clamp01(audio.bass) * 1.5,
+      5,
       delta,
     );
 
-    // 持続: 鳴り続けるほど濃く、止むと褪せる。
-    const sustain = Math.min(Math.max(audio.sustain ?? 0, 0), 1);
-    this.uniforms.uInk!.value = approach(
-      this.uniforms.uInk!.value as number,
-      0.45 + sustain * 0.55,
+    // ビート: 粒子密度が一瞬だけ上がる。beat 自体が減衰するので追従は速くてよい。
+    this.uniforms.uDensity!.value = approach(
+      this.uniforms.uDensity!.value as number,
+      0.88 + clamp01(audio.beat) * 0.12,
+      12,
+      delta,
+    );
+
+    // 高域: 細かな模様が増える。
+    const treble = clamp01(audio.treble);
+    this.uniforms.uDetail!.value = approach(
+      this.uniforms.uDetail!.value as number,
+      2.6 + treble * 7.5,
       3,
       delta,
     );
-
-    // 高域: 明るい音ほど粒が細かくなり、反射が強くなる。
-    const treble = Math.min(Math.max(audio.treble ?? 0, 0), 1);
     this.uniforms.uGrainSize!.value = approach(
       this.uniforms.uGrainSize!.value as number,
       1.0 - treble * 0.45,
       4,
       delta,
     );
-    this.uniforms.uSheen!.value = approach(
-      this.uniforms.uSheen!.value as number,
-      1.1 + treble * 1.6,
-      4,
+
+    // 音量: 全体が膨張する。
+    this.uniforms.uSpread!.value = approach(
+      this.uniforms.uSpread!.value as number,
+      0.7 + clamp01(audio.volume) * 1.5,
+      5,
       delta,
     );
 
-    // 起伏の強さは音量に従う。静かなときは平坦に、大きな音で立ち上がる。
-    this.uniforms.uRelief!.value = approach(
-      this.uniforms.uRelief!.value as number,
-      16 + volume * 26,
-      5,
+    // 持続: 鳴り続けるほど濃く、止むと褪せる。
+    this.uniforms.uInk!.value = approach(
+      this.uniforms.uInk!.value as number,
+      0.5 + clamp01(audio.sustain) * 0.5,
+      3,
       delta,
     );
   }
