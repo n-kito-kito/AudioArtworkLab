@@ -2,7 +2,14 @@ import type { Field } from './Field';
 import type { FieldRenderer } from './FieldRenderer';
 
 /** エンジンが必ず供給する uniform。Field と Renderer は同名を宣言できない。 */
-export const RESERVED_UNIFORMS = ['uResolution', 'uTime', 'uActive'] as const;
+export const RESERVED_UNIFORMS = [
+  'uResolution',
+  'uTime',
+  'uActive',
+  'uThemeDark',
+  'uThemeLight',
+  'uThemeAccent',
+] as const;
 
 const FIELD_SIGNATURE = /float\s+field\s*\(/;
 const RENDER_SIGNATURE = /vec3\s+render\s*\(/;
@@ -53,6 +60,9 @@ export function composeFragmentShader(field: Field, renderer: FieldRenderer): st
     uniform vec2 uResolution;
     uniform float uTime;
     uniform float uActive;
+    uniform vec3 uThemeDark;
+    uniform vec3 uThemeLight;
+    uniform vec3 uThemeAccent;
 
     const float PI = 3.141592653589793;
 
@@ -79,7 +89,14 @@ export function composeFragmentShader(field: Field, renderer: FieldRenderer): st
       vec2 p = vUv * 2.0 - 1.0;
       p.x *= max(uResolution.x, 1.0) / max(uResolution.y, 1.0);
 
-      gl_FragColor = vec4(sanitize(render(p)), 1.0);
+      vec3 shape = sanitize(render(p));
+
+      // 色のテーマ（横断概念）。Renderer は明暗だけを作り、色はここで決まる。
+      float luma = dot(shape, vec3(0.299, 0.587, 0.114));
+      vec3 themed = mix(uThemeDark, uThemeLight, luma)
+        + uThemeAccent * pow(luma, 4.0);
+
+      gl_FragColor = vec4(clamp(themed, 0.0, 1.0), 1.0);
     }
   `;
 }

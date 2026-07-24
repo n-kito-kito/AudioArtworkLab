@@ -5,6 +5,7 @@ import { App } from './core/App';
 import { Cymatics } from './fields/Cymatics';
 import { FieldComposition } from './engine/FieldComposition';
 import { createEffects, transferEffectState } from './effects/catalog';
+import { findTheme } from './engine/themes';
 import { RENDERERS, createRenderer } from './renderers/catalog';
 import { AudioControls } from './ui/AudioControls';
 import { LabControls } from './ui/LabControls';
@@ -37,12 +38,21 @@ const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 
 const setRenderer = (name: string): FieldComposition => {
-  // Effect の設定（有効・パラメータ・Audio Mapping）は表現をまたいで保つ。
+  // Effect の設定とテーマは表現をまたいで保つ。
   const effects = createEffects();
   transferEffectState(composition.getEffects(), effects);
-  composition = new FieldComposition(new Cymatics(), createRenderer(name), effects);
+  composition = new FieldComposition(
+    new Cymatics(),
+    createRenderer(name),
+    effects,
+    composition.getTheme(),
+  );
   app.setComposition(composition);
   return composition;
+};
+
+const setTheme = (name: string): void => {
+  composition.setTheme(findTheme(name));
 };
 const audioControls = new AudioControls(shell.leftTop, audioEngine);
 const recordingController = new RecordingController(shell, audioEngine);
@@ -50,6 +60,7 @@ const labControls = new LabControls(
   shell,
   composition,
   setRenderer,
+  setTheme,
   () => app.exportPng(),
   () => recordingController.toggle(),
 );

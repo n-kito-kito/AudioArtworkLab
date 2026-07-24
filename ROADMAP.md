@@ -164,7 +164,7 @@ Effect チェーン（③）と Audio、Core は流用する。
 - [x] L3 ハッシュ写像（音のスペクトル形状をシードにする）
 - [x] Renderer: 光と波 / グラフ
 - [x] 既存 Effect チェーンを接続する（LabControls: Field / Renderer 選択・スキーマ駆動 Effect UI・録画・品質モニター再接続)
-- [ ] VHS 統合 Effect / 色テーマの横断化
+- [x] VHS 統合 Effect / 色テーマの横断化
 - [ ] 奥行き → トランジション
 
 再構築後の UI は LabControls に集約した。旧 StudioControls・LayerEditor は D1 により未接続のまま温存し、

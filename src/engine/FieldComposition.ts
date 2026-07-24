@@ -5,6 +5,7 @@ import { EffectPipeline } from '../effects/EffectPipeline';
 import type { Field } from './Field';
 import type { FieldRenderer } from './FieldRenderer';
 import { composeFragmentShader, vertexShader } from './composeShader';
+import { THEMES, type Theme } from './themes';
 
 /**
  * ① Field × ② Renderer を 1 枚の全画面クアッドへ描き、③ Effect チェーンへ渡す。
@@ -26,10 +27,13 @@ export class FieldComposition implements Composition {
   private material: THREE.ShaderMaterial | null = null;
   private pipeline: EffectPipeline | null = null;
 
-  constructor(field: Field, renderer: FieldRenderer, effects: Effect[] = []) {
+  private theme: Theme;
+
+  constructor(field: Field, renderer: FieldRenderer, effects: Effect[] = [], theme?: Theme) {
     this.field = field;
     this.renderer = renderer;
     this.effects = effects;
+    this.theme = theme ?? THEMES[0]!;
   }
 
   get name(): string {
@@ -52,6 +56,9 @@ export class FieldComposition implements Composition {
         uResolution: { value: new THREE.Vector2(1, 1) },
         uTime: { value: 0 },
         uActive: { value: 0 },
+        uThemeDark: { value: new THREE.Vector3(...this.theme.dark) },
+        uThemeLight: { value: new THREE.Vector3(...this.theme.light) },
+        uThemeAccent: { value: new THREE.Vector3(...this.theme.accent) },
         ...this.field.uniforms,
         ...this.renderer.uniforms,
       },
@@ -100,6 +107,19 @@ export class FieldComposition implements Composition {
 
   moveEffect(effect: Effect, direction: -1 | 1): void {
     this.pipeline?.move(effect, direction);
+  }
+
+  getTheme(): Theme {
+    return this.theme;
+  }
+
+  /** テーマは uniform の差し替えだけで反映される（再コンパイル不要）。 */
+  setTheme(theme: Theme): void {
+    this.theme = theme;
+    if (!this.material) return;
+    (this.material.uniforms.uThemeDark!.value as THREE.Vector3).set(...theme.dark);
+    (this.material.uniforms.uThemeLight!.value as THREE.Vector3).set(...theme.light);
+    (this.material.uniforms.uThemeAccent!.value as THREE.Vector3).set(...theme.accent);
   }
 
   setGeneratorsVisible(): void {

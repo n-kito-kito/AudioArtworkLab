@@ -7,6 +7,7 @@ import type {
   EffectParameterValue,
   NumberEffectParameter,
 } from '../effects/Effect';
+import { THEMES } from '../engine/themes';
 import { RENDERERS } from '../renderers/catalog';
 import type { StudioShell } from './StudioShell';
 
@@ -25,6 +26,7 @@ export class LabControls {
   private readonly shell: StudioShell;
   private composition: FieldComposition;
   private readonly onRendererChange: (name: string) => FieldComposition;
+  private readonly onThemeChange: (name: string) => void;
   private readonly exportPng: () => void;
   private readonly recordToggle: () => boolean;
   private readonly toolbarActions = document.createElement('div');
@@ -38,12 +40,14 @@ export class LabControls {
     shell: StudioShell,
     composition: FieldComposition,
     onRendererChange: (name: string) => FieldComposition,
+    onThemeChange: (name: string) => void,
     exportPng: () => void,
     recordToggle: () => boolean,
   ) {
     this.shell = shell;
     this.composition = composition;
     this.onRendererChange = onRendererChange;
+    this.onThemeChange = onThemeChange;
     this.exportPng = exportPng;
     this.recordToggle = recordToggle;
     this.selectedEffectName = composition.getEffects()[0]?.name ?? '';
@@ -118,7 +122,23 @@ export class LabControls {
       renderer.append(label);
     }
 
-    this.compositionSection.append(field, renderer);
+    const theme = document.createElement('label');
+    theme.className = 'control-row control-row--inline';
+    const themeName = document.createElement('span');
+    themeName.textContent = 'Theme';
+    const themeSelect = document.createElement('select');
+    themeSelect.setAttribute('aria-label', 'Color theme');
+    for (const definition of THEMES) {
+      const option = document.createElement('option');
+      option.value = definition.name;
+      option.textContent = definition.name;
+      option.selected = definition.name === this.composition.getTheme().name;
+      themeSelect.append(option);
+    }
+    themeSelect.addEventListener('change', () => this.onThemeChange(themeSelect.value));
+    theme.append(themeName, themeSelect);
+
+    this.compositionSection.append(field, renderer, theme);
   }
 
   private renderEffectStack(): void {
