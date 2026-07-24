@@ -162,7 +162,7 @@ Effect チェーン（③）と Audio、Core は流用する。
 - [x] Field: Cymatics へ L1・L2 写像を接続する
 - [x] Renderer: ミニマルな図形の閾値を音へ接続する
 - [x] L3 ハッシュ写像（音のスペクトル形状をシードにする）
-- [ ] Renderer: 光と波 / グラフ
+- [x] Renderer: 光と波 / グラフ
 - [ ] 既存 Effect チェーンを接続する
 - [ ] VHS 統合 Effect / 色テーマの横断化
 - [ ] 奥行き → トランジション
