@@ -152,6 +152,24 @@ Spotify と Apple Music は、認証、DRM、音声解析の可否、利用規�
 - [ ] モバイルと Safari で動作確認する
 - [x] WebGL Context Lost に対応する
 
+## Phase 11 — Field × Renderer への再構築
+
+`DESIGN.md` で方針を確定し、生成（① Field）と表現（② Renderer）を分離する構造へ作り直す。
+Effect チェーン（③）と Audio、Core は流用する。
+
+- [x] `engine/` — Field × Renderer のシェーダー合成
+- [ ] 音声解析の追加（dominant frequency / spectral centroid / flatness / onset / sustain）
+- [ ] Field: Cymatics へ L1・L2 写像を接続する
+- [ ] Renderer: ミニマルな図形の閾値を音へ接続する
+- [ ] L3 ハッシュ写像（音のスペクトル形状をシードにする）
+- [ ] Renderer: 光と波 / グラフ
+- [ ] 既存 Effect チェーンを接続する
+- [ ] VHS 統合 Effect / 色テーマの横断化
+- [ ] 奥行き → トランジション
+
+再構築中は Field / Renderer の選択 UI ができるまで、StudioControls・LayerEditor・
+RecordingController・QualityMonitor を接続しない。LayerEditor は D1 により温存する。
+
 ## 共通の完了条件
 
 各実装タスクは、次の条件を満たして完了とする。

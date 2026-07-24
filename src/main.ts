@@ -1,13 +1,16 @@
 import './style.css';
 import { FileAudioEngine } from './audio/FileAudioEngine';
 import { App } from './core/App';
-import { COMPOSITIONS, createComposition } from './compositions/catalog';
+import { Cymatics } from './fields/Cymatics';
+import { FieldComposition } from './engine/FieldComposition';
+import { MinimalShape } from './renderers/MinimalShape';
 import { AudioControls } from './ui/AudioControls';
-import { StudioControls } from './ui/StudioControls';
 import { StudioShell } from './ui/StudioShell';
-import { LayerEditor } from './ui/LayerEditor';
-import { RecordingController } from './ui/RecordingController';
-import { QualityMonitor } from './ui/QualityMonitor';
+
+// 再構築中（DESIGN.md 実装順序）。
+// StudioControls / LayerEditor / RecordingController / QualityMonitor は
+// 旧 Generator 前提のため、Field / Renderer 選択の UI ができるまで接続しない。
+// LayerEditor は D1 により温存する（削除しない）。
 
 const container = document.querySelector<HTMLDivElement>('#app');
 
@@ -16,36 +19,25 @@ if (!container) {
 }
 
 const audioEngine = new FileAudioEngine();
-let composition = createComposition('SineWaveBasic');
+const composition = new FieldComposition(new Cymatics(), new MinimalShape());
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 const audioControls = new AudioControls(shell.leftTop, audioEngine);
-const layerEditor = new LayerEditor(shell, audioEngine, app);
-const recordingController = new RecordingController(shell, audioEngine);
-const studioControls = new StudioControls(shell, composition, audioEngine, app, layerEditor, () =>
-  layerEditor.exportPng(),
-  () => recordingController.toggle(),
-  COMPOSITIONS,
-  (name) => {
-    composition = createComposition(name);
-    app.setComposition(composition);
-    return composition;
-  },
-);
-const qualityMonitor = new QualityMonitor(shell, app, () => composition.getEffects());
 let disposed = false;
 
 const dispose = (): void => {
   if (disposed) return;
   disposed = true;
   audioControls.dispose();
-  recordingController.dispose();
-  qualityMonitor.dispose();
-  layerEditor.dispose();
-  studioControls.dispose();
   app.dispose();
   shell.dispose();
 };
+
+// 開発時のみ。音がないと何も描かれない仕様のため、
+// 解析値を差し替えて描画を確認できるようにしておく。本番ビルドには含まれない。
+if (import.meta.env.DEV) {
+  (window as unknown as Record<string, unknown>).__lab = { app, composition, audioEngine };
+}
 
 window.addEventListener('beforeunload', dispose, { once: true });
 
