@@ -9,6 +9,7 @@ import { PaletteMapEffect } from './PaletteMapEffect';
 import { RepeatEffect } from './RepeatEffect';
 import { RgbSplitEffect } from './RgbSplitEffect';
 import { ScanDriftEffect } from './ScanDriftEffect';
+import { VhsEffect } from './VhsEffect';
 import { WarpEffect } from './WarpEffect';
 import { GridRevealModifier } from '../modifiers/GridRevealModifier';
 import { PixelStretchModifier } from '../modifiers/PixelStretchModifier';
@@ -22,6 +23,7 @@ import { PixelStretchModifier } from '../modifiers/PixelStretchModifier';
  */
 export function createEffects(): Effect[] {
   return [
+    new VhsEffect(),
     new GrainEffect(),
     new BlurEffect(),
     new PaletteMapEffect(),

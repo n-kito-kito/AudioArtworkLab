@@ -30,7 +30,11 @@ export abstract class BaseShaderEffect implements Effect {
   private readonly audioMappings: EffectAudioMappings = {};
   private readonly smoothedAudioValues = new Map<string, number>();
 
-  constructor(shader: EffectShader, intensity: Omit<NumberEffectParameter, 'key' | 'type'>) {
+  constructor(
+    shader: EffectShader,
+    intensity: Omit<NumberEffectParameter, 'key' | 'type'>,
+    extraParameters: EffectParameterSchema[] = [],
+  ) {
     this.pass = new ShaderPass({
       ...shader,
       uniforms: {
@@ -43,8 +47,11 @@ export abstract class BaseShaderEffect implements Effect {
     });
     this.pass.enabled = false;
     this.intensity = intensity.defaultValue;
+    // 追加パラメータは uniform 名の規約（key → uKey）で自動的に紐づき、
+    // number であれば Audio Mapping も自動で付く。
     this.parameterSchema = [
       { key: 'intensity', type: 'number', ...intensity },
+      ...extraParameters,
       {
         key: 'dryWet',
         type: 'number',
