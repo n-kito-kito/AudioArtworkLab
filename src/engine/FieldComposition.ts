@@ -113,13 +113,9 @@ export class FieldComposition implements Composition {
     this.material.uniforms.uDepthAmount!.value =
       this.depthAmount * (0.85 + this.smoothedBass * 0.3);
 
-    // 寄っているときほど注視点をゆっくり漂わせ、同じ場所が映り続けないようにする。
-    const drift = Math.max(this.zoom - 1, 0) * 0.12;
-    const pan = this.material.uniforms.uPan!.value as THREE.Vector2;
-    pan.set(
-      Math.sin(elapsed * 0.07) * drift,
-      Math.cos(elapsed * 0.055) * drift,
-    );
+    // 注視点は漂わせない。漂いは対称の折り返し軸を画面中心からずらし、
+    // 要求されている完全対称を壊す。寄っても中心の対称は保たれ、
+    // 図形の変化はモーフィングと構図の引き直しが担う。
 
     // リニアトランジション: 前の表現から新しい表現へ一定速度で混ざる。
     // 初回フレームは基準時刻がないため進めない。

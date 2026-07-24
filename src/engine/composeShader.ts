@@ -116,6 +116,10 @@ export function composeFragmentShader(
     // Renderer はこれを読んで奥の層をぼかす・沈めるなど焦点の表現に使える。
     float gDepth = 0.0;
 
+    // Field が field() の中で設定する、変換（対称の折り返し等）後の座標。
+    // Renderer がノイズやテクスチャをこの座標で引くと、場の対称性を壊さない。
+    vec2 gFieldCoord = vec2(0.0);
+
     // NaN は比較が常に false になる性質を使って落とす。
     // isnan / isinf は GLSL ES 3.0 の関数なのでここでは使えない。
     vec3 sanitize(vec3 c) {

@@ -91,7 +91,8 @@ export class MinimalShape implements FieldRenderer {
 
       // 境界をノイズで歪める。ここが要。
       // くっきりした縁をやめ、ぼそぼそと崩れた輪郭にする。
-      float edge = fbm(p * uDetail + vec2(0.0, uTime * 0.025));
+      // ノイズは折り返し後の座標で引き、場の対称性を保つ。
+      float edge = fbm(gFieldCoord * uDetail + vec2(0.0, uTime * 0.025));
       float ragged = max(signedDistance + (edge - 0.5) * uEdgeNoise * band * 2.2, 0.0);
 
       // 密度分布。芯はほぼ埋まった帯にし、その外側をざらついた裾にする。
@@ -101,7 +102,7 @@ export class MinimalShape implements FieldRenderer {
       float density = (core * 0.98 + fringe) * uDensity;
 
       // 帯に沿った密度のむら。均一な帯にせず、濃淡を作る。
-      density *= 0.62 + 0.62 * fbm(p * uDetail * 2.3 + 17.0);
+      density *= 0.62 + 0.62 * fbm(gFieldCoord * uDetail * 2.3 + 17.0);
       density = clamp(density, 0.0, 1.0);
 
       // 粒子。常に微細に揺れ、完全には停止しない。
@@ -116,13 +117,10 @@ export class MinimalShape implements FieldRenderer {
       // 粒だけだと遠目に消えるため、芯にごく淡い連続成分を敷く。
       float bed = core * core * 0.09;
 
-      // 密度の起伏から弱い陰影をつける。発光ではなく、ざらつきの立体感。
-      float relief = 14.0 * (1.0 - gDepth * 0.5);
-      vec3 normal = normalize(vec3(-dFdx(core) * relief, -dFdy(core) * relief, 1.0));
-      float lit = 0.58 + 0.42 * max(dot(normal, normalize(vec3(-0.4, 0.55, 0.73))), 0.0);
-
+      // 指向性ライティングは使わない。斜光は鏡像の斜面で明暗が逆になり、
+      // 要求されている完全対称を壊す。明るさは密度と粒のばらつきだけで作る。
       float focus = 1.0 - gDepth * 0.3;
-      return vec3(clamp((particle + bed) * lit * clamp(uInk, 0.0, 1.0) * focus, 0.0, 1.0));
+      return vec3(clamp((particle + bed) * clamp(uInk, 0.0, 1.0) * focus, 0.0, 1.0));
     }
   `;
 

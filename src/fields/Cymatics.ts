@@ -68,6 +68,7 @@ export class Cymatics implements Field {
     uVariant: { value: 0 },
     uOffsetX: { value: 0 },
     uOffsetY: { value: 0 },
+    uSymmetry: { value: 1 },
   };
 
   readonly glsl = /* glsl */ `
@@ -83,6 +84,28 @@ export class Cymatics implements Field {
     uniform float uVariant;
     uniform float uOffsetX;
     uniform float uOffsetY;
+    uniform float uSymmetry;
+
+    // 座標を折り返して対称性を作る。折り返し後の場は必ず左右・上下対称になる。
+    //   0 = 鏡映（左右のみ）  1 = 4 回対称  2 = 8 回対称  3 = 放射対称
+    vec2 foldSymmetry(vec2 q) {
+      if (uSymmetry < 0.5) {
+        return vec2(abs(q.x), q.y);
+      }
+      if (uSymmetry < 1.5) {
+        return abs(q);
+      }
+      if (uSymmetry < 2.5) {
+        q = abs(q);
+        return q.y > q.x ? q.yx : q;
+      }
+      // 放射対称: 極座標で角度を 6 分割し、扇形を折り返す。
+      float radius = length(q);
+      float sector = 3.14159265 / 6.0;
+      // 鏡映軸を x 軸に合わせる。π が扇の周期の整数倍なので y 軸にも対称になる。
+      float angle = abs(mod(atan(q.y, q.x) + sector, sector * 2.0) - sector);
+      return vec2(cos(angle), sin(angle)) * radius;
+    }
 
     float chladni(vec2 q, float n, float m) {
       float a = cos(n * PI * q.x) * cos(m * PI * q.y);
@@ -95,7 +118,11 @@ export class Cymatics implements Field {
       // L3: 音の出来事が向きと中心を決める。
       float s = sin(uRotate);
       float c = cos(uRotate);
-      vec2 q = mat2(c, -s, s, c) * p + vec2(uOffsetX, uOffsetY);
+      // 折り返しを最初に行うことで、画面に対して厳密に対称になる。
+      // 折り返し後の回転・ずらしは全ての鏡像に等しく効くため対称性を壊さない。
+      vec2 q = foldSymmetry(p);
+      q = mat2(c, -s, s, c) * q + vec2(uOffsetX, uOffsetY);
+      gFieldCoord = q;
       q *= uScale;
 
       // 低域が場そのものを押し曲げる。
@@ -184,6 +211,8 @@ export class Cymatics implements Field {
         + (derive(seed, 2) - 0.5) * 0.12;
       this.targetOffsetX = (derive(seed, 3) - 0.5) * 0.3;
       this.targetOffsetY = (derive(seed, 4) - 0.5) * 0.3;
+      // 対称性の種類も音の出来事が決める。鏡映 / 4 回 / 8 回 / 放射。
+      this.uniforms.uSymmetry!.value = Math.floor(derive(seed, 5) * 4);
     }
     this.uniforms.uRotate!.value = approach(
       this.uniforms.uRotate!.value as number, this.targetRotate, 0.9, delta,
