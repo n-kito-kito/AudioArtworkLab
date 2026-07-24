@@ -30,6 +30,7 @@ export class FieldComposition implements Composition {
   private theme: Theme;
   private depthAmount = 0;
   private smoothedBass = 0;
+  private zoom = 1;
   private readonly transitionFrom: FieldRenderer | null;
   private transitionMix = 0;
   private previousElapsed = -1;
@@ -76,6 +77,8 @@ export class FieldComposition implements Composition {
         uThemeAccent: { value: new THREE.Vector3(...this.theme.accent) },
         uDepthAmount: { value: 0 },
         uRendererMix: { value: this.transitionFrom ? 0 : 1 },
+        uZoom: { value: this.zoom },
+        uPan: { value: new THREE.Vector2(0, 0) },
         ...this.field.uniforms,
         ...this.renderer.uniforms,
         ...(this.transitionFrom?.uniforms ?? {}),
@@ -109,6 +112,14 @@ export class FieldComposition implements Composition {
     this.smoothedBass += (bass - this.smoothedBass) * 0.12;
     this.material.uniforms.uDepthAmount!.value =
       this.depthAmount * (0.85 + this.smoothedBass * 0.3);
+
+    // 寄っているときほど注視点をゆっくり漂わせ、同じ場所が映り続けないようにする。
+    const drift = Math.max(this.zoom - 1, 0) * 0.12;
+    const pan = this.material.uniforms.uPan!.value as THREE.Vector2;
+    pan.set(
+      Math.sin(elapsed * 0.07) * drift,
+      Math.cos(elapsed * 0.055) * drift,
+    );
 
     // リニアトランジション: 前の表現から新しい表現へ一定速度で混ざる。
     // 初回フレームは基準時刻がないため進めない。
@@ -159,6 +170,16 @@ export class FieldComposition implements Composition {
 
   getTheme(): Theme {
     return this.theme;
+  }
+
+  getZoom(): number {
+    return this.zoom;
+  }
+
+  /** 1 で全体、大きくすると図形の一部分が画面いっぱいに寄る。 */
+  setZoom(zoom: number): void {
+    this.zoom = Math.min(Math.max(zoom, 0.25), 8);
+    if (this.material) this.material.uniforms.uZoom!.value = this.zoom;
   }
 
   getDepth(): number {

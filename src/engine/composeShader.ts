@@ -11,6 +11,8 @@ export const RESERVED_UNIFORMS = [
   'uThemeAccent',
   'uDepthAmount',
   'uRendererMix',
+  'uZoom',
+  'uPan',
 ] as const;
 
 const FIELD_SIGNATURE = /float\s+field\s*\(/;
@@ -105,6 +107,8 @@ export function composeFragmentShader(
     uniform vec3 uThemeAccent;
     uniform float uDepthAmount;
     uniform float uRendererMix;
+    uniform float uZoom;
+    uniform vec2 uPan;
 
     const float PI = 3.141592653589793;
 
@@ -134,6 +138,10 @@ export function composeFragmentShader(
 
       vec2 p = vUv * 2.0 - 1.0;
       p.x *= max(uResolution.x, 1.0) / max(uResolution.y, 1.0);
+
+      // ズーム。大きいほど図形の一部分が画面いっぱいに寄る。
+      // 寄ったときに同じ場所ばかり映らないよう、注視点をゆっくり漂わせる。
+      p = p / max(uZoom, 0.05) + uPan;
 
       // 奥行き（D6: 場の側で作る）。同じ場を尺度と漂いを変えて奥に重ねる。
       // 奥の層ほど細かく・暗く・遅く漂い、多層の視差が奥行きになる。

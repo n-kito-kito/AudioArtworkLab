@@ -28,6 +28,7 @@ export class LabControls {
   private readonly onRendererChange: (name: string) => FieldComposition;
   private readonly onThemeChange: (name: string) => void;
   private readonly onDepthChange: (amount: number) => void;
+  private readonly onZoomChange: (zoom: number) => void;
   private readonly exportPng: () => void;
   private readonly recordToggle: () => boolean;
   private readonly onExportPreset: () => void;
@@ -47,6 +48,7 @@ export class LabControls {
     onRendererChange: (name: string) => FieldComposition,
     onThemeChange: (name: string) => void,
     onDepthChange: (amount: number) => void,
+    onZoomChange: (zoom: number) => void,
     exportPng: () => void,
     recordToggle: () => boolean,
     onExportPreset: () => void,
@@ -57,6 +59,7 @@ export class LabControls {
     this.onRendererChange = onRendererChange;
     this.onThemeChange = onThemeChange;
     this.onDepthChange = onDepthChange;
+    this.onZoomChange = onZoomChange;
     this.onExportPreset = onExportPreset;
     this.onImportPreset = onImportPreset;
     this.exportPng = exportPng;
@@ -172,11 +175,14 @@ export class LabControls {
     themeSelect.addEventListener('change', () => this.onThemeChange(themeSelect.value));
     theme.append(themeName, themeSelect);
 
+    const zoom = this.range('Zoom', this.composition.getZoom(), 0.5, 6, 0.01, (value) =>
+      this.onZoomChange(value),
+    );
     const depth = this.range('Depth', this.composition.getDepth(), 0, 1, 0.01, (value) =>
       this.onDepthChange(value),
     );
 
-    this.compositionBody.append(field, renderer, theme, depth);
+    this.compositionBody.append(field, renderer, theme, zoom, depth);
   }
 
   private renderEffectStack(): void {

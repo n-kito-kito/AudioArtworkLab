@@ -12,7 +12,7 @@ import type { FieldComposition } from '../engine/FieldComposition';
  * 破棄して初期状態に戻す。キーは旧版と同じものを使い、残っている
  * 旧データはここで一掃される。
  */
-export const LAB_PRESET_VERSION = 4;
+export const LAB_PRESET_VERSION = 5;
 export const LAB_PRESET_KEY = 'audio-artwork-lab:studio-preset';
 
 export interface LabPresetEffect {
@@ -28,6 +28,7 @@ export interface LabPreset {
   rendererName: string;
   themeName: string;
   depth: number;
+  zoom: number;
   /** チェーンの並び順どおりに格納する。 */
   effects: LabPresetEffect[];
 }
@@ -39,6 +40,7 @@ export function createLabPreset(composition: FieldComposition): LabPreset {
     rendererName: composition.getRenderer().name,
     themeName: composition.getTheme().name,
     depth: composition.getDepth(),
+    zoom: composition.getZoom(),
     effects: composition.getEffects().map((effect) => ({
       name: effect.name,
       enabled: effect.enabled,
@@ -49,17 +51,29 @@ export function createLabPreset(composition: FieldComposition): LabPreset {
 }
 
 /**
- * 形式の検証。v4 以外（旧形式・壊れた JSON）は null を返す。
+ * 旧バージョンを現行形式へ引き上げる。扱えない形式は null。
+ * v1〜v3（旧 Generator 構成）は D8 により破棄する。
+ */
+function migrate(preset: Record<string, unknown>): Record<string, unknown> | null {
+  // v4 → v5: ズームが増えた。既存のプリセットは等倍とみなす。
+  if (preset.version === 4) return { ...preset, version: 5, zoom: 1 };
+  if (preset.version === LAB_PRESET_VERSION) return preset;
+  return null;
+}
+
+/**
+ * 形式の検証。現行版へ移行できない形式（旧形式・壊れた JSON）は null を返す。
  * 値の範囲は適用先（setParameterValues / setAudioMappings）が丸めるため、
  * ここでは構造だけを確認する。
  */
 export function parseLabPreset(raw: unknown): LabPreset | null {
   if (typeof raw !== 'object' || raw === null) return null;
-  const preset = raw as Record<string, unknown>;
-  if (preset.version !== LAB_PRESET_VERSION) return null;
+  const preset = migrate(raw as Record<string, unknown>);
+  if (preset === null) return null;
   if (typeof preset.rendererName !== 'string') return null;
   if (typeof preset.themeName !== 'string') return null;
   if (typeof preset.depth !== 'number' || !Number.isFinite(preset.depth)) return null;
+  if (typeof preset.zoom !== 'number' || !Number.isFinite(preset.zoom)) return null;
   if (!Array.isArray(preset.effects)) return null;
   for (const entry of preset.effects) {
     if (typeof entry !== 'object' || entry === null) return null;

@@ -52,7 +52,10 @@ let composition = new FieldComposition(
   initialEffects,
   findTheme(storedPreset?.themeName ?? ''),
 );
-if (storedPreset) composition.setDepth(storedPreset.depth);
+if (storedPreset) {
+  composition.setDepth(storedPreset.depth);
+  composition.setZoom(storedPreset.zoom);
+}
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 
@@ -65,6 +68,7 @@ const setRenderer = (name: string): FieldComposition => {
   const effects = createEffects();
   transferEffectState(composition.getEffects(), effects);
   const depth = composition.getDepth();
+  const zoom = composition.getZoom();
   composition = new FieldComposition(
     new Cymatics(),
     createRenderer(name),
@@ -73,6 +77,7 @@ const setRenderer = (name: string): FieldComposition => {
     from,
   );
   composition.setDepth(depth);
+  composition.setZoom(zoom);
   app.setComposition(composition);
   return composition;
 };
@@ -83,6 +88,10 @@ const setTheme = (name: string): void => {
 
 const setDepth = (amount: number): void => {
   composition.setDepth(amount);
+};
+
+const setZoom = (zoom: number): void => {
+  composition.setZoom(zoom);
 };
 
 const notify = (message: string, error = false): void => {
@@ -96,6 +105,7 @@ const notify = (message: string, error = false): void => {
 const applyPreset = (preset: LabPreset): void => {
   setTheme(preset.themeName);
   setDepth(preset.depth);
+  setZoom(preset.zoom);
   const target = setRenderer(preset.rendererName);
   applyEffectStates(target.getEffects(), preset.effects);
   target.setEffectOrder(preset.effects.map((entry) => entry.name));
@@ -150,6 +160,7 @@ const labControls = new LabControls(
   setRenderer,
   setTheme,
   setDepth,
+  setZoom,
   () => app.exportPng(),
   () => recordingController.toggle(),
   exportPreset,
