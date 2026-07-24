@@ -159,7 +159,7 @@ Effect チェーン（③）と Audio、Core は流用する。
 
 - [x] `engine/` — Field × Renderer のシェーダー合成
 - [x] 音声解析の追加（dominant frequency / spectral centroid / flatness / onset / sustain）
-- [ ] Field: Cymatics へ L1・L2 写像を接続する
+- [x] Field: Cymatics へ L1・L2 写像を接続する
 - [ ] Renderer: ミニマルな図形の閾値を音へ接続する
 - [ ] L3 ハッシュ写像（音のスペクトル形状をシードにする）
 - [ ] Renderer: 光と波 / グラフ

@@ -1,36 +1,117 @@
+import type { AudioParameters } from '../audio/AudioEngine';
 import type { Field, FieldUniforms } from '../engine/Field';
 
 /**
  * サイマティクス（クラドニ図形）。
  *
- * 平板の定在波が作る節線。次数 n, m が上がるほど図形は複雑になる。
- * 音程が次数を決める L2 量子化写像は実装順序 3 で接続する。
+ * 平板の定在波が作る節線。音がこの図形を決める（DESIGN.md「4. 音 → パラメータの写像」）。
+ *
+ *   L2 量子化  音程   → モード (n, m)。音程が変わると図形が別の形へ跳ぶ
+ *   L1 連続    明るさ → 場の細かさ
+ *   L1 連続    低域   → 場の歪み
+ *              ノイズ性 → 節線の崩れ
  */
+
+/**
+ * 実際の平板と同じく、固有値 n² + m² の小さい順にモードを並べる。
+ * 音程が上がるほど高次のモードになり、図形は複雑になる。
+ *
+ * n === m のときは場が恒等的に 0 になり画面が潰れるため、m < n に限る。
+ */
+const MODES: Array<readonly [number, number]> = [];
+for (let n = 2; n <= 9; n++) {
+  for (let m = 1; m < n; m++) MODES.push([n, m]);
+}
+MODES.sort((left, right) => left[0] ** 2 + left[1] ** 2 - (right[0] ** 2 + right[1] ** 2));
+
+/** モードが確定するまでに音程が留まるべき秒数。音程の震えで図形がちらつくのを防ぐ。 */
+const MODE_HOLD = 0.09;
+
+/** フレームレートに依存しない指数追従。 */
+function approach(current: number, target: number, rate: number, delta: number): number {
+  return current + (target - current) * (1 - Math.exp(-rate * delta));
+}
+
 export class Cymatics implements Field {
   readonly name = 'Cymatics';
 
   readonly uniforms: FieldUniforms = {
-    uOrderN: { value: 4 },
-    uOrderM: { value: 3 },
+    uOrderN: { value: MODES[0]![0] },
+    uOrderM: { value: MODES[0]![1] },
     uScale: { value: 0.9 },
+    uWarp: { value: 0 },
+    uBreak: { value: 0 },
   };
 
   readonly glsl = /* glsl */ `
     uniform float uOrderN;
     uniform float uOrderM;
     uniform float uScale;
+    uniform float uWarp;
+    uniform float uBreak;
 
     float field(vec2 p) {
       vec2 q = p * uScale;
-      float n = uOrderN;
-      float m = uOrderM;
-      return cos(n * PI * q.x) * cos(m * PI * q.y)
-           - cos(m * PI * q.x) * cos(n * PI * q.y);
+
+      // 低域が場そのものを押し曲げる。
+      q += vec2(
+        sin(q.y * 2.6 + uTime * 0.7),
+        cos(q.x * 2.2 - uTime * 0.6)
+      ) * uWarp;
+
+      // ノイズ的な音ほど節線を崩す。勾配が飛ばないよう滑らかな変位にする。
+      q += vec2(
+        sin(q.x * 9.1 + q.y * 4.7 + uTime * 1.3),
+        cos(q.x * 5.3 - q.y * 8.9 - uTime * 1.1)
+      ) * uBreak;
+
+      return cos(uOrderN * PI * q.x) * cos(uOrderM * PI * q.y)
+           - cos(uOrderM * PI * q.x) * cos(uOrderN * PI * q.y);
     }
   `;
 
-  update(): void {
-    // 音 → 次数の写像は実装順序 3 で接続する。
+  private modeIndex = 0;
+  private pendingIndex = 0;
+  private pendingSince = 0;
+  private previousElapsed = 0;
+
+  update(audio: AudioParameters, elapsed: number): void {
+    const delta = Math.min(Math.max(elapsed - this.previousElapsed, 0), 0.1);
+    this.previousElapsed = elapsed;
+
+    // L2: 音程をモード番号へ量子化する。跳ぶのは正しい挙動だが、
+    // 音程の細かな震えで図形がちらつかないよう、少し留まってから確定させる。
+    const pitch = Math.min(Math.max(audio.pitch ?? 0, 0), 1);
+    const candidate = Math.round(pitch * (MODES.length - 1));
+    if (candidate !== this.pendingIndex) {
+      this.pendingIndex = candidate;
+      this.pendingSince = elapsed;
+    } else if (candidate !== this.modeIndex && elapsed - this.pendingSince >= MODE_HOLD) {
+      this.modeIndex = candidate;
+    }
+    const mode = MODES[this.modeIndex] ?? MODES[0]!;
+    this.uniforms.uOrderN!.value = mode[0];
+    this.uniforms.uOrderM!.value = mode[1];
+
+    // L1: 明るさが場の細かさ、低域が歪み、ノイズ性が崩れを決める。
+    this.uniforms.uScale!.value = approach(
+      this.uniforms.uScale!.value as number,
+      0.7 + Math.min(Math.max(audio.centroid ?? 0, 0), 1) * 1.1,
+      6,
+      delta,
+    );
+    this.uniforms.uWarp!.value = approach(
+      this.uniforms.uWarp!.value as number,
+      Math.min(Math.max(audio.bass ?? 0, 0), 1) * 0.22,
+      8,
+      delta,
+    );
+    this.uniforms.uBreak!.value = approach(
+      this.uniforms.uBreak!.value as number,
+      Math.min(Math.max(audio.flatness ?? 0, 0), 1) * 0.12,
+      5,
+      delta,
+    );
   }
 
   dispose(): void {
