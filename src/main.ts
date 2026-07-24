@@ -4,6 +4,7 @@ import { REFERENCE_AUDIO_NAME, REFERENCE_AUDIO_URL } from './audio/referenceAudi
 import { App } from './core/App';
 import { Cymatics } from './fields/Cymatics';
 import { FieldComposition } from './engine/FieldComposition';
+import { createEffects, transferEffectState } from './effects/catalog';
 import { RENDERERS, createRenderer } from './renderers/catalog';
 import { AudioControls } from './ui/AudioControls';
 import { StudioShell } from './ui/StudioShell';
@@ -27,12 +28,16 @@ const rendererParam = new URLSearchParams(location.search).get('renderer');
 let composition = new FieldComposition(
   new Cymatics(),
   createRenderer(rendererParam ?? RENDERERS[0]!.name),
+  createEffects(),
 );
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 
 const setRenderer = (name: string): FieldComposition => {
-  composition = new FieldComposition(new Cymatics(), createRenderer(name));
+  // Effect の設定（有効・パラメータ・Audio Mapping）は表現をまたいで保つ。
+  const effects = createEffects();
+  transferEffectState(composition.getEffects(), effects);
+  composition = new FieldComposition(new Cymatics(), createRenderer(name), effects);
   app.setComposition(composition);
   return composition;
 };
