@@ -18,6 +18,12 @@ export interface AudioParameters {
   onset?: number;
   /** 継続。鳴り続けるほど 1 に近づき、止むと戻る。0..1。 */
   sustain?: number;
+  /**
+   * 音の出来事のシード。オンセットの瞬間のスペクトル形状をハッシュした値。0..1。
+   * 同じ音なら同じ値、違う音なら予測できない値になる。次のオンセットまで変わらない。
+   * Math.random() は使わない — 乱数源は音そのもの（DESIGN.md L3）。
+   */
+  seed?: number;
 }
 
 export interface AudioEngine {

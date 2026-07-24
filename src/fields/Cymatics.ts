@@ -10,6 +10,7 @@ import type { Field, FieldUniforms } from '../engine/Field';
  *   L1 連続    明るさ → 場の細かさ
  *   L1 連続    低域   → 場の歪み
  *              ノイズ性 → 節線の崩れ
+ *   L3 ハッシュ シード → 対称性の種類・向き・中心のずれ。音の出来事ごとに引き直される
  */
 
 /**
@@ -32,6 +33,15 @@ function approach(current: number, target: number, rate: number, delta: number):
   return current + (target - current) * (1 - Math.exp(-rate * delta));
 }
 
+/**
+ * 1 つのシードから複数の決定値を引き出す。決定論的で、同じシードなら同じ列になる。
+ * 乱数源はシード（= 音）だけ。Math.random() は使わない。
+ */
+function derive(seed: number, index: number): number {
+  const value = Math.sin(seed * 127.1 + index * 311.7) * 43758.5453;
+  return value - Math.floor(value);
+}
+
 export class Cymatics implements Field {
   readonly name = 'Cymatics';
 
@@ -41,6 +51,10 @@ export class Cymatics implements Field {
     uScale: { value: 0.9 },
     uWarp: { value: 0 },
     uBreak: { value: 0 },
+    uRotate: { value: 0 },
+    uVariant: { value: 0 },
+    uOffsetX: { value: 0 },
+    uOffsetY: { value: 0 },
   };
 
   readonly glsl = /* glsl */ `
@@ -49,9 +63,17 @@ export class Cymatics implements Field {
     uniform float uScale;
     uniform float uWarp;
     uniform float uBreak;
+    uniform float uRotate;
+    uniform float uVariant;
+    uniform float uOffsetX;
+    uniform float uOffsetY;
 
     float field(vec2 p) {
-      vec2 q = p * uScale;
+      // L3: 音の出来事が向きと中心を決める。
+      float s = sin(uRotate);
+      float c = cos(uRotate);
+      vec2 q = mat2(c, -s, s, c) * p + vec2(uOffsetX, uOffsetY);
+      q *= uScale;
 
       // 低域が場そのものを押し曲げる。
       q += vec2(
@@ -65,8 +87,10 @@ export class Cymatics implements Field {
         cos(q.x * 5.3 - q.y * 8.9 - uTime * 1.1)
       ) * uBreak;
 
-      return cos(uOrderN * PI * q.x) * cos(uOrderM * PI * q.y)
-           - cos(uOrderM * PI * q.x) * cos(uOrderN * PI * q.y);
+      // 対称性の異なる 2 つのクラドニ形。シードがどちらの世界かを決める。
+      float a = cos(uOrderN * PI * q.x) * cos(uOrderM * PI * q.y);
+      float b = cos(uOrderM * PI * q.x) * cos(uOrderN * PI * q.y);
+      return mix(a - b, a + b, uVariant);
     }
   `;
 
@@ -74,6 +98,7 @@ export class Cymatics implements Field {
   private pendingIndex = 0;
   private pendingSince = 0;
   private previousElapsed = 0;
+  private appliedSeed = -1;
 
   update(audio: AudioParameters, elapsed: number): void {
     const delta = Math.min(Math.max(elapsed - this.previousElapsed, 0), 0.1);
@@ -92,6 +117,18 @@ export class Cymatics implements Field {
     const mode = MODES[this.modeIndex] ?? MODES[0]!;
     this.uniforms.uOrderN!.value = mode[0];
     this.uniforms.uOrderM!.value = mode[1];
+
+    // L3: 音の出来事ごとに、対称性・向き・中心を引き直す。
+    // 同じ音なら同じ構図に、違う音なら予測できない構図になる。
+    const seed = audio.seed ?? 0;
+    if (seed !== this.appliedSeed) {
+      this.appliedSeed = seed;
+      this.uniforms.uVariant!.value = derive(seed, 0) < 0.5 ? 0 : 1;
+      this.uniforms.uRotate!.value = Math.floor(derive(seed, 1) * 4) * (Math.PI / 4)
+        + (derive(seed, 2) - 0.5) * 0.12;
+      this.uniforms.uOffsetX!.value = (derive(seed, 3) - 0.5) * 0.3;
+      this.uniforms.uOffsetY!.value = (derive(seed, 4) - 0.5) * 0.3;
+    }
 
     // L1: 明るさが場の細かさ、低域が歪み、ノイズ性が崩れを決める。
     this.uniforms.uScale!.value = approach(

@@ -24,6 +24,8 @@ export class FileAudioEngine implements AudioEngine {
   private waveform = new Float32Array(FFT_SIZE);
   private onset = 0;
   private sustain = 0;
+  private seed = 0;
+  private wasRising = false;
   private sourceLoaded = false;
   private lastAnalysisTime = 0;
   private cachedParameters: AudioParameters | null = null;
@@ -191,6 +193,12 @@ export class FileAudioEngine implements AudioEngine {
 
     // 立ち上がりは瞬間値。beat と違って減衰させず、跳ねた frame だけ立てる。
     this.onset = Math.min(Math.max(rise, 0) * 8, 1);
+
+    // L3: オンセットの立ち上がりエッジで、その瞬間のスペクトル形状をハッシュする。
+    // エッジ検出により、音が立ち上がり続けている間に何度も引き直さない。
+    const rising = rise > this.beatSensitivity && volume > 0.12;
+    if (rising && !this.wasRising) this.seed = this.hashSpectrum();
+    this.wasRising = rising;
     this.previousVolume = volume;
 
     // 鳴っている間は伸び、止むと戻る。4 秒鳴り続けると 1 に達する。
@@ -211,8 +219,32 @@ export class FileAudioEngine implements AudioEngine {
       flatness: this.getFlatness(),
       onset: this.onset,
       sustain: this.sustain,
+      seed: this.seed,
     };
     return this.cachedParameters;
+  }
+
+  /**
+   * スペクトル形状を 0..1 のシードへハッシュする（FNV-1a）。
+   * 粗い帯域とレベルに量子化してから畳むので、同じ音は微小な揺らぎがあっても
+   * 同じシードに落ち、違う音は予測できない値になる。
+   */
+  private hashSpectrum(): number {
+    if (!this.frequencyData) return 0;
+
+    const bands = 24;
+    const bins = this.frequencyData.length;
+    let hash = 0x811c9dc5;
+    for (let band = 0; band < bands; band++) {
+      const start = Math.floor((band / bands) * bins);
+      const end = Math.floor(((band + 1) / bands) * bins);
+      let total = 0;
+      for (let index = start; index < end; index++) total += this.frequencyData[index] ?? 0;
+      const level = Math.min(Math.floor(total / Math.max(end - start, 1) / 32), 7);
+      hash ^= level;
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash / 0x100000000;
   }
 
   getWaveform(): Float32Array {
@@ -254,6 +286,8 @@ export class FileAudioEngine implements AudioEngine {
     this.lastAnalysisTime = 0;
     this.onset = 0;
     this.sustain = 0;
+    this.seed = 0;
+    this.wasRising = false;
     this.releaseObjectUrl();
   }
 
