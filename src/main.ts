@@ -1,5 +1,6 @@
 import './style.css';
 import { FileAudioEngine } from './audio/FileAudioEngine';
+import { REFERENCE_AUDIO_NAME, REFERENCE_AUDIO_URL } from './audio/referenceAudio';
 import { App } from './core/App';
 import { Cymatics } from './fields/Cymatics';
 import { FieldComposition } from './engine/FieldComposition';
@@ -24,6 +25,10 @@ const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 const audioControls = new AudioControls(shell.leftTop, audioEngine);
 let disposed = false;
+
+// 確認用音源を既定で読み込む。無ければ何もしない（起動は妨げない）。
+// 再生はブラウザの制約により利用者の操作が要るため、ここでは読み込みだけ行う。
+void audioControls.loadReference(REFERENCE_AUDIO_URL, REFERENCE_AUDIO_NAME);
 
 const dispose = (): void => {
   if (disposed) return;

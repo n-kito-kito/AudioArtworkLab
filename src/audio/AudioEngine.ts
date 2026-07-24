@@ -8,6 +8,16 @@ export interface AudioParameters {
   mid?: number;
   treble?: number;
   beat?: number;
+  /** 支配的な周波数。40Hz〜4kHz を対数で 0..1 に正規化した音程。 */
+  pitch?: number;
+  /** スペクトル重心。音の明るさ。0..1。 */
+  centroid?: number;
+  /** スペクトル平坦度。1 に近いほどノイズ的、0 に近いほど音程的。0..1。 */
+  flatness?: number;
+  /** 立ち上がり。音量が跳ねた瞬間だけ 1 に近づく。0..1。 */
+  onset?: number;
+  /** 継続。鳴り続けるほど 1 に近づき、止むと戻る。0..1。 */
+  sustain?: number;
 }
 
 export interface AudioEngine {

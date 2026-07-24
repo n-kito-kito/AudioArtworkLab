@@ -202,6 +202,24 @@ export class AudioControls {
     if (file) void this.load(file);
   };
 
+  /**
+   * 確認用音源を読み込む。存在しない場合は何もしない。
+   * 音源を消したり差し替えたりしている最中でも起動を妨げないようにする。
+   */
+  async loadReference(url: string, name: string): Promise<void> {
+    if (this.engine.isLoaded) return;
+    try {
+      await this.engine.loadUrl(url);
+    } catch {
+      return;
+    }
+    this.trackName.textContent = name;
+    this.status.textContent = 'Ready';
+    this.playButton.disabled = false;
+    this.seekInput.disabled = false;
+    this.seekInput.max = String(this.engine.duration);
+  }
+
   private async load(file: File): Promise<void> {
     this.status.textContent = 'Loading';
     this.status.classList.remove('is-error');

@@ -4,6 +4,8 @@ const FFT_SIZE = 2048;
 const BASS_RANGE = [20, 250] as const;
 const MID_RANGE = [250, 4000] as const;
 const TREBLE_RANGE = [4000, 16000] as const;
+const PITCH_RANGE = [40, 4000] as const;
+const CENTROID_RANGE = [100, 16000] as const;
 
 export class FileAudioEngine implements AudioEngine {
   private readonly audio = new Audio();
@@ -20,6 +22,11 @@ export class FileAudioEngine implements AudioEngine {
   private beat = 0;
   private beatSensitivity = 0.08;
   private waveform = new Float32Array(FFT_SIZE);
+  private onset = 0;
+  private sustain = 0;
+  private sourceLoaded = false;
+  private lastAnalysisTime = 0;
+  private cachedParameters: AudioParameters | null = null;
 
   constructor() {
     this.audio.preload = 'auto';
@@ -37,7 +44,28 @@ export class FileAudioEngine implements AudioEngine {
     this.objectUrl = URL.createObjectURL(file);
     this.audio.src = this.objectUrl;
 
-    await new Promise<void>((resolve, reject) => {
+    await this.waitForCanPlay();
+    this.sourceLoaded = true;
+    this.ensureAudioGraph();
+  }
+
+  /**
+   * 固定パスの音源を読み込む。確認用音源（DESIGN.md「8. 確認用音源」）に使う。
+   * ファイルが無い場合は例外を投げるので、呼び出し側で握りつぶしてよい。
+   */
+  async loadUrl(url: string): Promise<void> {
+    this.stopInput();
+    this.pause();
+    this.releaseObjectUrl();
+    this.audio.src = url;
+
+    await this.waitForCanPlay();
+    this.sourceLoaded = true;
+    this.ensureAudioGraph();
+  }
+
+  private waitForCanPlay(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       const onReady = (): void => {
         cleanup();
         resolve();
@@ -55,11 +83,10 @@ export class FileAudioEngine implements AudioEngine {
       this.audio.addEventListener('error', onError);
       this.audio.load();
     });
-    this.ensureAudioGraph();
   }
 
   async play(): Promise<void> {
-    if (!this.objectUrl) return;
+    if (!this.sourceLoaded) return;
 
     this.ensureAudioGraph();
     const resume = this.context?.state === 'suspended' ? this.context.resume() : Promise.resolve();
@@ -115,7 +142,7 @@ export class FileAudioEngine implements AudioEngine {
   }
 
   get isLoaded(): boolean {
-    return this.objectUrl !== null;
+    return this.sourceLoaded;
   }
 
   get isPlaying(): boolean {
@@ -135,10 +162,19 @@ export class FileAudioEngine implements AudioEngine {
   }
 
   getParameters(): AudioParameters {
-    if (!this.objectUrl && !this.isInputActive) return {};
+    if (!this.sourceLoaded && !this.isInputActive) return {};
     if (!this.analyser || !this.frequencyData || !this.timeData || !this.context) {
       return { active: 0, volume: 0, bass: 0, mid: 0, treble: 0, beat: 0 };
     }
+
+    // 解析は 1 フレームに 1 回で足りる。同じフレーム内の再呼び出しでは
+    // 経過時間が二重に積まれないよう、直前の結果を返す。
+    const now = performance.now();
+    if (this.cachedParameters && now - this.lastAnalysisTime < 8) {
+      return this.cachedParameters;
+    }
+    const delta = this.lastAnalysisTime === 0 ? 0 : Math.min((now - this.lastAnalysisTime) / 1000, 0.1);
+    this.lastAnalysisTime = now;
 
     this.analyser.getByteFrequencyData(this.frequencyData);
     this.analyser.getByteTimeDomainData(this.timeData);
@@ -150,18 +186,33 @@ export class FileAudioEngine implements AudioEngine {
     }
 
     const volume = Math.min(Math.sqrt(sumSquares / this.timeData.length) * 2.5, 1);
-    const onset = volume - this.previousVolume;
-    this.beat = onset > this.beatSensitivity && volume > 0.12 ? 1 : this.beat * 0.88;
+    const rise = volume - this.previousVolume;
+    this.beat = rise > this.beatSensitivity && volume > 0.12 ? 1 : this.beat * 0.88;
+
+    // 立ち上がりは瞬間値。beat と違って減衰させず、跳ねた frame だけ立てる。
+    this.onset = Math.min(Math.max(rise, 0) * 8, 1);
     this.previousVolume = volume;
 
-    return {
+    // 鳴っている間は伸び、止むと戻る。4 秒鳴り続けると 1 に達する。
+    this.sustain = Math.min(
+      Math.max(this.sustain + (volume > 0.06 ? delta / 4 : -delta / 1.5), 0),
+      1,
+    );
+
+    this.cachedParameters = {
       active: this.isInputActive || !this.audio.paused ? 1 : 0,
       volume,
       bass: this.getBandEnergy(...BASS_RANGE),
       mid: this.getBandEnergy(...MID_RANGE),
       treble: this.getBandEnergy(...TREBLE_RANGE),
       beat: this.beat,
+      pitch: this.getPitch(volume),
+      centroid: this.getCentroid(),
+      flatness: this.getFlatness(),
+      onset: this.onset,
+      sustain: this.sustain,
     };
+    return this.cachedParameters;
   }
 
   getWaveform(): Float32Array {
@@ -198,6 +249,11 @@ export class FileAudioEngine implements AudioEngine {
     this.timeData = null;
     this.recordingDestination = null;
     this.waveform = new Float32Array(FFT_SIZE);
+    this.sourceLoaded = false;
+    this.cachedParameters = null;
+    this.lastAnalysisTime = 0;
+    this.onset = 0;
+    this.sustain = 0;
     this.releaseObjectUrl();
   }
 
@@ -213,6 +269,85 @@ export class FileAudioEngine implements AudioEngine {
     this.fileSource.connect(this.context.destination);
     this.frequencyData = new Uint8Array(this.analyser.frequencyBinCount);
     this.timeData = new Uint8Array(this.analyser.fftSize);
+  }
+
+  /** 周波数を対数で 0..1 へ写す。音程や明るさは対数のほうが感覚に近い。 */
+  private normalizeLog(frequency: number, min: number, max: number): number {
+    if (!(frequency > 0)) return 0;
+    return Math.min(Math.max(Math.log2(frequency / min) / Math.log2(max / min), 0), 1);
+  }
+
+  private getPitch(volume: number): number {
+    if (!this.frequencyData || !this.context || volume < 0.04) return 0;
+
+    const nyquist = this.context.sampleRate / 2;
+    const bins = this.frequencyData.length;
+    const start = Math.max(Math.floor((PITCH_RANGE[0] / nyquist) * bins), 1);
+    const end = Math.min(Math.ceil((PITCH_RANGE[1] / nyquist) * bins), bins - 1);
+
+    let peak = start;
+    let peakValue = 0;
+    for (let index = start; index < end; index++) {
+      const value = this.frequencyData[index] ?? 0;
+      if (value > peakValue) {
+        peakValue = value;
+        peak = index;
+      }
+    }
+    if (peakValue < 24) return 0;
+
+    // 放物線補間でピークのビン間位置を求め、音程が階段状に震えるのを抑える。
+    const previous = this.frequencyData[peak - 1] ?? 0;
+    const next = this.frequencyData[peak + 1] ?? 0;
+    const denominator = previous - 2 * peakValue + next;
+    const offset = denominator === 0 ? 0 : (0.5 * (previous - next)) / denominator;
+    const frequency = ((peak + Math.min(Math.max(offset, -1), 1)) / bins) * nyquist;
+
+    return this.normalizeLog(frequency, PITCH_RANGE[0], PITCH_RANGE[1]);
+  }
+
+  private getCentroid(): number {
+    if (!this.frequencyData || !this.context) return 0;
+
+    const nyquist = this.context.sampleRate / 2;
+    const bins = this.frequencyData.length;
+    let weighted = 0;
+    let total = 0;
+    for (let index = 1; index < bins; index++) {
+      const magnitude = (this.frequencyData[index] ?? 0) / 255;
+      weighted += ((index / bins) * nyquist) * magnitude;
+      total += magnitude;
+    }
+    if (total <= 0) return 0;
+
+    return this.normalizeLog(weighted / total, CENTROID_RANGE[0], CENTROID_RANGE[1]);
+  }
+
+  /** 幾何平均 / 算術平均。1 に近いほどノイズ、0 に近いほど音程のある音。 */
+  private getFlatness(): number {
+    if (!this.frequencyData) return 0;
+
+    const bins = this.frequencyData.length;
+    let logSum = 0;
+    let sum = 0;
+    let energy = 0;
+    let count = 0;
+    for (let index = 1; index < bins; index++) {
+      const raw = (this.frequencyData[index] ?? 0) / 255;
+      const magnitude = raw + 1e-6;
+      energy += raw;
+      logSum += Math.log(magnitude);
+      sum += magnitude;
+      count++;
+    }
+    // 無音では全ビンが下駄の値で揃い、幾何平均と算術平均が一致してしまう。
+    // そのままだと「最もノイズ的」と報告されるため、エネルギーがなければ 0 を返す。
+    if (count === 0 || sum <= 0 || energy / count < 1e-4) return 0;
+
+    const arithmetic = sum / count;
+    if (arithmetic <= 0) return 0;
+
+    return Math.min(Math.max(Math.exp(logSum / count) / arithmetic, 0), 1);
   }
 
   private getBandEnergy(minFrequency: number, maxFrequency: number): number {

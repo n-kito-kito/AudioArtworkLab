@@ -9,4 +9,11 @@ export default tseslint.config(
   {
     ignores: ['dist'],
   },
+  {
+    // scripts/ は Node で直接実行する開発用スクリプト。
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: { Buffer: 'readonly', console: 'readonly', process: 'readonly' },
+    },
+  },
 );
