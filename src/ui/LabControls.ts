@@ -30,8 +30,12 @@ export class LabControls {
   private readonly onDepthChange: (amount: number) => void;
   private readonly exportPng: () => void;
   private readonly recordToggle: () => boolean;
+  private readonly onExportPreset: () => void;
+  private readonly onImportPreset: (json: string) => void;
+  private readonly presetInput = document.createElement('input');
   private readonly toolbarActions = document.createElement('div');
   private readonly compositionSection: HTMLElement;
+  private readonly compositionBody = document.createElement('div');
   private readonly effectSection: HTMLElement;
   private readonly effectStack = document.createElement('div');
   private readonly effectSettings = document.createElement('div');
@@ -45,18 +49,34 @@ export class LabControls {
     onDepthChange: (amount: number) => void,
     exportPng: () => void,
     recordToggle: () => boolean,
+    onExportPreset: () => void,
+    onImportPreset: (json: string) => void,
   ) {
     this.shell = shell;
     this.composition = composition;
     this.onRendererChange = onRendererChange;
     this.onThemeChange = onThemeChange;
     this.onDepthChange = onDepthChange;
+    this.onExportPreset = onExportPreset;
+    this.onImportPreset = onImportPreset;
     this.exportPng = exportPng;
     this.recordToggle = recordToggle;
     this.selectedEffectName = composition.getEffects()[0]?.name ?? '';
 
+    this.presetInput.type = 'file';
+    this.presetInput.accept = 'application/json,.json';
+    this.presetInput.hidden = true;
+    this.presetInput.addEventListener('change', () => {
+      const file = this.presetInput.files?.[0];
+      this.presetInput.value = '';
+      if (!file) return;
+      void file.text().then((json) => this.onImportPreset(json));
+    });
+    this.shell.root.append(this.presetInput);
+
     this.buildToolbar();
     this.compositionSection = this.section('Composition', 'ph-bezier-curve');
+    this.compositionSection.append(this.compositionBody);
     this.buildCompositionSection();
     this.shell.leftTop.append(this.compositionSection);
 
@@ -72,6 +92,14 @@ export class LabControls {
     this.toolbarActions.remove();
     this.compositionSection.remove();
     this.effectSection.remove();
+    this.presetInput.remove();
+  }
+
+  /** Preset 適用など、外部で composition が差し替わったときに UI を追従させる。 */
+  refresh(composition: FieldComposition): void {
+    this.composition = composition;
+    this.buildCompositionSection();
+    this.renderEffectStack();
   }
 
   private buildToolbar(): void {
@@ -82,6 +110,8 @@ export class LabControls {
       record.querySelector('span')!.textContent = recording ? 'Stop recording' : 'Record WebM';
     });
     this.toolbarActions.append(
+      this.button('ph-download-simple', 'Export preset', () => this.onExportPreset()),
+      this.button('ph-upload-simple', 'Import preset', () => this.presetInput.click()),
       record,
       this.button('ph-export', 'Export PNG', this.exportPng, true),
     );
@@ -89,6 +119,7 @@ export class LabControls {
   }
 
   private buildCompositionSection(): void {
+    this.compositionBody.replaceChildren();
     const field = document.createElement('label');
     field.className = 'control-row control-row--inline';
     const fieldName = document.createElement('span');
@@ -145,7 +176,7 @@ export class LabControls {
       this.onDepthChange(value),
     );
 
-    this.compositionSection.append(field, renderer, theme, depth);
+    this.compositionBody.append(field, renderer, theme, depth);
   }
 
   private renderEffectStack(): void {

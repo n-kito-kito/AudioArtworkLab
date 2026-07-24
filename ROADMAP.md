@@ -166,6 +166,7 @@ Effect チェーン（③）と Audio、Core は流用する。
 - [x] 既存 Effect チェーンを接続する（LabControls: Field / Renderer 選択・スキーマ駆動 Effect UI・録画・品質モニター再接続)
 - [x] VHS 統合 Effect / 色テーマの横断化
 - [x] 奥行き → トランジション（多層の場 + Renderer 間リニアクロスフェード）
+- [x] Preset v4（Field / Renderer / テーマ / 奥行き / Effect 状態の保存・復元。旧形式は破棄）
 
 再構築後の UI は LabControls に集約した。旧 StudioControls・LayerEditor は D1 により未接続のまま温存し、
 RecordingController・QualityMonitor は再接続済み。

@@ -129,9 +129,12 @@ src/
 
 ## 4. Preset
 
-- 現行 `STUDIO_PRESET_VERSION = 3`（`src/ui/StudioPreset.ts`）。v1 → v2 → v3 の migration あり。
-- **Effect を `name` で同定している。** 複製機能を入れると同名が複数存在して破綻するため、その際は id 導入 + v4 migration が必須。
-- 形式を変えたら必ずバージョンを上げ、旧形式からの migration を追加する。
+- 現行 **v4**（`src/ui/LabPreset.ts` の `LAB_PRESET_VERSION`）。保存対象は Field / Renderer / テーマ / 奥行き / Effect 状態（有効・パラメータ・Audio Mapping・順序）。
+- **v1〜v3（旧 Generator 構成）との互換はない（D8）。** 旧形式は読み込み時に破棄して初期状態に戻す。migration は書かない。キーは旧版と同じ `audio-artwork-lab:studio-preset`。
+- 自動保存は `main.ts`（1.5 秒間隔・変化時のみ書込）。Export / Import はツールバーから JSON ファイル。
+- **Effect を `name` で同定している。** 複製機能を入れると同名が複数存在して破綻するため、その際は id 導入 + v5 が必須。
+- 形式を変えたら必ずバージョンを上げる。v5 以降は v4 からの migration を追加する。
+- 旧 `src/ui/StudioPreset.ts` は D1 で温存中の旧 UI 用。新コードから参照しない。
 
 ---
 

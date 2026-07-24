@@ -149,6 +149,10 @@ export class FieldComposition implements Composition {
     this.pipeline?.move(effect, direction);
   }
 
+  setEffectOrder(names: string[]): void {
+    this.pipeline?.setOrder(names);
+  }
+
   getRenderer(): FieldRenderer {
     return this.renderer;
   }

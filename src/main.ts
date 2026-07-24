@@ -9,6 +9,15 @@ import { findTheme } from './engine/themes';
 import { RENDERERS, createRenderer } from './renderers/catalog';
 import { AudioControls } from './ui/AudioControls';
 import { LabControls } from './ui/LabControls';
+import {
+  applyEffectStates,
+  createLabPreset,
+  loadLabPreset,
+  orderEffects,
+  parseLabPreset,
+  saveLabPreset,
+  type LabPreset,
+} from './ui/LabPreset';
 import { QualityMonitor } from './ui/QualityMonitor';
 import { RecordingController } from './ui/RecordingController';
 import { StudioShell } from './ui/StudioShell';
@@ -26,14 +35,24 @@ if (!container) {
 
 const audioEngine = new FileAudioEngine();
 
-// Renderer の選択 UI ができるまでは、URL の ?renderer= で表現を切り替えられる。
-// 例: http://localhost:5173/?renderer=Light%20wave
+// 前回の状態（Preset v4）から復元して起動する。?renderer= は検証用の上書き。
 const rendererParam = new URLSearchParams(location.search).get('renderer');
+const storedPreset = loadLabPreset();
+const initialEffects = createEffects();
+if (storedPreset) {
+  applyEffectStates(initialEffects, storedPreset.effects);
+  orderEffects(
+    initialEffects,
+    storedPreset.effects.map((entry) => entry.name),
+  );
+}
 let composition = new FieldComposition(
   new Cymatics(),
-  createRenderer(rendererParam ?? RENDERERS[0]!.name),
-  createEffects(),
+  createRenderer(rendererParam ?? storedPreset?.rendererName ?? RENDERERS[0]!.name),
+  initialEffects,
+  findTheme(storedPreset?.themeName ?? ''),
 );
+if (storedPreset) composition.setDepth(storedPreset.depth);
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 
@@ -65,6 +84,64 @@ const setTheme = (name: string): void => {
 const setDepth = (amount: number): void => {
   composition.setDepth(amount);
 };
+
+const notify = (message: string, error = false): void => {
+  const notice = document.createElement('div');
+  notice.className = `studio-notice${error ? ' is-error' : ''}`;
+  notice.textContent = message;
+  shell.root.append(notice);
+  window.setTimeout(() => notice.remove(), 2200);
+};
+
+const applyPreset = (preset: LabPreset): void => {
+  setTheme(preset.themeName);
+  setDepth(preset.depth);
+  const target = setRenderer(preset.rendererName);
+  applyEffectStates(target.getEffects(), preset.effects);
+  target.setEffectOrder(preset.effects.map((entry) => entry.name));
+  labControls.refresh(target);
+};
+
+const exportPreset = (): void => {
+  const link = document.createElement('a');
+  link.download = `audio-artwork-preset-${Date.now()}.json`;
+  link.href = URL.createObjectURL(
+    new Blob([JSON.stringify(createLabPreset(composition), null, 2)], {
+      type: 'application/json',
+    }),
+  );
+  link.click();
+  URL.revokeObjectURL(link.href);
+  notify('Preset exported');
+};
+
+const importPreset = (json: string): void => {
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    /* parseLabPreset が null を返す */
+  }
+  const preset = parseLabPreset(parsed);
+  if (!preset) {
+    notify('Invalid preset file', true);
+    return;
+  }
+  applyPreset(preset);
+  saveLabPreset(preset);
+  notify('Preset imported');
+};
+
+// 自動保存。状態が変わったときだけ書く。
+let lastSavedPreset = '';
+const savePresetNow = (): void => {
+  const preset = createLabPreset(composition);
+  const json = JSON.stringify(preset);
+  if (json === lastSavedPreset) return;
+  lastSavedPreset = json;
+  saveLabPreset(preset);
+};
+const autosaveTimer = window.setInterval(savePresetNow, 1500);
 const audioControls = new AudioControls(shell.leftTop, audioEngine);
 const recordingController = new RecordingController(shell, audioEngine);
 const labControls = new LabControls(
@@ -75,6 +152,8 @@ const labControls = new LabControls(
   setDepth,
   () => app.exportPng(),
   () => recordingController.toggle(),
+  exportPreset,
+  importPreset,
 );
 const qualityMonitor = new QualityMonitor(shell, app, () => composition.getEffects());
 let disposed = false;
@@ -86,6 +165,8 @@ void audioControls.loadReference(REFERENCE_AUDIO_URL, REFERENCE_AUDIO_NAME);
 const dispose = (): void => {
   if (disposed) return;
   disposed = true;
+  window.clearInterval(autosaveTimer);
+  savePresetNow();
   audioControls.dispose();
   recordingController.dispose();
   qualityMonitor.dispose();
@@ -101,6 +182,8 @@ if (import.meta.env.DEV) {
     app,
     audioEngine,
     setRenderer,
+    applyPreset,
+    savePresetNow,
     get composition() {
       return composition;
     },
