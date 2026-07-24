@@ -83,7 +83,8 @@ export function parseLabPreset(raw: unknown): LabPreset | null {
     if (typeof effect.parameters !== 'object' || effect.parameters === null) return null;
     if (typeof effect.audioMappings !== 'object' || effect.audioMappings === null) return null;
   }
-  return raw as LabPreset;
+  // 移行後のオブジェクトを返す。元データを返すと移行で補った値が失われる。
+  return preset as unknown as LabPreset;
 }
 
 /** LocalStorage から読む。旧形式が入っていた場合は削除して null を返す。 */
