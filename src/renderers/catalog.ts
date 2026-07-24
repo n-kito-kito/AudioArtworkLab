@@ -1,4 +1,5 @@
 import type { FieldRenderer } from '../engine/FieldRenderer';
+import { LightWave } from './LightWave';
 import { MinimalShape } from './MinimalShape';
 
 /**
@@ -12,6 +13,7 @@ export interface RendererDefinition {
 
 export const RENDERERS: RendererDefinition[] = [
   { name: 'Minimal shape', create: () => new MinimalShape() },
+  { name: 'Light wave', create: () => new LightWave() },
 ];
 
 export function createRenderer(name: string): FieldRenderer {
