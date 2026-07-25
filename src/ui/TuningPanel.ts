@@ -27,6 +27,7 @@ const GROUPS: TuningGroup[] = [
   {
     title: '板と粒子',
     controls: [
+      { key: 'sandAmount', label: '粒子の量', min: 0.15, max: 1.5, step: 0.01 },
       { key: 'excite', label: '励振の強さ', min: 0, max: 4, step: 0.01 },
       { key: 'simSpeed', label: '粒子の最高速度', min: 0.02, max: 1, step: 0.01 },
       { key: 'jitterBase', label: '震え', min: 0, max: 1.5, step: 0.01 },

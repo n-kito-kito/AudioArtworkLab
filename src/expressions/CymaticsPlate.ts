@@ -59,6 +59,10 @@ export class CymaticsPlate implements Composition {
   private displayMaterial: THREE.ShaderMaterial | null = null;
   private simMaterial: THREE.ShaderMaterial | null = null;
   private targets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null = null;
+  private massTarget: THREE.WebGLRenderTarget | null = null;
+  private massScene: THREE.Scene | null = null;
+  private massGeometry: THREE.PlaneGeometry | null = null;
+  private massMaterial: THREE.ShaderMaterial | null = null;
   private current = 0;
   private needsInit = true;
   private pipeline: EffectPipeline | null = null;
@@ -86,10 +90,49 @@ export class CymaticsPlate implements Composition {
     this.targets = [makeTarget(), makeTarget()];
     this.needsInit = true;
 
+    // ---- 質量の計測（1×1 に平均密度を落とす） ----
+    // 数値誤差でも粒子が減り続けないよう、シミュレーションはこの平均を
+    // 目標量と比べてゆるやかに補正する。板の砂は常に一定量ある。
+    this.massTarget = new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.HalfFloatType,
+      format: THREE.RGBAFormat,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: false,
+      stencilBuffer: false,
+    });
+    this.massMaterial = new THREE.ShaderMaterial({
+      uniforms: { tDensity: { value: null } },
+      vertexShader: /* glsl */ `
+        void main() {
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D tDensity;
+        void main() {
+          // 40×40 の層化サンプリング。バイリニアで各点が 4 テクセルを平均する。
+          float sum = 0.0;
+          for (int i = 0; i < 40; i++) {
+            for (int j = 0; j < 40; j++) {
+              sum += texture2D(tDensity, (vec2(float(i), float(j)) + 0.5) / 40.0).r;
+            }
+          }
+          gl_FragColor = vec4(sum / 1600.0, 0.0, 0.0, 1.0);
+        }
+      `,
+    });
+    this.massScene = new THREE.Scene();
+    this.massGeometry = new THREE.PlaneGeometry(2, 2);
+    this.massScene.add(new THREE.Mesh(this.massGeometry, this.massMaterial));
+
     // ---- シミュレーション（板の 1 ステップ） ----
     this.simMaterial = new THREE.ShaderMaterial({
       uniforms: {
         tState: { value: null },
+        tMass: { value: null },
+        uTargetMass: { value: TUNING.sandAmount },
         uInitState: { value: 1 },
         uDelta: { value: 0.016 },
         uTime: { value: 0 },
@@ -114,6 +157,8 @@ export class CymaticsPlate implements Composition {
         precision highp float;
         varying vec2 vUv;
         uniform sampler2D tState;
+        uniform sampler2D tMass;
+        uniform float uTargetMass;
         uniform float uInitState;
         uniform float uDelta;
         uniform float uTime;
@@ -147,7 +192,7 @@ export class CymaticsPlate implements Composition {
 
           // 初期状態: 板に砂をほぼ均一に撒く（わずかな決定論的むら）。
           if (uInitState > 0.5) {
-            float d = 0.5 + (hash(vUv * 7.31) - 0.5) * 0.05;
+            float d = uTargetMass * (1.0 + (hash(vUv * 7.31) - 0.5) * 0.1);
             gl_FragColor = vec4(d, 0.0, 0.0, 1.0);
             return;
           }
@@ -213,6 +258,12 @@ export class CymaticsPlate implements Composition {
           // 拡散: わずかなにじみ。孤立粒が残るよう弱く。
           float average = (dL + dR + dD + dU) * 0.25;
           density = mix(density, average, clamp(uDiffusion * uDelta * 15.0, 0.0, 0.5));
+
+          // 再正規化: 総量を目標へゆるやかに引き戻す。
+          // 数値誤差による漏れを打ち消し、板の砂を常に一定量に保つ。
+          float measured = texture2D(tMass, vec2(0.5)).r;
+          float correction = clamp(uTargetMass / max(measured, 0.02), 0.8, 1.25);
+          density *= mix(1.0, correction, 0.06);
 
           // 上限は安全弁。低すぎると山が飽和して流入分が消え、質量が漏れる。
           gl_FragColor = vec4(clamp(density, 0.0, 16.0), vel, 1.0);
@@ -354,6 +405,7 @@ export class CymaticsPlate implements Composition {
       u.uDiffusion!.value = TUNING.diffusion;
       u.uMaxSpeed!.value = TUNING.simSpeed;
       u.uSeedJitter!.value = (audio.seed ?? 0) * 13.7;
+      u.uTargetMass!.value = TUNING.sandAmount;
       u.uDelta!.value = delta > 0 ? delta : 0.016;
       u.uTime!.value = elapsed;
 
@@ -370,9 +422,18 @@ export class CymaticsPlate implements Composition {
     }
     const renderer = this.context.renderer;
     const next = 1 - this.current;
-    this.simMaterial.uniforms.tState!.value = this.targets[this.current]!.texture;
-    this.simMaterial.uniforms.uInitState!.value = this.needsInit ? 1 : 0;
     const previousTarget = renderer.getRenderTarget();
+
+    // 現在の状態から平均密度を測り、このステップの再正規化に使う。
+    if (!this.needsInit && this.massMaterial && this.massScene && this.massTarget) {
+      this.massMaterial.uniforms.tDensity!.value = this.targets[this.current]!.texture;
+      renderer.setRenderTarget(this.massTarget);
+      renderer.render(this.massScene, this.camera);
+    }
+
+    this.simMaterial.uniforms.tState!.value = this.targets[this.current]!.texture;
+    this.simMaterial.uniforms.tMass!.value = this.massTarget?.texture ?? null;
+    this.simMaterial.uniforms.uInitState!.value = this.needsInit ? 1 : 0;
     renderer.setRenderTarget(this.targets[next]!);
     renderer.render(this.simScene, this.camera);
     renderer.setRenderTarget(previousTarget);
@@ -445,12 +506,18 @@ export class CymaticsPlate implements Composition {
   dispose(): void {
     this.pipeline?.dispose();
     this.targets?.forEach((target) => target.dispose());
+    this.massTarget?.dispose();
     this.displayGeometry?.dispose();
     this.simGeometry?.dispose();
+    this.massGeometry?.dispose();
     this.displayMaterial?.dispose();
     this.simMaterial?.dispose();
+    this.massMaterial?.dispose();
     this.field.dispose();
     this.targets = null;
+    this.massTarget = null;
+    this.massScene = null;
+    this.massMaterial = null;
     this.pipeline = null;
     this.displayScene = null;
     this.simScene = null;

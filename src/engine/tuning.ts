@@ -25,6 +25,7 @@ export const TUNING = {
   inkSustain: 0.5, //     持続が濃さを上げる量
 
   // 板のシミュレーション（CymaticsPlate: 粒子の密度場）
+  sandAmount: 0.5, //     板の上の粒子の総量。再正規化でこの量に保たれ続ける
   excite: 0.8, //         励振の強さ。振動場の勾配が粒子を節線へ押す力（音量が乗る）
   jitterBase: 0.25, //    粒子が常に受ける微細な震え
   scatter: 0.5, //        ノイズ的な音による散乱の増分

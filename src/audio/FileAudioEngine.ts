@@ -27,6 +27,14 @@ export class FileAudioEngine implements AudioEngine {
   private seed = 0;
   private wasRising = false;
   private sourceLoaded = false;
+  // 自動較正（PRD D17）: 帯域ごとのピークを追従し、曲の音量差を吸収する。
+  // 静かな曲でも数十秒で全レンジを使い、写像が成立するようにする。
+  private readonly ceilings: Record<'volume' | 'bass' | 'mid' | 'treble', number> = {
+    volume: 0.3,
+    bass: 0.3,
+    mid: 0.3,
+    treble: 0.3,
+  };
   private lastAnalysisTime = 0;
   private cachedParameters: AudioParameters | null = null;
 
@@ -187,7 +195,10 @@ export class FileAudioEngine implements AudioEngine {
       sumSquares += normalized * normalized;
     }
 
-    const volume = Math.min(Math.sqrt(sumSquares / this.timeData.length) * 2.5, 1);
+    const rawVolume = Math.min(Math.sqrt(sumSquares / this.timeData.length) * 2.5, 1);
+    // 以降の判定はすべて正規化後の値で行う。静かな曲でもビート・オンセット・
+    // 持続が立ち、写像が成立する。
+    const volume = this.normalize('volume', rawVolume);
     const rise = volume - this.previousVolume;
     this.beat = rise > this.beatSensitivity && volume > 0.12 ? 1 : this.beat * 0.88;
 
@@ -210,11 +221,11 @@ export class FileAudioEngine implements AudioEngine {
     this.cachedParameters = {
       active: this.isInputActive || !this.audio.paused ? 1 : 0,
       volume,
-      bass: this.getBandEnergy(...BASS_RANGE),
-      mid: this.getBandEnergy(...MID_RANGE),
-      treble: this.getBandEnergy(...TREBLE_RANGE),
+      bass: this.normalize('bass', this.getBandEnergy(...BASS_RANGE)),
+      mid: this.normalize('mid', this.getBandEnergy(...MID_RANGE)),
+      treble: this.normalize('treble', this.getBandEnergy(...TREBLE_RANGE)),
       beat: this.beat,
-      pitch: this.getPitch(volume),
+      pitch: this.getPitch(rawVolume),
       centroid: this.getCentroid(),
       flatness: this.getFlatness(),
       onset: this.onset,
@@ -303,6 +314,16 @@ export class FileAudioEngine implements AudioEngine {
     this.fileSource.connect(this.context.destination);
     this.frequencyData = new Uint8Array(this.analyser.frequencyBinCount);
     this.timeData = new Uint8Array(this.analyser.fftSize);
+  }
+
+  /**
+   * ピーク追従の正規化。天井は音が超えれば即座に上がり、
+   * 下回ると 30〜40 秒かけてゆっくり降りる。無音を増幅しないよう下限を持つ。
+   */
+  private normalize(key: 'volume' | 'bass' | 'mid' | 'treble', value: number): number {
+    const decayed = Math.max(value, this.ceilings[key] * 0.9997);
+    this.ceilings[key] = Math.min(Math.max(decayed, 0.12), 1);
+    return Math.min(value / this.ceilings[key], 1);
   }
 
   /** 周波数を対数で 0..1 へ写す。音程や明るさは対数のほうが感覚に近い。 */
