@@ -51,10 +51,8 @@ let composition = new FieldComposition(
   initialEffects,
   findTheme(storedPreset?.themeName ?? ''),
 );
-if (storedPreset) {
-  composition.setDepth(storedPreset.depth);
-  composition.setZoom(storedPreset.zoom);
-}
+// zoom は開発用（PRD D17）のため保存値は適用せず、常に等倍で起動する。
+if (storedPreset) composition.setDepth(storedPreset.depth);
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 
@@ -92,10 +90,6 @@ const setDepth = (amount: number): void => {
   composition.setDepth(amount);
 };
 
-const setZoom = (zoom: number): void => {
-  composition.setZoom(zoom);
-};
-
 const notify = (message: string, error = false): void => {
   const notice = document.createElement('div');
   notice.className = `studio-notice${error ? ' is-error' : ''}`;
@@ -107,7 +101,6 @@ const notify = (message: string, error = false): void => {
 const applyPreset = (preset: LabPreset): void => {
   setTheme(preset.themeName);
   setDepth(preset.depth);
-  setZoom(preset.zoom);
   const target = setRenderer(preset.rendererName);
   applyEffectStates(target.getEffects(), preset.effects);
   target.setEffectOrder(preset.effects.map((entry) => entry.name));
@@ -161,7 +154,6 @@ const labControls = new LabControls(
   composition,
   setTheme,
   setDepth,
-  setZoom,
   () => app.exportPng(),
   () => recordingController.toggle(),
   exportPreset,

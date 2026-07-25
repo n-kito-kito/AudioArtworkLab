@@ -26,7 +26,6 @@ export class LabControls {
   private composition: FieldComposition;
   private readonly onThemeChange: (name: string) => void;
   private readonly onDepthChange: (amount: number) => void;
-  private readonly onZoomChange: (zoom: number) => void;
   private readonly exportPng: () => void;
   private readonly recordToggle: () => boolean;
   private readonly onExportPreset: () => void;
@@ -45,7 +44,6 @@ export class LabControls {
     composition: FieldComposition,
     onThemeChange: (name: string) => void,
     onDepthChange: (amount: number) => void,
-    onZoomChange: (zoom: number) => void,
     exportPng: () => void,
     recordToggle: () => boolean,
     onExportPreset: () => void,
@@ -55,7 +53,6 @@ export class LabControls {
     this.composition = composition;
     this.onThemeChange = onThemeChange;
     this.onDepthChange = onDepthChange;
-    this.onZoomChange = onZoomChange;
     this.onExportPreset = onExportPreset;
     this.onImportPreset = onImportPreset;
     this.exportPng = exportPng;
@@ -150,14 +147,13 @@ export class LabControls {
     themeSelect.addEventListener('change', () => this.onThemeChange(themeSelect.value));
     theme.append(themeName, themeSelect);
 
-    const zoom = this.range('Zoom', this.composition.getZoom(), 0.5, 6, 0.01, (value) =>
-      this.onZoomChange(value),
-    );
+    // ズームは開発用（PRD D17）。主 UI には出さない。
+    // 開発時は __lab.composition.setZoom() で操作する。
     const depth = this.range('Depth', this.composition.getDepth(), 0, 1, 0.01, (value) =>
       this.onDepthChange(value),
     );
 
-    this.compositionBody.append(field, theme, zoom, depth);
+    this.compositionBody.append(field, theme, depth);
   }
 
   private renderEffectStack(): void {
