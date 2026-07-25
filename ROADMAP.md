@@ -2,18 +2,11 @@
 
 Audio Artwork Lab を、音源に反応する Generative Art 制作環境へ育てるためのロードマップ。
 
-実装は `AI_RULES.md` に従い、1 回の変更を 1 つの Generator、Modifier、Effect、Composition、または小さな基盤機能に限定する。詳細な担当・期限・進捗管理は Asana の **Audio Artwork Lab** プロジェクトで行う。
+実装は `AI_RULES.md` に従い、1 回の変更を 1 つの部品または小さな基盤機能に限定する。
 
-## 現在地
-
-- [x] Core — Canvas, Renderer, Scene, Camera, AnimationLoop, App
-- [x] Generator — Line, SineWave
-- [x] Composition — SineWaveBasic
-- [x] Audio — AudioEngine interface, NullAudioEngine
-- [x] Effect — interface
-- [ ] Modifier — interface と実装
-- [ ] GUI
-- [ ] 実音源の再生・解析
+**現在地: Phase 12（サイマティクス表現の完成度）。** Phase 0〜11 は完了、または
+Phase 12 の構造整理で置き換え済み。以下の Phase 0〜11 は履歴として残している。
+要求は `PRD.md`、実装の地図は `CLAUDE.md` を参照する。
 
 ## Phase 0 — 基盤整理
 
@@ -180,7 +173,8 @@ RecordingController・QualityMonitor は再接続済み。
 - [x] 生成方式を Granular Plate Model（GPU 密度場シミュレーション）へ刷新（PRD D18）
 - [x] 固有振動モードバンク（16 種）とスペクトル励起によるモード選択（PRD D19。?debug=1 で確認）
 - [x] G1 チューニングモード — `?tune=1` で内部定数を調整し、確定値を `engine/tuning.ts` へ焼き込む
-- [ ] G1b 静的な質感の確定 — 上記で粒・帯・黒レベルの基準値を決めて焼き込む
+- [x] 砂の物理を実機構へ（移動度ベース・場の補間廃止・保存形フラックス。PRD D21）
+- [ ] G1b 質感の確定 — 帯の太さ・粒・集積の速さを `?tune=1` で追い込み焼き込む
 - [ ] G2 動き — 揺れ・モーフ速度・構図の引き直し頻度を決める
 - [ ] G3 実楽曲での音反応 — L1〜L3 の効き方を実際の曲で調整する（移動窓の自動較正を含む。PRD D17）
 - [ ] G4 2 つ目の表現を追加し、表現の切り替え（トランジション）を作る
@@ -192,7 +186,8 @@ RecordingController・QualityMonitor は再接続済み。
 
 - `npm run lint` が成功する
 - `npm run build` が成功する
-- 既存 Composition の表示を意図せず変更していない
-- Audio、Three.js、DOM のリソースを適切に破棄する
-- Generator、Modifier、Effect、Composition の責務を混在させない
-- 新しい表現部品を単独で有効・無効化できる
+- 既存の表示を意図せず変更していない
+- Audio、Three.js、DOM のリソースを適切に破棄する（RenderTarget を含む）
+- 表現・Effect の責務を混在させない
+- 新しい Effect を単独で有効・無効化でき、無効時は元の表示を維持する
+- 質感の数値は `TUNING` を経由させ、コード中に直接書かない
