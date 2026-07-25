@@ -80,7 +80,7 @@ export class DebugPanel {
       `onset ${f(audio.onset)}  sustain ${f(audio.sustain)}`,
       `peaks: ${peaks || '-'}`,
       `primary  #${state.primary.id} ${state.primary.label} (E=${state.energies[state.primary.id]!.toFixed(2)})`,
-      `previous #${state.previous.id} ${state.previous.label}  blend ${f(state.blend)}`,
+      `previous #${state.previous.id} ${state.previous.label}  since ${f(state.sinceSwitch, 1)}s`,
       `secondary #${state.secondary.id} ${state.secondary.label}  w=${f(state.secondaryWeight)}`,
       `candidate ${state.candidate ? `#${state.candidate.id} ${state.candidate.label}` : '-'}`,
       `excitation ${f(state.excitation)}`,

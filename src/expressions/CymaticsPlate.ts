@@ -14,28 +14,32 @@ import { TUNING } from '../engine/tuning';
  * サイマティクス表現 — Granular Plate Model。
  *
  * 画面全体を上から見た一枚の板として扱う。完成した節線や図形は描かない。
- * 不可視の振動場 A(x,y)（クラドニのモード形状）を作り、粒子（密度場）が
- * 振動の大きい場所から小さい場所へ移動して節線に集積することで、
- * 像が「自発的に現れる」ようにする。
  *
- *   - 振動場は Cymatics（場）が担う。音 → モード・対称性・構図は従来どおり
- *   - 粒子は GPU の密度場（ping-pong RenderTarget）で運ぶ。
- *     R = 密度, GB = 速度。総量は移流 + 拡散でほぼ保存される（厳密ではない）
- *   - 表示するのは粒子だけ。節線そのものは描画しない
- *   - モードが変わると振動場が移り、旧配置は崩れてから新しい節線へ再集積する
+ * 実機構に沿った砂の運動:
+ *   板の加速度が重力を超えた場所で砂粒は跳ね上げられ、着地位置が動く。
+ *   腹では跳ね続け、節（振幅ゼロ）では跳ねないので動きが止まり、そこに溜まる。
+ *   すなわち「移動度 ∝ 振動振幅」の自己捕捉ランダムウォークであり、
+ *   砂は速度を蓄えない（慣性を持たない）。跳ねて着地するだけである。
+ *
+ *   - 密度場は GPU の ping-pong RenderTarget（R = 密度のみ）
+ *   - 保存形の風上フラックス + 再正規化で総量を一定に保つ
+ *   - CFL 制限を回避するため 1 フレームを分割して進める（TUNING.substeps）
+ *   - 表示するのは砂だけ。節線そのものは描画しない
+ *   - モードが変わると場は瞬時に切り替わり、腹に取り残された砂が跳ね始めて
+ *     新しい節へ再配置される。中間形状は存在しない
  *
  * 音との対応（PRD §7。この表現での解釈）:
- *   pitch    → 主振動モードの選択（Cymatics の L2）
- *   volume   → 励振の強さ = 粒子の移動速度
- *   sustain  → 定着。鳴り続けるほど粒子は節線に落ち着く
- *   onset    → 粒子が一瞬浮き、再配置が促される
- *   centroid → 場の細かさ（副モード的な高次化。Cymatics の uScale）
- *   flatness → モードの崩れと粒子の散乱
+ *   周波数構成 → 主振動モード（＝図形の種類。Cymatics の L2）
+ *   volume     → 励振の強さ＝どれだけ砂が跳ねるか（図形の種類は変えない）
+ *   onset      → 一斉に跳ねる。旧配置が崩れ、再配置が促される
+ *   flatness   → モードの崩れ
  *
  * 乱数源は座標と時間と音のシードによる決定論的ハッシュ。Math.random() は使わない。
  */
 
-const SIM_SIZE = 512;
+// 密度場の解像度。低いほど 1 サブステップで砂が遠くまで運べる（CFL は texel 幅に比例）。
+// 表示側はバイリニアで読んで確率的に粒を撒くので、この解像度でも粗さは出ない。
+const SIM_SIZE = 256;
 
 const clamp01 = (value: number | undefined): number => Math.min(Math.max(value ?? 0, 0), 1);
 
@@ -136,17 +140,15 @@ export class CymaticsPlate implements Composition {
         tMass: { value: null },
         uTargetMass: { value: TUNING.sandAmount },
         uInitState: { value: 1 },
-        uDelta: { value: 0.016 },
+        uDelta: { value: 0.002 },
         uTime: { value: 0 },
-        uExcite: { value: 0 },
-        uJitter: { value: 0 },
-        uOnsetLift: { value: 0 },
-        uSettleRate: { value: 1 },
+        uDrift: { value: TUNING.driftSpeed },
+        uMobFloor: { value: TUNING.mobilityFloor },
+        uMobSoft: { value: TUNING.mobilitySoft },
+        uAgitation: { value: 1 },
+        uNoise: { value: TUNING.agitationNoise },
         uRepulsion: { value: TUNING.repulsion },
         uDiffusion: { value: TUNING.diffusion },
-        uNodeGrip: { value: TUNING.nodeGrip },
-        uMaxSpeed: { value: TUNING.simSpeed },
-        uSeedJitter: { value: 0 },
         ...this.field.uniforms,
       },
       vertexShader: /* glsl */ `
@@ -165,15 +167,13 @@ export class CymaticsPlate implements Composition {
         uniform float uInitState;
         uniform float uDelta;
         uniform float uTime;
-        uniform float uExcite;
-        uniform float uJitter;
-        uniform float uOnsetLift;
-        uniform float uSettleRate;
+        uniform float uDrift;
+        uniform float uMobFloor;
+        uniform float uMobSoft;
+        uniform float uAgitation;
+        uniform float uNoise;
         uniform float uRepulsion;
         uniform float uDiffusion;
-        uniform float uNodeGrip;
-        uniform float uMaxSpeed;
-        uniform float uSeedJitter;
 
         const float PI = 3.141592653589793;
         float gDepth = 0.0;
@@ -181,14 +181,23 @@ export class CymaticsPlate implements Composition {
 
         ${this.field.glsl}
 
-        // 振動振幅。節線（field = 0）で 0、腹で大きい。
-        float amp(vec2 uv) {
-          vec2 p = uv * 2.0 - 1.0;
-          return clamp(abs(field(p)) * 0.5, 0.0, 1.0);
-        }
-
         float hash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+
+        // 振動振幅。節線（field = 0）で 0、腹で大きい。
+        float amp(vec2 uv) {
+          return abs(field(uv * 2.0 - 1.0));
+        }
+
+        // 移動度: 板の加速度が重力を超えた場所で砂は跳ね上げられる。
+        // 振幅が閾値を下回る節では跳ねないので、そこで動きが止まり砂が溜まる。
+        // これが自己捕捉ランダムウォークの捕捉側にあたる。
+        float mobility(float a, vec2 uv) {
+          float m = smoothstep(uMobFloor, uMobFloor + max(uMobSoft, 0.01), a);
+          // 粒ごとのばらつき。線を有機的にする決定論的ノイズ。
+          float n = hash(floor(uv * 256.0) + floor(uTime * 3.0) * 0.31);
+          return m * uAgitation * (1.0 - uNoise * 0.5 + uNoise * n);
         }
 
         void main() {
@@ -201,79 +210,77 @@ export class CymaticsPlate implements Composition {
             return;
           }
 
-          vec4 state = texture2D(tState, vUv);
+          float dC = texture2D(tState, vUv).r;
+          float dL = texture2D(tState, vUv - vec2(texel, 0.0)).r;
+          float dR = texture2D(tState, vUv + vec2(texel, 0.0)).r;
+          float dD = texture2D(tState, vUv - vec2(0.0, texel)).r;
+          float dU = texture2D(tState, vUv + vec2(0.0, texel)).r;
 
-          // 振動場の勾配。粒子は振動の大きい方から小さい方へ押される。
           float aC = amp(vUv);
-          vec2 gradA = vec2(
-            amp(vUv + vec2(texel, 0.0)) - amp(vUv - vec2(texel, 0.0)),
-            amp(vUv + vec2(0.0, texel)) - amp(vUv - vec2(0.0, texel))
-          ) / (2.0 * texel);
-          float gradLen = length(gradA);
-          vec2 slope = gradLen > 1e-5 ? gradA / gradLen : vec2(0.0);
-          vec2 force = -slope * min(gradLen, 1.0) * uExcite;
+          float aL = amp(vUv - vec2(texel, 0.0));
+          float aR = amp(vUv + vec2(texel, 0.0));
+          float aD = amp(vUv - vec2(0.0, texel));
+          float aU = amp(vUv + vec2(0.0, texel));
 
-          // 高密度からの反発。山が潰れ、線幅が不均一になる。
-          vec4 sL = texture2D(tState, vUv - vec2(texel, 0.0));
-          vec4 sR = texture2D(tState, vUv + vec2(texel, 0.0));
-          vec4 sD = texture2D(tState, vUv - vec2(0.0, texel));
-          vec4 sU = texture2D(tState, vUv + vec2(0.0, texel));
-          float dL = sL.r; float dR = sR.r; float dD = sD.r; float dU = sU.r;
-          force -= vec2(dR - dL, dU - dD) * 0.5 * uRepulsion;
+          float mC = mobility(aC, vUv);
+          float mL = mobility(aL, vUv - vec2(texel, 0.0));
+          float mR = mobility(aR, vUv + vec2(texel, 0.0));
+          float mD = mobility(aD, vUv - vec2(0.0, texel));
+          float mU = mobility(aU, vUv + vec2(0.0, texel));
 
-          // 振動による跳躍。振動の大きい場所ほど強く跳ね、
-          // オンセットで一瞬浮く。乱数源は座標・時間・音のシード。
-          float h = hash(floor(vUv * ${SIM_SIZE.toFixed(1)}) + floor(uTime * 7.0) * 0.173 + uSeedJitter);
-          float angle = h * 6.2831853;
-          force += vec2(cos(angle), sin(angle)) * (uJitter * (0.25 + aC) + uOnsetLift);
+          // 面ごとの速度: 跳ねている砂は振幅の低い側へ寄る。
+          // 速さは移動度だけで決まり、斜面の急さでは決まらない。跳ね上げられた砂は
+          // 勾配が緩くても同じように飛ぶため、腹の頂上でも取り残されない。
+          // ref を小さく取ることで、わずかな傾きでも全速で寄る。
+          // 慣性は持たない。砂は跳ねて着地するだけで、速度を蓄えない。
+          float ref = 0.003;
+          float vR = -uDrift * min(mC, mR) * clamp((aR - aC) / ref, -1.0, 1.0);
+          float vL = -uDrift * min(mL, mC) * clamp((aC - aL) / ref, -1.0, 1.0);
+          float vU = -uDrift * min(mC, mU) * clamp((aU - aC) / ref, -1.0, 1.0);
+          float vD = -uDrift * min(mD, mC) * clamp((aC - aD) / ref, -1.0, 1.0);
 
-          // 速度更新: 力 + 摩擦（sustain で定着が強まる）。
-          // 節線の近くでは静止度が徐々に増し、粒子は節に留まる。
-          float grip = 1.0 - smoothstep(0.0, 0.2, aC);
-          vec2 vel = (state.gb + force * uDelta)
-            * exp(-(uSettleRate + uNodeGrip * grip) * uDelta);
-          float speed = length(vel);
-          if (speed > uMaxSpeed) vel *= uMaxSpeed / speed;
+          // 高密度からの反発。山が潰れて幅が不均一になる。
+          float rep = uDrift * uRepulsion;
+          vR += -rep * min(mC, mR) * clamp((dR - dC) * 2.0, -1.0, 1.0);
+          vL += -rep * min(mL, mC) * clamp((dC - dL) * 2.0, -1.0, 1.0);
+          vU += -rep * min(mC, mU) * clamp((dU - dC) * 2.0, -1.0, 1.0);
+          vD += -rep * min(mD, mC) * clamp((dC - dD) * 2.0, -1.0, 1.0);
 
-          // 密度の輸送: 保存形のフラックス（有限体積・風上差分）。
-          // 面ごとの流出入は隣接セルで正負同額になるため、粒子総量は保存される。
-          // CFL 制限: 1 ステップで 1 テクセル以上流れないよう速度を局所的に抑える。
-          // 4 面が同時に流出しても総量がセルの質量を超えないよう 0.2 に抑える。
-          float maxFlow = 0.2 * texel / max(uDelta, 1e-4);
-          vec2 vC = state.gb; float sC = length(vC); if (sC > maxFlow) vC *= maxFlow / sC;
-          vec2 vL = sL.gb;    float sLn = length(vL); if (sLn > maxFlow) vL *= maxFlow / sLn;
-          vec2 vR = sR.gb;    float sRn = length(vR); if (sRn > maxFlow) vR *= maxFlow / sRn;
-          vec2 vD = sD.gb;    float sDn = length(vD); if (sDn > maxFlow) vD *= maxFlow / sDn;
-          vec2 vU = sU.gb;    float sUn = length(vU); if (sUn > maxFlow) vU *= maxFlow / sUn;
+          // CFL: 1 サブステップで 1 テクセル以上流さない。
+          float maxFlow = 0.22 * texel / max(uDelta, 1e-5);
+          vR = clamp(vR, -maxFlow, maxFlow);
+          vL = clamp(vL, -maxFlow, maxFlow);
+          vU = clamp(vU, -maxFlow, maxFlow);
+          vD = clamp(vD, -maxFlow, maxFlow);
 
-          float faceR = 0.5 * (vC.x + vR.x);
-          float faceL = 0.5 * (vL.x + vC.x);
-          float faceU = 0.5 * (vC.y + vU.y);
-          float faceD = 0.5 * (vD.y + vC.y);
-          float fluxR = (faceR > 0.0 ? state.r : dR) * faceR;
-          float fluxL = (faceL > 0.0 ? dL : state.r) * faceL;
-          float fluxU = (faceU > 0.0 ? state.r : dU) * faceU;
-          float fluxD = (faceD > 0.0 ? dD : state.r) * faceD;
+          // 保存形の風上フラックス。隣接セルで正負同額になり総量が保たれる。
+          float fR = (vR > 0.0 ? dC : dR) * vR;
+          float fL = (vL > 0.0 ? dL : dC) * vL;
+          float fU = (vU > 0.0 ? dC : dU) * vU;
+          float fD = (vD > 0.0 ? dD : dC) * vD;
 
-          // 板の縁は壁。外へは流れない（質量保存）。
-          fluxR *= step(vUv.x + texel, 1.0);
-          fluxL *= step(texel, vUv.x);
-          fluxU *= step(vUv.y + texel, 1.0);
-          fluxD *= step(texel, vUv.y);
-          float density = state.r - uDelta * (fluxR - fluxL + fluxU - fluxD) / texel;
+          // 着地位置のばらつきもフラックスとして足す。面ごとに対称な式にしないと
+          // 隣接セルで出入りが釣り合わず、総量が漏れる。
+          float dif = uDiffusion * uDrift;
+          fR += -dif * min(mC, mR) * (dR - dC);
+          fL += -dif * min(mL, mC) * (dC - dL);
+          fU += -dif * min(mC, mU) * (dU - dC);
+          fD += -dif * min(mD, mC) * (dC - dD);
 
-          // 拡散: わずかなにじみ。孤立粒が残るよう弱く。
-          float average = (dL + dR + dD + dU) * 0.25;
-          density = mix(density, average, clamp(uDiffusion * uDelta * 15.0, 0.0, 0.5));
+          // 板の縁は壁。外へは流れない。
+          fR *= step(vUv.x + texel, 1.0);
+          fL *= step(texel, vUv.x);
+          fU *= step(vUv.y + texel, 1.0);
+          fD *= step(texel, vUv.y);
 
-          // 再正規化: 総量を目標へゆるやかに引き戻す。
-          // 数値誤差による漏れを打ち消し、板の砂を常に一定量に保つ。
+          float density = dC - uDelta * (fR - fL + fU - fD) / texel;
+
+          // 再正規化: 数値誤差による増減を打ち消し、砂の総量を一定に保つ。
           float measured = texture2D(tMass, vec2(0.5)).r;
-          float correction = clamp(uTargetMass / max(measured, 0.02), 0.8, 1.25);
-          density *= mix(1.0, correction, 0.06);
+          float correction = clamp(uTargetMass / max(measured, 0.02), 0.7, 1.4);
+          density *= mix(1.0, correction, 0.05);
 
-          // 上限は安全弁。低すぎると山が飽和して流入分が消え、質量が漏れる。
-          gl_FragColor = vec4(clamp(density, 0.0, 16.0), vel, 1.0);
+          gl_FragColor = vec4(clamp(density, 0.0, 8.0), 0.0, 0.0, 1.0);
         }
       `,
     });
@@ -293,6 +300,7 @@ export class CymaticsPlate implements Composition {
         uThemeAccent: { value: new THREE.Vector3(...this.theme.accent) },
         uDebugView: { value: 0 },
         uViewport: { value: new THREE.Vector2(1, 1) },
+        uSandRef: { value: TUNING.sandAmount },
         ...this.field.uniforms,
       },
       vertexShader: /* glsl */ `
@@ -317,6 +325,7 @@ export class CymaticsPlate implements Composition {
         uniform vec3 uThemeAccent;
         uniform float uDebugView;
         uniform vec2 uViewport;
+        uniform float uSandRef;
 
         const float PI = 3.141592653589793;
         float gDepth = 0.0;
@@ -376,9 +385,11 @@ export class CymaticsPlate implements Composition {
             // 低密度は孤立した粒として見える。粒はゆっくり入れ替わる。
             vec2 cell = floor(gl_FragCoord.xy / max(uGrainSize, 0.35));
             float g = hash(cell + floor(uTime * 2.5) * 0.37 + fi * 3.1);
-            float probability = clamp(density * 0.8, 0.0, 1.0);
+            // 平均密度を基準にする。砂の総量を変えても見え方の階調が変わらない。
+            float rel = density / max(uSandRef, 0.02);
+            float probability = clamp(rel * 0.5, 0.0, 1.0);
             float particle = step(1.0 - probability, g) * (0.35 + 0.65 * hash(cell * 1.93 + 7.7));
-            float pile = smoothstep(0.65, 1.8, density) * 0.55;
+            float pile = smoothstep(2.5, 7.0, rel) * 0.4;
             float lum = (particle * 0.75 + pile) * weight * (1.0 - fi * 0.18);
             acc = 1.0 - (1.0 - acc) * (1.0 - lum);
           }
@@ -420,6 +431,7 @@ export class CymaticsPlate implements Composition {
     this.displayMaterial.uniforms.uActive!.value = active ? 1 : 0;
     this.displayMaterial.uniforms.uTime!.value = elapsed;
     this.displayMaterial.uniforms.uGrainSize!.value = TUNING.grainBase;
+    this.displayMaterial.uniforms.uSandRef!.value = TUNING.sandAmount;
     this.displayMaterial.uniforms.uInk!.value =
       TUNING.inkBase + clamp01(audio.sustain) * TUNING.inkSustain;
 
@@ -432,30 +444,51 @@ export class CymaticsPlate implements Composition {
       // 音 → 振動場（モード・対称性・構図・うねり）。
       this.field.update(audio, elapsed);
 
-      // 音 → 板の状態。
+      // 音 → 板の励振。音量とオンセットが「どれだけ砂が跳ねるか」を決める。
+      // 図形の種類は決めない（それはモード＝周波数構成の仕事）。
       const volume = clamp01(audio.volume);
       const u = this.simMaterial.uniforms;
-      u.uExcite!.value = TUNING.excite * (0.25 + volume * 1.5);
-      u.uJitter!.value =
-        TUNING.jitterBase * (0.2 + volume) + clamp01(audio.flatness) * TUNING.scatter;
-      u.uOnsetLift!.value = clamp01(audio.onset) * TUNING.lift;
-      u.uSettleRate!.value = TUNING.settleBase + clamp01(audio.sustain) * TUNING.settleSustain;
+      const agitation =
+        (TUNING.quietFloor + (1 - TUNING.quietFloor) * volume) *
+        (1 + clamp01(audio.onset) * TUNING.onsetBurst);
+      u.uAgitation!.value = agitation;
+      u.uDrift!.value = TUNING.driftSpeed;
+      u.uMobFloor!.value = TUNING.mobilityFloor;
+      u.uMobSoft!.value = TUNING.mobilitySoft;
+      u.uNoise!.value = TUNING.agitationNoise;
       u.uRepulsion!.value = TUNING.repulsion;
       u.uDiffusion!.value = TUNING.diffusion;
-      u.uNodeGrip!.value = TUNING.nodeGrip * (0.4 + 0.6 * clamp01(audio.sustain));
-      u.uMaxSpeed!.value = TUNING.simSpeed;
-      u.uSeedJitter!.value = (audio.seed ?? 0) * 13.7;
       u.uTargetMass!.value = TUNING.sandAmount;
-      u.uDelta!.value = delta > 0 ? delta : 0.016;
       u.uTime!.value = elapsed;
 
-      this.stepSimulation();
+      // 平均密度の計測はフレームに 1 回で足りる（再正規化はゆるやかに効くため）。
+      this.measureMass();
+
+      // CFL 制限のため 1 フレームを分割して進める。
+      // 分割数だけ砂が速く動けるので、再配置が一瞬で終わるようになる。
+      const frame = delta > 0 ? Math.min(delta, 0.033) : 0.016;
+      const steps = Math.max(1, Math.round(TUNING.substeps));
+      u.uDelta!.value = frame / steps;
+      for (let i = 0; i < steps; i++) this.stepSimulation();
     }
 
     this.pipeline?.update(audio, elapsed);
   }
 
-  /** 板を 1 ステップ進める（ping-pong）。無音時は呼ばれず、砂は止まったまま。 */
+  /** 現在の密度場の平均を 1×1 へ落とす。再正規化の基準になる。 */
+  private measureMass(): void {
+    if (this.needsInit) return;
+    if (!this.context || !this.targets || !this.massMaterial || !this.massScene) return;
+    if (!this.massTarget || !this.camera) return;
+    const renderer = this.context.renderer;
+    const previousTarget = renderer.getRenderTarget();
+    this.massMaterial.uniforms.tDensity!.value = this.targets[this.current]!.texture;
+    renderer.setRenderTarget(this.massTarget);
+    renderer.render(this.massScene, this.camera);
+    renderer.setRenderTarget(previousTarget);
+  }
+
+  /** 板を 1 サブステップ進める（ping-pong）。無音時は呼ばれず、砂は止まったまま。 */
   private stepSimulation(): void {
     if (!this.context || !this.targets || !this.simMaterial || !this.simScene || !this.camera) {
       return;
@@ -463,13 +496,6 @@ export class CymaticsPlate implements Composition {
     const renderer = this.context.renderer;
     const next = 1 - this.current;
     const previousTarget = renderer.getRenderTarget();
-
-    // 現在の状態から平均密度を測り、このステップの再正規化に使う。
-    if (!this.needsInit && this.massMaterial && this.massScene && this.massTarget) {
-      this.massMaterial.uniforms.tDensity!.value = this.targets[this.current]!.texture;
-      renderer.setRenderTarget(this.massTarget);
-      renderer.render(this.massScene, this.camera);
-    }
 
     this.simMaterial.uniforms.tState!.value = this.targets[this.current]!.texture;
     this.simMaterial.uniforms.tMass!.value = this.massTarget?.texture ?? null;

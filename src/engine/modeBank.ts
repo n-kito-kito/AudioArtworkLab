@@ -66,10 +66,10 @@ export interface SpectrumPeak {
 export interface ModeExciterState {
   /** 画面が向かっている主モード。 */
   primary: PlateMode;
-  /** 移行元のモード。blend=1 で primary に到達済み。 */
+  /** 直前のモード。切替の記録用（場の補間には使わない）。 */
   previous: PlateMode;
-  /** 移行の進み（0..1）。粒子はこの補間された振動場に反応して再配置される。 */
-  blend: number;
+  /** 切替からの経過秒。砂の再配置が進んでいる目安。 */
+  sinceSwitch: number;
   secondary: PlateMode;
   secondaryWeight: number;
   candidate: PlateMode | null;
@@ -88,7 +88,8 @@ export class ModeExciter {
   private readonly env = new Float32Array(PLATE_MODES.length);
   private primaryIdx = 2;
   private previousIdx = 2;
-  private blend = 1;
+  private switchedAt = -Infinity;
+  private now = 0;
   private secondaryIdx = 1;
   private secondaryW = 0;
   private candidateIdx = -1;
@@ -211,7 +212,7 @@ export class ModeExciter {
       ) {
         this.previousIdx = this.primaryIdx;
         this.primaryIdx = bestIdx;
-        this.blend = 0;
+        this.switchedAt = elapsed;
         this.holdUntil = elapsed + TUNING.modeHoldMin;
         this.candidateIdx = -1;
       }
@@ -219,14 +220,9 @@ export class ModeExciter {
       this.candidateIdx = -1;
     }
 
-    // 移行は励振が強いほど速い（0.5〜4 秒）。画面はクロスフェードではなく、
-    // この補間された振動場に粒子が反応して再配置される。
-    if (this.blend < 1) {
-      const duration =
-        TUNING.transitionMax +
-        (TUNING.transitionMin - TUNING.transitionMax) * this.excitationValue;
-      this.blend = Math.min(this.blend + delta / Math.max(duration, 0.1), 1);
-    }
+    // 場はここで補間しない。モードは瞬時に切り替わり、
+    // 目に見える遷移は砂が再配置される過程そのものになる。
+    this.now = elapsed;
 
     // 副モード: 2 位のエネルギー比に応じて限定的に混合。常時は混ぜない。
     const ratio = this.env[secondIdx]! / Math.max(currentE, 0.05);
@@ -257,7 +253,7 @@ export class ModeExciter {
     return {
       primary: PLATE_MODES[this.primaryIdx]!,
       previous: PLATE_MODES[this.previousIdx]!,
-      blend: this.blend,
+      sinceSwitch: Math.max(this.now - this.switchedAt, 0),
       secondary: PLATE_MODES[this.secondaryIdx]!,
       secondaryWeight: this.secondaryW,
       candidate: this.candidateIdx >= 0 ? PLATE_MODES[this.candidateIdx]! : null,

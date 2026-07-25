@@ -25,18 +25,18 @@ interface TuningGroup {
  */
 const GROUPS: TuningGroup[] = [
   {
-    title: '板と粒子',
+    title: '板と砂',
     controls: [
-      { key: 'sandAmount', label: '粒子の量', min: 0.15, max: 1.5, step: 0.01 },
-      { key: 'excite', label: '励振の強さ', min: 0, max: 4, step: 0.01 },
-      { key: 'simSpeed', label: '粒子の最高速度', min: 0.02, max: 1, step: 0.01 },
-      { key: 'jitterBase', label: '震え', min: 0, max: 1.5, step: 0.01 },
-      { key: 'scatter', label: 'ノイズ → 散乱', min: 0, max: 2, step: 0.01 },
-      { key: 'lift', label: 'オンセット → 浮遊', min: 0, max: 5, step: 0.01 },
-      { key: 'settleBase', label: '摩擦', min: 0, max: 6, step: 0.01 },
-      { key: 'settleSustain', label: '持続 → 定着', min: 0, max: 10, step: 0.01 },
-      { key: 'repulsion', label: '高密度の反発', min: 0, max: 5, step: 0.01 },
-      { key: 'diffusion', label: 'にじみ', min: 0, max: 1, step: 0.01 },
+      { key: 'sandAmount', label: '砂の量', min: 0.15, max: 1.5, step: 0.01 },
+      { key: 'driftSpeed', label: '寄る速さ', min: 0.02, max: 1.2, step: 0.01 },
+      { key: 'substeps', label: '分割数（速さの上限）', min: 1, max: 16, step: 1 },
+      { key: 'mobilityFloor', label: '跳ね始める振幅', min: 0, max: 0.5, step: 0.005 },
+      { key: 'mobilitySoft', label: '節の縁の鋭さ', min: 0.01, max: 0.6, step: 0.01 },
+      { key: 'agitationNoise', label: '跳ね方のばらつき', min: 0, max: 1.5, step: 0.01 },
+      { key: 'onsetBurst', label: 'オンセット → 一斉に跳ねる', min: 0, max: 5, step: 0.05 },
+      { key: 'quietFloor', label: '小音量でも跳ねる割合', min: 0, max: 1, step: 0.01 },
+      { key: 'repulsion', label: '高密度の反発', min: 0, max: 3, step: 0.01 },
+      { key: 'diffusion', label: '着地のばらつき', min: 0, max: 0.6, step: 0.01 },
     ],
   },
   {
@@ -50,7 +50,7 @@ const GROUPS: TuningGroup[] = [
   {
     title: '場（振動モード）',
     controls: [
-      { key: 'scaleBase', label: '場の粗さ', min: 0.2, max: 2.5, step: 0.01 },
+      { key: 'scaleBase', label: '模様の大きさ（小さいほど粗大）', min: 0.1, max: 2.5, step: 0.01 },
       { key: 'warpAmount', label: '低域 → うねり', min: 0, max: 1, step: 0.01 },
       { key: 'breakAmount', label: 'ノイズ → 崩れ', min: 0, max: 0.6, step: 0.01 },
       { key: 'fieldFloor', label: '非共振時の場の下限', min: 0, max: 1, step: 0.01 },
@@ -62,10 +62,7 @@ const GROUPS: TuningGroup[] = [
       { key: 'modeHysteresis', label: '切替のしきい倍率', min: 1, max: 2, step: 0.01 },
       { key: 'modeConfirm', label: '候補の確認時間 (秒)', min: 0.1, max: 2, step: 0.05 },
       { key: 'modeHoldMin', label: '最短保持 (秒)', min: 0.3, max: 6, step: 0.1 },
-      { key: 'transitionMin', label: '再配置・強い音 (秒)', min: 0.2, max: 2, step: 0.05 },
-      { key: 'transitionMax', label: '再配置・弱い音 (秒)', min: 1, max: 8, step: 0.1 },
       { key: 'secondaryMax', label: '副モードの上限', min: 0, max: 0.8, step: 0.01 },
-      { key: 'nodeGrip', label: '節の静止度', min: 0, max: 8, step: 0.05 },
       { key: 'seedCooldown', label: '構図の間隔 (秒)', min: 0.2, max: 15, step: 0.1 },
     ],
   },

@@ -15,10 +15,10 @@ import { TUNING } from '../engine/tuning';
  * 入力音のスペクトルが金属板の複数の固有モードを励起し、最も強く共振する
  * モードが節線の構造を決める（modeBank.ts）。音量は模様の種類を決めない。
  *
- * 振動場は 3 つのスロットの合成:
- *   A = 移行元モード、B = 主モード（uBlend で A→B）、S = 副モード（限定混合）
- * 画面に見えるのはこの場に反応して移動する粒子だけで、
- * 補間された線そのものは描かれない（CymaticsPlate）。
+ * 振動場は主モード + 副モード（限定混合）で、**モード間の補間はしない**。
+ * 実際の板では駆動周波数が変われば定在波は数ミリ秒で新しいモードへ移るため、
+ * 中間形状は存在しない。目に見える遷移は砂が再配置される過程そのものであり、
+ * それは CymaticsPlate の密度場が担う。
  *
  * 共振域の外では場の利得が下がり（uFieldGain）、模様は弱く不安定になる。
  * 周波数スイープでは共振域ごとに特定のモードが強く現れる。
@@ -43,36 +43,28 @@ export class Cymatics implements Field {
   readonly name = 'Cymatics';
 
   readonly uniforms: FieldUniforms = {
-    uModeA: { value: new THREE.Vector4() },
     uModeB: { value: new THREE.Vector4() },
     uModeS: { value: new THREE.Vector4() },
-    uAsymA: { value: 0 },
     uAsymB: { value: 0 },
     uAsymS: { value: 0 },
-    uBlend: { value: 1 },
     uSecW: { value: 0 },
     uFieldGain: { value: 1 },
     uScale: { value: TUNING.scaleBase },
     uWarp: { value: 0 },
     uBreak: { value: 0 },
-    uRotA: { value: 0 },
     uRotB: { value: 0 },
   };
 
   readonly glsl = /* glsl */ `
-    uniform vec4 uModeA;
     uniform vec4 uModeB;
     uniform vec4 uModeS;
-    uniform float uAsymA;
     uniform float uAsymB;
     uniform float uAsymS;
-    uniform float uBlend;
     uniform float uSecW;
     uniform float uFieldGain;
     uniform float uScale;
     uniform float uWarp;
     uniform float uBreak;
-    uniform float uRotA;
     uniform float uRotB;
 
     // 1 つの固有モードの振動形。variant がトポロジーの族を選ぶ。
@@ -131,14 +123,12 @@ export class Cymatics implements Field {
       ) * uBreak;
 
       // 向きはモードごとに固定（L3: 音の出来事が決める・90° 単位）。
-      // 表示中の図形は回転しない。切替時に新しい図形だけが新しい向きを持つ。
-      vec2 qA = rotate2(q, uRotA);
+      // 表示中の図形は回転しない。切替時に新しい図形が新しい向きを持つ。
       vec2 qB = rotate2(q, uRotB);
 
-      // 移行元 → 主モードの補間 + 副モードの限定混合。
-      float from = modeShape(qA, uModeA, uAsymA);
-      float to = modeShape(qB, uModeB, uAsymB);
-      float value = mix(from, to, smoothstep(0.0, 1.0, uBlend));
+      // 主モード + 副モードの限定混合。
+      // 場は補間しない。目に見える遷移は砂の再配置であって中間形状ではない。
+      float value = modeShape(qB, uModeB, uAsymB);
       value += modeShape(qB, uModeS, uAsymS) * uSecW;
 
       // 共振の強さ。共振域の間では場が弱まり、模様は不安定になる。
@@ -173,13 +163,10 @@ export class Cymatics implements Field {
     this.exciter.update(this.spectrumSource?.() ?? null, audio, elapsed, delta);
     const state = this.exciter.getState();
 
-    packMode(this.uniforms.uModeA!.value as THREE.Vector4, state.previous);
     packMode(this.uniforms.uModeB!.value as THREE.Vector4, state.primary);
     packMode(this.uniforms.uModeS!.value as THREE.Vector4, state.secondary);
-    this.uniforms.uAsymA!.value = state.previous.asym;
     this.uniforms.uAsymB!.value = state.primary.asym;
     this.uniforms.uAsymS!.value = state.secondary.asym;
-    this.uniforms.uBlend!.value = state.blend;
     this.uniforms.uSecW!.value = state.secondaryWeight;
     this.uniforms.uFieldGain!.value =
       TUNING.fieldFloor + (1 - TUNING.fieldFloor) * state.excitation;
@@ -194,10 +181,7 @@ export class Cymatics implements Field {
       this.pendingRotate = Math.floor(derive(seed, 1) * 4) * (Math.PI / 2);
     }
     if (state.primary.id !== this.lastPrimaryId) {
-      if (this.lastPrimaryId >= 0) {
-        this.uniforms.uRotA!.value = this.uniforms.uRotB!.value;
-        this.uniforms.uRotB!.value = this.pendingRotate;
-      }
+      if (this.lastPrimaryId >= 0) this.uniforms.uRotB!.value = this.pendingRotate;
       this.lastPrimaryId = state.primary.id;
     }
 
