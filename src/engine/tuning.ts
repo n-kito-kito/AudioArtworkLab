@@ -36,6 +36,16 @@ export const TUNING = {
   diffusion: 0.15, //     粒子のにじみ
   simSpeed: 0.3, //       粒子の最高速度（uv/秒）
 
+  // 固有モードの励起と切り替え（modeBank）
+  modeHysteresis: 1.15, // 候補が現在のモードを上回るべき倍率
+  modeConfirm: 0.5, //    候補が優位を保つべき秒数
+  modeHoldMin: 1.8, //    一度選んだモードの最短保持秒数（強いオンセットで短縮）
+  transitionMin: 0.6, //  強い励振での再配置時間（秒）
+  transitionMax: 3.5, //  弱い励振での再配置時間（秒）
+  secondaryMax: 0.4, //   副モードの最大混合率
+  nodeGrip: 2.5, //       節線付近で増える静止度（粒子が節に留まる力）
+  fieldFloor: 0.35, //    共振域の外での振動場の下限（模様が弱く不安定になる）
+
   // 動き・生成（Cymatics）
   morphDuration: 2.0, //  モードが次の形へ移行する時間（秒）
   seedCooldown: 2.4, //   構図（向き・対称性）を引き直す最短間隔（秒）

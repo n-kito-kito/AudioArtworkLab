@@ -2137,3 +2137,24 @@ textarea:focus-visible {
   flex: 1;
   justify-content: center;
 }
+
+/* 開発用デバッグパネル（?debug=1）。tuning-panel の左側版。 */
+.debug-panel {
+  left: 12px;
+  right: auto;
+  width: 320px;
+}
+
+.debug-panel select {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.debug-panel__stats {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.6;
+  color: #b5b5b5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

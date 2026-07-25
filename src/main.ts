@@ -7,6 +7,7 @@ import { findTheme } from './engine/themes';
 import { CymaticsPlate } from './expressions/CymaticsPlate';
 import { AudioControls } from './ui/AudioControls';
 import { LabControls } from './ui/LabControls';
+import { DebugPanel } from './ui/DebugPanel';
 import { TuningPanel } from './ui/TuningPanel';
 import {
   applyEffectStates,
@@ -136,6 +137,12 @@ const tuningPanel =
   import.meta.env.DEV && new URLSearchParams(location.search).get('tune') === '1'
     ? new TuningPanel(shell.root, () => composition)
     : null;
+
+// 開発用デバッグパネル（?debug=1）。励起状態と各表示の切り替え。
+const debugPanel =
+  import.meta.env.DEV && new URLSearchParams(location.search).get('debug') === '1'
+    ? new DebugPanel(shell.root, () => composition, audioEngine)
+    : null;
 let disposed = false;
 
 // 確認用音源を既定で読み込む。無ければ何もしない（起動は妨げない）。
@@ -151,6 +158,7 @@ const dispose = (): void => {
   recordingController.dispose();
   qualityMonitor.dispose();
   tuningPanel?.dispose();
+  debugPanel?.dispose();
   labControls.dispose();
   app.dispose();
   shell.dispose();

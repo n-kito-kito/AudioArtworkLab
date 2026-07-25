@@ -75,6 +75,8 @@ export class CymaticsPlate implements Composition {
 
   setup(context: CompositionContext): void {
     this.context = context;
+    // 固有モードの励起はスペクトル全体から計算する（modeBank.ts）。
+    this.field.setSpectrumSource(() => context.audioEngine.getSpectrum?.() ?? null);
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
     this.camera.position.z = 1;
 
@@ -142,6 +144,7 @@ export class CymaticsPlate implements Composition {
         uSettleRate: { value: 1 },
         uRepulsion: { value: TUNING.repulsion },
         uDiffusion: { value: TUNING.diffusion },
+        uNodeGrip: { value: TUNING.nodeGrip },
         uMaxSpeed: { value: TUNING.simSpeed },
         uSeedJitter: { value: 0 },
         ...this.field.uniforms,
@@ -168,6 +171,7 @@ export class CymaticsPlate implements Composition {
         uniform float uSettleRate;
         uniform float uRepulsion;
         uniform float uDiffusion;
+        uniform float uNodeGrip;
         uniform float uMaxSpeed;
         uniform float uSeedJitter;
 
@@ -224,7 +228,10 @@ export class CymaticsPlate implements Composition {
           force += vec2(cos(angle), sin(angle)) * (uJitter * (0.25 + aC) + uOnsetLift);
 
           // 速度更新: 力 + 摩擦（sustain で定着が強まる）。
-          vec2 vel = (state.gb + force * uDelta) * exp(-uSettleRate * uDelta);
+          // 節線の近くでは静止度が徐々に増し、粒子は節に留まる。
+          float grip = 1.0 - smoothstep(0.0, 0.2, aC);
+          vec2 vel = (state.gb + force * uDelta)
+            * exp(-(uSettleRate + uNodeGrip * grip) * uDelta);
           float speed = length(vel);
           if (speed > uMaxSpeed) vel *= uMaxSpeed / speed;
 
@@ -284,6 +291,8 @@ export class CymaticsPlate implements Composition {
         uThemeDark: { value: new THREE.Vector3(...this.theme.dark) },
         uThemeLight: { value: new THREE.Vector3(...this.theme.light) },
         uThemeAccent: { value: new THREE.Vector3(...this.theme.accent) },
+        uDebugView: { value: 0 },
+        ...this.field.uniforms,
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -305,6 +314,13 @@ export class CymaticsPlate implements Composition {
         uniform vec3 uThemeDark;
         uniform vec3 uThemeLight;
         uniform vec3 uThemeAccent;
+        uniform float uDebugView;
+
+        const float PI = 3.141592653589793;
+        float gDepth = 0.0;
+        vec2 gFieldCoord = vec2(0.0);
+
+        ${this.field.glsl}
 
         float hash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -318,6 +334,22 @@ export class CymaticsPlate implements Composition {
           }
 
           vec2 p = (vUv * 2.0 - 1.0) / max(uZoom, 0.05);
+
+          // 開発用の可視化（本番では uDebugView = 0 のまま）。
+          // 1 = 粒子密度 / 2 = 振動場 / 3 = 節線候補（振幅の谷）
+          if (uDebugView > 0.5) {
+            if (uDebugView < 1.5) {
+              float d = texture2D(tDensity, clamp(p * 0.5 + 0.5, 0.0, 1.0)).r;
+              gl_FragColor = vec4(vec3(clamp(d * 0.6, 0.0, 1.0)), 1.0);
+            } else if (uDebugView < 2.5) {
+              float v = field(p);
+              gl_FragColor = vec4(max(v, 0.0), abs(v) * 0.15, max(-v, 0.0), 1.0);
+            } else {
+              float potential = abs(field(p));
+              gl_FragColor = vec4(vec3(1.0 - smoothstep(0.0, 0.35, potential)), 1.0);
+            }
+            return;
+          }
 
           // 奥行き（D6）: 同じ板を尺度を変えて奥に重ねる。
           float separation = clamp(uDepthAmount, 0.0, 1.0);
@@ -403,6 +435,7 @@ export class CymaticsPlate implements Composition {
       u.uSettleRate!.value = TUNING.settleBase + clamp01(audio.sustain) * TUNING.settleSustain;
       u.uRepulsion!.value = TUNING.repulsion;
       u.uDiffusion!.value = TUNING.diffusion;
+      u.uNodeGrip!.value = TUNING.nodeGrip * (0.4 + 0.6 * clamp01(audio.sustain));
       u.uMaxSpeed!.value = TUNING.simSpeed;
       u.uSeedJitter!.value = (audio.seed ?? 0) * 13.7;
       u.uTargetMass!.value = TUNING.sandAmount;
@@ -480,6 +513,16 @@ export class CymaticsPlate implements Composition {
 
   setDepth(amount: number): void {
     this.depthAmount = Math.min(Math.max(amount, 0), 1);
+  }
+
+  /** 開発用: 0=最終 1=粒子密度 2=振動場 3=節線候補。本番 UI からは触れない。 */
+  setDebugView(view: number): void {
+    if (this.displayMaterial) this.displayMaterial.uniforms.uDebugView!.value = view;
+  }
+
+  /** 開発用: 励起の内部状態（デバッグパネルが読む）。 */
+  getDebugState(): ReturnType<Cymatics['getExciterState']> {
+    return this.field.getExciterState();
   }
 
   getZoom(): number {

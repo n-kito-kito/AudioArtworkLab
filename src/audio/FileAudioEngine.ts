@@ -258,6 +258,11 @@ export class FileAudioEngine implements AudioEngine {
     return hash / 0x100000000;
   }
 
+  getSpectrum(): { magnitudes: Uint8Array; nyquist: number } | null {
+    if (!this.frequencyData || !this.context) return null;
+    return { magnitudes: this.frequencyData, nyquist: this.context.sampleRate / 2 };
+  }
+
   getWaveform(): Float32Array {
     if (!this.timeData) return this.waveform;
 

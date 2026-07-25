@@ -178,6 +178,7 @@ RecordingController・QualityMonitor は再接続済み。
 
 - [x] 構造整理 — Renderer 選択と Design タブを撤去し、表現単位の UI にする
 - [x] 生成方式を Granular Plate Model（GPU 密度場シミュレーション）へ刷新（PRD D18）
+- [x] 固有振動モードバンク（16 種）とスペクトル励起によるモード選択（PRD D19。?debug=1 で確認）
 - [x] G1 チューニングモード — `?tune=1` で内部定数を調整し、確定値を `engine/tuning.ts` へ焼き込む
 - [ ] G1b 静的な質感の確定 — 上記で粒・帯・黒レベルの基準値を決めて焼き込む
 - [ ] G2 動き — 揺れ・モーフ速度・構図の引き直し頻度を決める

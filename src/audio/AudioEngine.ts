@@ -26,8 +26,16 @@ export interface AudioParameters {
   seed?: number;
 }
 
+export interface SpectrumFrame {
+  /** FFT の振幅（0..255）。getParameters と同じフレームで更新される。 */
+  magnitudes: Uint8Array;
+  nyquist: number;
+}
+
 export interface AudioEngine {
   getParameters(): AudioParameters;
   getWaveform(): Float32Array;
+  /** スペクトル全体。固有モードの励起計算に使う。未対応エンジンは省略可。 */
+  getSpectrum?(): SpectrumFrame | null;
   dispose(): void;
 }
