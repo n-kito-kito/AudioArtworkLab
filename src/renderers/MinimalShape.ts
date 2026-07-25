@@ -1,6 +1,7 @@
 import type { AudioParameters } from '../audio/AudioEngine';
 import type { FieldUniforms } from '../engine/Field';
 import type { FieldRenderer } from '../engine/FieldRenderer';
+import { TUNING } from '../engine/tuning';
 
 /**
  * ミニマルな図形。境界を「線」ではなく「粒子の密度」で描く。
@@ -37,7 +38,8 @@ export class MinimalShape implements FieldRenderer {
 
   readonly uniforms: FieldUniforms = {
     uBand: { value: 1.6 },
-    uEdgeNoise: { value: 0.85 },
+    uEdgeNoise: { value: TUNING.edgeNoise },
+    uFringe: { value: TUNING.fringe },
     uDetail: { value: 4 },
     uDensity: { value: 0.8 },
     uSpread: { value: 1 },
@@ -48,6 +50,7 @@ export class MinimalShape implements FieldRenderer {
   readonly glsl = /* glsl */ `
     uniform float uBand;
     uniform float uEdgeNoise;
+    uniform float uFringe;
     uniform float uDetail;
     uniform float uDensity;
     uniform float uSpread;
@@ -98,7 +101,7 @@ export class MinimalShape implements FieldRenderer {
       // 密度分布。芯はほぼ埋まった帯にし、その外側をざらついた裾にする。
       //   ░░░██████░░░   芯が密、外周が粒
       float core = 1.0 - smoothstep(band * 0.3, band * 1.15, ragged);
-      float fringe = exp(-max(ragged - band, 0.0) / (band * 2.4 * max(uSpread, 0.2))) * 0.5;
+      float fringe = exp(-max(ragged - band, 0.0) / (band * 2.4 * max(uSpread, 0.2))) * uFringe;
       float density = (core * 0.98 + fringe) * uDensity;
 
       // 帯に沿った密度のむら。均一な帯にせず、濃淡を作る。
@@ -136,7 +139,7 @@ export class MinimalShape implements FieldRenderer {
     // 低域: 境界が太くなる。
     this.uniforms.uBand!.value = approach(
       this.uniforms.uBand!.value as number,
-      0.7 + clamp01(audio.bass) * 1.5,
+      TUNING.bandBase + clamp01(audio.bass) * TUNING.bandBass,
       5,
       delta,
     );
@@ -144,7 +147,7 @@ export class MinimalShape implements FieldRenderer {
     // ビート: 粒子密度が一瞬だけ上がる。beat 自体が減衰するので追従は速くてよい。
     this.uniforms.uDensity!.value = approach(
       this.uniforms.uDensity!.value as number,
-      0.88 + clamp01(audio.beat) * 0.12,
+      TUNING.densityBase + clamp01(audio.beat) * TUNING.densityBeat,
       12,
       delta,
     );
@@ -153,13 +156,13 @@ export class MinimalShape implements FieldRenderer {
     const treble = clamp01(audio.treble);
     this.uniforms.uDetail!.value = approach(
       this.uniforms.uDetail!.value as number,
-      2.6 + treble * 7.5,
+      TUNING.detailBase + treble * TUNING.detailTreble,
       3,
       delta,
     );
     this.uniforms.uGrainSize!.value = approach(
       this.uniforms.uGrainSize!.value as number,
-      1.0 - treble * 0.45,
+      TUNING.grainBase - treble * TUNING.grainTreble,
       4,
       delta,
     );
@@ -167,7 +170,7 @@ export class MinimalShape implements FieldRenderer {
     // 音量: 全体が膨張する。
     this.uniforms.uSpread!.value = approach(
       this.uniforms.uSpread!.value as number,
-      0.7 + clamp01(audio.volume) * 1.5,
+      TUNING.spreadBase + clamp01(audio.volume) * TUNING.spreadVolume,
       5,
       delta,
     );
@@ -175,10 +178,14 @@ export class MinimalShape implements FieldRenderer {
     // 持続: 鳴り続けるほど濃く、止むと褪せる。
     this.uniforms.uInk!.value = approach(
       this.uniforms.uInk!.value as number,
-      0.5 + clamp01(audio.sustain) * 0.5,
+      TUNING.inkBase + clamp01(audio.sustain) * TUNING.inkSustain,
       3,
       delta,
     );
+
+    // 縁の崩れと裾の量は音に依らない質感の定数。
+    this.uniforms.uEdgeNoise!.value = TUNING.edgeNoise;
+    this.uniforms.uFringe!.value = TUNING.fringe;
   }
 
   dispose(): void {

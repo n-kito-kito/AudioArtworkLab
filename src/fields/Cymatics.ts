@@ -1,5 +1,6 @@
 import type { AudioParameters } from '../audio/AudioEngine';
 import type { Field, FieldUniforms } from '../engine/Field';
+import { TUNING } from '../engine/tuning';
 
 /**
  * サイマティクス（クラドニ図形）。
@@ -31,12 +32,8 @@ MODES.sort((left, right) => left[0] ** 2 + left[1] ** 2 - (right[0] ** 2 + right
 
 /** モード候補が確定するまでに音程が留まるべき秒数。音程の震えでの誤発火を防ぐ。 */
 const MODE_HOLD = 0.25;
-/** モード移行にかける秒数。砂が次の図形へ移動していく時間。 */
-const MORPH_DURATION = 2.0;
 /** 移行完了から次の移行を受け付けるまでの秒数。 */
 const MODE_COOLDOWN = 0.8;
-/** 構図（向き・中心・対称性）を引き直す最短間隔。オンセット毎に暴れないための沈静。 */
-const SEED_COOLDOWN = 2.4;
 
 /** フレームレートに依存しない指数追従。 */
 function approach(current: number, target: number, rate: number, delta: number): number {
@@ -182,7 +179,7 @@ export class Cymatics implements Field {
     }
 
     if (this.morphing) {
-      this.morph = Math.min(this.morph + delta / MORPH_DURATION, 1);
+      this.morph = Math.min(this.morph + delta / Math.max(TUNING.morphDuration, 0.05), 1);
       if (this.morph >= 1) {
         this.morphing = false;
         this.fromIndex = this.toIndex;
@@ -203,7 +200,7 @@ export class Cymatics implements Field {
     // ただしクールダウンを設け、値へは数秒かけて滑らかに追従する。
     // 同じ音なら同じ構図に、違う音なら予測できない構図になる。
     const seed = audio.seed ?? 0;
-    if (seed !== this.appliedSeed && elapsed - this.lastSeedTime >= SEED_COOLDOWN) {
+    if (seed !== this.appliedSeed && elapsed - this.lastSeedTime >= TUNING.seedCooldown) {
       this.appliedSeed = seed;
       this.lastSeedTime = elapsed;
       this.targetVariant = derive(seed, 0) < 0.5 ? 0 : 1;
@@ -230,19 +227,19 @@ export class Cymatics implements Field {
     // L1: 明るさが場の細かさ、低域が歪み、ノイズ性が崩れを決める。
     this.uniforms.uScale!.value = approach(
       this.uniforms.uScale!.value as number,
-      0.7 + Math.min(Math.max(audio.centroid ?? 0, 0), 1) * 1.1,
+      TUNING.scaleBase + Math.min(Math.max(audio.centroid ?? 0, 0), 1) * TUNING.scaleCentroid,
       6,
       delta,
     );
     this.uniforms.uWarp!.value = approach(
       this.uniforms.uWarp!.value as number,
-      Math.min(Math.max(audio.bass ?? 0, 0), 1) * 0.22,
+      Math.min(Math.max(audio.bass ?? 0, 0), 1) * TUNING.warpAmount,
       8,
       delta,
     );
     this.uniforms.uBreak!.value = approach(
       this.uniforms.uBreak!.value as number,
-      Math.min(Math.max(audio.flatness ?? 0, 0), 1) * 0.12,
+      Math.min(Math.max(audio.flatness ?? 0, 0), 1) * TUNING.breakAmount,
       5,
       delta,
     );

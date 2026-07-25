@@ -9,6 +9,7 @@ import { findTheme } from './engine/themes';
 import { RENDERERS, createRenderer } from './renderers/catalog';
 import { AudioControls } from './ui/AudioControls';
 import { LabControls } from './ui/LabControls';
+import { TuningPanel } from './ui/TuningPanel';
 import {
   applyEffectStates,
   createLabPreset,
@@ -160,6 +161,12 @@ const labControls = new LabControls(
   importPreset,
 );
 const qualityMonitor = new QualityMonitor(shell, app, () => composition.getEffects());
+
+// 開発用チューニングパネル（PRD D17）。?tune=1 のときだけ現れる。
+const tuningPanel =
+  import.meta.env.DEV && new URLSearchParams(location.search).get('tune') === '1'
+    ? new TuningPanel(shell.root, () => composition)
+    : null;
 let disposed = false;
 
 // 確認用音源を既定で読み込む。無ければ何もしない（起動は妨げない）。
@@ -174,6 +181,7 @@ const dispose = (): void => {
   audioControls.dispose();
   recordingController.dispose();
   qualityMonitor.dispose();
+  tuningPanel?.dispose();
   labControls.dispose();
   app.dispose();
   shell.dispose();
