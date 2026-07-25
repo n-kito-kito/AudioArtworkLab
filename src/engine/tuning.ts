@@ -24,6 +24,17 @@ export const TUNING = {
   inkBase: 0.5, //        濃さの下限
   inkSustain: 0.5, //     持続が濃さを上げる量
 
+  // 板のシミュレーション（CymaticsPlate: 粒子の密度場）
+  excite: 0.8, //         励振の強さ。振動場の勾配が粒子を節線へ押す力（音量が乗る）
+  jitterBase: 0.25, //    粒子が常に受ける微細な震え
+  scatter: 0.5, //        ノイズ的な音による散乱の増分
+  lift: 1.2, //           オンセットで粒子が浮いて再配置される強さ
+  settleBase: 1.2, //     摩擦の基準。大きいほど早く止まる
+  settleSustain: 3.0, //  持続が定着を強める量
+  repulsion: 1.5, //      高密度からの反発（山が潰れて幅が不均一になる）
+  diffusion: 0.15, //     粒子のにじみ
+  simSpeed: 0.3, //       粒子の最高速度（uv/秒）
+
   // 動き・生成（Cymatics）
   morphDuration: 2.0, //  モードが次の形へ移行する時間（秒）
   seedCooldown: 2.4, //   構図（向き・対称性）を引き直す最短間隔（秒）

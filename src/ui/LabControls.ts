@@ -1,4 +1,4 @@
-import type { FieldComposition } from '../engine/FieldComposition';
+import type { CymaticsPlate } from '../expressions/CymaticsPlate';
 import type {
   AudioSource,
   Effect,
@@ -23,7 +23,7 @@ const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble',
  */
 export class LabControls {
   private readonly shell: StudioShell;
-  private composition: FieldComposition;
+  private composition: CymaticsPlate;
   private readonly onThemeChange: (name: string) => void;
   private readonly onDepthChange: (amount: number) => void;
   private readonly exportPng: () => void;
@@ -41,7 +41,7 @@ export class LabControls {
 
   constructor(
     shell: StudioShell,
-    composition: FieldComposition,
+    composition: CymaticsPlate,
     onThemeChange: (name: string) => void,
     onDepthChange: (amount: number) => void,
     exportPng: () => void,
@@ -92,7 +92,7 @@ export class LabControls {
   }
 
   /** Preset 適用など、外部で composition が差し替わったときに UI を追従させる。 */
-  refresh(composition: FieldComposition): void {
+  refresh(composition: CymaticsPlate): void {
     this.composition = composition;
     this.buildCompositionSection();
     this.renderEffectStack();

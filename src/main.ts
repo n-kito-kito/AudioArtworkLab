@@ -2,11 +2,9 @@ import './style.css';
 import { FileAudioEngine } from './audio/FileAudioEngine';
 import { REFERENCE_AUDIO_NAME, REFERENCE_AUDIO_URL } from './audio/referenceAudio';
 import { App } from './core/App';
-import { Cymatics } from './fields/Cymatics';
-import { FieldComposition } from './engine/FieldComposition';
-import { createEffects, transferEffectState } from './effects/catalog';
+import { createEffects } from './effects/catalog';
 import { findTheme } from './engine/themes';
-import { RENDERERS, createRenderer } from './renderers/catalog';
+import { CymaticsPlate } from './expressions/CymaticsPlate';
 import { AudioControls } from './ui/AudioControls';
 import { LabControls } from './ui/LabControls';
 import { TuningPanel } from './ui/TuningPanel';
@@ -46,9 +44,7 @@ if (storedPreset) {
     storedPreset.effects.map((entry) => entry.name),
   );
 }
-let composition = new FieldComposition(
-  new Cymatics(),
-  createRenderer(storedPreset?.rendererName ?? RENDERERS[0]!.name),
+const composition = new CymaticsPlate(
   initialEffects,
   findTheme(storedPreset?.themeName ?? ''),
 );
@@ -56,32 +52,6 @@ let composition = new FieldComposition(
 if (storedPreset) composition.setDepth(storedPreset.depth);
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
-
-const setRenderer = (name: string): FieldComposition => {
-  const from = composition.getRenderer();
-  // 名前は catalog で解決してから比較する。未知の名前（旧プリセット等）が
-  // 既定へフォールバックしたとき、同じ見え方同士のトランジションを組まないため。
-  const next = createRenderer(name);
-  if (from.name === next.name) return composition;
-
-  // Effect の設定とテーマ・奥行きは表現をまたいで保つ。
-  // 前の Renderer を渡すことで、切り替えはリニアトランジションになる。
-  const effects = createEffects();
-  transferEffectState(composition.getEffects(), effects);
-  const depth = composition.getDepth();
-  const zoom = composition.getZoom();
-  composition = new FieldComposition(
-    new Cymatics(),
-    next,
-    effects,
-    composition.getTheme(),
-    from,
-  );
-  composition.setDepth(depth);
-  composition.setZoom(zoom);
-  app.setComposition(composition);
-  return composition;
-};
 
 const setTheme = (name: string): void => {
   composition.setTheme(findTheme(name));
@@ -102,10 +72,9 @@ const notify = (message: string, error = false): void => {
 const applyPreset = (preset: LabPreset): void => {
   setTheme(preset.themeName);
   setDepth(preset.depth);
-  const target = setRenderer(preset.rendererName);
-  applyEffectStates(target.getEffects(), preset.effects);
-  target.setEffectOrder(preset.effects.map((entry) => entry.name));
-  labControls.refresh(target);
+  applyEffectStates(composition.getEffects(), preset.effects);
+  composition.setEffectOrder(preset.effects.map((entry) => entry.name));
+  labControls.refresh(composition);
 };
 
 const exportPreset = (): void => {
@@ -193,7 +162,6 @@ if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__lab = {
     app,
     audioEngine,
-    setRenderer,
     applyPreset,
     savePresetNow,
     get composition() {

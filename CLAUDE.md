@@ -78,7 +78,8 @@ D4 と D6 は見え方を見ながら調整する前提。**それ以外を勝�
 ```
 src/
 ├── core/         Canvas, Renderer, Scene, Camera, AnimationLoop, App
-├── generators/   素材（Line, SineWave, Waveform, Grid, Bitmap, Mosaic, Lissajous, ParticleField）
+├── expressions/  表現（CymaticsPlate: GPU 密度場シミュレーション。①場×②描画×③Effect を内包）
+├── generators/   旧素材（未接続・温存）
 ├── modifiers/    PixelStretch, GridReveal ※実体は Effect（後述）
 ├── effects/      質感（ポストプロセス）
 ├── compositions/ 組み合わせ

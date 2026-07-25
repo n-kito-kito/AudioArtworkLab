@@ -3,7 +3,7 @@ import type {
   EffectAudioMappings,
   EffectParameterValues,
 } from '../effects/Effect';
-import type { FieldComposition } from '../engine/FieldComposition';
+import type { CymaticsPlate } from '../expressions/CymaticsPlate';
 
 /**
  * Preset v4。Field × Renderer 構成の保存形式（DESIGN.md D8）。
@@ -33,11 +33,12 @@ export interface LabPreset {
   effects: LabPresetEffect[];
 }
 
-export function createLabPreset(composition: FieldComposition): LabPreset {
+export function createLabPreset(composition: CymaticsPlate): LabPreset {
   return {
     version: LAB_PRESET_VERSION,
     fieldName: 'Cymatics',
-    rendererName: composition.getRenderer().name,
+    // 1 表現 = 1 見え方（D16）。互換のため形だけ残している固定値。
+    rendererName: 'Minimal shape',
     themeName: composition.getTheme().name,
     depth: composition.getDepth(),
     zoom: composition.getZoom(),

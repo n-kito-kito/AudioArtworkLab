@@ -1,4 +1,4 @@
-import type { FieldComposition } from '../engine/FieldComposition';
+import type { CymaticsPlate } from '../expressions/CymaticsPlate';
 import { TUNING, TUNING_DEFAULTS, type TuningKey } from '../engine/tuning';
 
 interface TuningControl {
@@ -25,32 +25,30 @@ interface TuningGroup {
  */
 const GROUPS: TuningGroup[] = [
   {
-    title: '境界',
+    title: '板と粒子',
     controls: [
-      { key: 'bandBase', label: '帯の太さ', min: 0.2, max: 4, step: 0.01 },
-      { key: 'bandBass', label: '低域 → 太さ', min: 0, max: 5, step: 0.01 },
-      { key: 'edgeNoise', label: '縁の崩れ', min: 0, max: 3, step: 0.01 },
-      { key: 'fringe', label: '裾の量', min: 0, max: 1.5, step: 0.01 },
-      { key: 'spreadBase', label: '裾の広がり', min: 0.1, max: 3, step: 0.01 },
-      { key: 'spreadVolume', label: '音量 → 広がり', min: 0, max: 4, step: 0.01 },
+      { key: 'excite', label: '励振の強さ', min: 0, max: 4, step: 0.01 },
+      { key: 'simSpeed', label: '粒子の最高速度', min: 0.02, max: 1, step: 0.01 },
+      { key: 'jitterBase', label: '震え', min: 0, max: 1.5, step: 0.01 },
+      { key: 'scatter', label: 'ノイズ → 散乱', min: 0, max: 2, step: 0.01 },
+      { key: 'lift', label: 'オンセット → 浮遊', min: 0, max: 5, step: 0.01 },
+      { key: 'settleBase', label: '摩擦', min: 0, max: 6, step: 0.01 },
+      { key: 'settleSustain', label: '持続 → 定着', min: 0, max: 10, step: 0.01 },
+      { key: 'repulsion', label: '高密度の反発', min: 0, max: 5, step: 0.01 },
+      { key: 'diffusion', label: 'にじみ', min: 0, max: 1, step: 0.01 },
     ],
   },
   {
-    title: '粒子',
+    title: '見た目',
     controls: [
       { key: 'grainBase', label: '粒の大きさ', min: 0.35, max: 3, step: 0.01 },
-      { key: 'grainTreble', label: '高域 → 細かさ', min: 0, max: 1, step: 0.01 },
-      { key: 'densityBase', label: '密度', min: 0.2, max: 1, step: 0.01 },
-      { key: 'densityBeat', label: 'ビート → 密度', min: 0, max: 0.6, step: 0.01 },
       { key: 'inkBase', label: '濃さ', min: 0, max: 1, step: 0.01 },
       { key: 'inkSustain', label: '持続 → 濃さ', min: 0, max: 1, step: 0.01 },
     ],
   },
   {
-    title: '模様',
+    title: '場（振動モード）',
     controls: [
-      { key: 'detailBase', label: '細かさ', min: 0.5, max: 14, step: 0.1 },
-      { key: 'detailTreble', label: '高域 → 細かさ', min: 0, max: 16, step: 0.1 },
       { key: 'scaleBase', label: '場の粗さ', min: 0.2, max: 2.5, step: 0.01 },
       { key: 'scaleCentroid', label: '明るさ → 粗さ', min: 0, max: 3, step: 0.01 },
       { key: 'warpAmount', label: '低域 → うねり', min: 0, max: 1, step: 0.01 },
@@ -68,9 +66,9 @@ const GROUPS: TuningGroup[] = [
 
 export class TuningPanel {
   private readonly root = document.createElement('aside');
-  private readonly getComposition: () => FieldComposition;
+  private readonly getComposition: () => CymaticsPlate;
 
-  constructor(host: HTMLElement, getComposition: () => FieldComposition) {
+  constructor(host: HTMLElement, getComposition: () => CymaticsPlate) {
     this.getComposition = getComposition;
 
     this.root.className = 'tuning-panel';
