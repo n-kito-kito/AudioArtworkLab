@@ -292,6 +292,7 @@ export class CymaticsPlate implements Composition {
         uThemeLight: { value: new THREE.Vector3(...this.theme.light) },
         uThemeAccent: { value: new THREE.Vector3(...this.theme.accent) },
         uDebugView: { value: 0 },
+        uViewport: { value: new THREE.Vector2(1, 1) },
         ...this.field.uniforms,
       },
       vertexShader: /* glsl */ `
@@ -315,6 +316,7 @@ export class CymaticsPlate implements Composition {
         uniform vec3 uThemeLight;
         uniform vec3 uThemeAccent;
         uniform float uDebugView;
+        uniform vec2 uViewport;
 
         const float PI = 3.141592653589793;
         float gDepth = 0.0;
@@ -333,7 +335,10 @@ export class CymaticsPlate implements Composition {
             return;
           }
 
-          vec2 p = (vUv * 2.0 - 1.0) / max(uZoom, 0.05);
+          // 板は正方形。画面が正方形でないときは短辺に合わせ、外side は黒のままにする。
+          // 背景が黒なので、はみ出した領域は帯として見えない。
+          vec2 res = max(uViewport, vec2(1.0));
+          vec2 p = (vUv * 2.0 - 1.0) * (res / min(res.x, res.y)) / max(uZoom, 0.05);
 
           // 開発用の可視化（本番では uDebugView = 0 のまま）。
           // 1 = 粒子密度 / 2 = 振動場 / 3 = 節線候補（振幅の谷）
@@ -363,7 +368,9 @@ export class CymaticsPlate implements Composition {
               cos(uTime * (0.04 + fi * 0.017) - fi * 1.7)
             ) * 0.08 * separation * fi;
             vec2 q = (p * (1.0 + separation * fi * 0.5) + drift) * 0.5 + 0.5;
-            float density = texture2D(tDensity, clamp(q, 0.0, 1.0)).r;
+            // 板の外は黒。端をクランプで引き伸ばすと縁が滲むため。
+            if (any(lessThan(q, vec2(0.0))) || any(greaterThan(q, vec2(1.0)))) continue;
+            float density = texture2D(tDensity, q).r;
 
             // 粒子: 密度を確率として粒を撒く。高密度は明るい面に近づき、
             // 低密度は孤立した粒として見える。粒はゆっくり入れ替わる。
@@ -480,6 +487,8 @@ export class CymaticsPlate implements Composition {
   }
 
   resize(width: number, height: number): void {
+    const viewport = this.displayMaterial?.uniforms.uViewport?.value as THREE.Vector2 | undefined;
+    viewport?.set(width, height);
     this.pipeline?.resize(width, height);
   }
 

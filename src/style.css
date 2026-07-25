@@ -2138,11 +2138,35 @@ textarea:focus-visible {
   justify-content: center;
 }
 
-/* 開発用デバッグパネル（?debug=1）。tuning-panel の左側版。 */
+/* 開発用デバッグパネル（?debug=1）。左下に置き、折りたためる。 */
 .debug-panel {
   left: 12px;
   right: auto;
+  top: auto;
+  bottom: 12px;
   width: 320px;
+  max-height: 60vh;
+}
+
+.debug-panel__header {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.debug-panel__toggle {
+  min-width: 26px;
+  padding: 0 6px;
+  line-height: 1.4;
+}
+
+.debug-panel.is-collapsed select,
+.debug-panel.is-collapsed .debug-panel__stats {
+  display: none;
+}
+
+.debug-panel.is-collapsed {
+  width: auto;
 }
 
 .debug-panel select {

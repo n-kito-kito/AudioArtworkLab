@@ -12,6 +12,7 @@ export class DebugPanel {
   private readonly root = document.createElement('aside');
   private readonly stats = document.createElement('pre');
   private readonly timer: number;
+  private collapsed = false;
   private readonly getComposition: () => CymaticsPlate;
   private readonly audioEngine: AudioEngine;
 
@@ -25,10 +26,22 @@ export class DebugPanel {
     this.root.className = 'tuning-panel debug-panel';
     this.root.setAttribute('aria-label', 'Debug (development)');
 
+    // 折りたたみ可能にする。開いたままだと Audio パネルの操作を塞ぐため。
     const header = document.createElement('header');
+    header.className = 'debug-panel__header';
     const title = document.createElement('strong');
     title.textContent = 'Debug';
-    header.append(title);
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'ui-button debug-panel__toggle';
+    toggle.textContent = '−';
+    toggle.setAttribute('aria-label', 'Toggle debug panel');
+    toggle.addEventListener('click', () => {
+      this.collapsed = !this.collapsed;
+      this.root.classList.toggle('is-collapsed', this.collapsed);
+      toggle.textContent = this.collapsed ? '+' : '−';
+    });
+    header.append(title, toggle);
 
     const view = document.createElement('select');
     for (const [value, label] of [
@@ -52,6 +65,7 @@ export class DebugPanel {
   }
 
   private refresh(): void {
+    if (this.collapsed) return;
     const audio = this.audioEngine.getParameters();
     const state = this.getComposition().getDebugState();
     const f = (value: number | undefined, digits = 2): string => (value ?? 0).toFixed(digits);
