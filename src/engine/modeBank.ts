@@ -98,7 +98,12 @@ export class ModeExciter {
   private peaks: SpectrumPeak[] = [];
   private lastPeaksAt = 0;
 
-  /** ビンごとの帯域応答（対数ガウス × 高域プリエンファシス）を作る。 */
+  /** モードごとの高域プリエンファシス（帯域平均に後段で掛ける傾斜）。 */
+  private readonly tilt = PLATE_MODES.map((mode) =>
+    Math.min(Math.max(Math.pow(mode.frequency / 500, 0.55), 0.35), 2.6),
+  );
+
+  /** ビンごとの帯域応答（対数ガウス・帯域内で正規化）を作る。 */
   private buildWeights(bins: number, nyquist: number): void {
     this.weights = PLATE_MODES.map((mode) => {
       const w = new Float32Array(bins);
@@ -106,9 +111,7 @@ export class ModeExciter {
       for (let b = 1; b < bins; b++) {
         const f = (b / bins) * nyquist;
         const x = Math.log2(f / mode.frequency) / mode.bandwidth;
-        const gauss = Math.exp(-x * x * 4);
-        const emphasis = Math.min(Math.max(Math.pow(f / 700, 0.3), 0.5), 2.2);
-        const value = gauss * emphasis;
+        const value = Math.exp(-x * x * 4);
         w[b] = value;
         sum += value;
       }
@@ -149,7 +152,10 @@ export class ModeExciter {
       const w = this.weights![i]!;
       let energy = 0;
       for (let b = 1; b < magnitudes.length; b++) energy += (magnitudes[b]! / 255) * w[b]!;
-      this.raw[i] = silent ? 0 : energy;
+      // 実楽曲は低音のエネルギーが桁で大きい。帯域平均へ中心周波数の傾斜を
+      // 掛けて、モード選択が低音に張り付かないようにする。
+      // （傾斜を重みに織り込むと帯域内正規化で相殺されるため、ここで掛ける）
+      this.raw[i] = silent ? 0 : energy * this.tilt[i]!;
       sumRaw += this.raw[i]!;
       this.ema[i] = this.ema[i]! + (this.raw[i]! - this.ema[i]!) * Math.min(delta / 8, 1);
     }
@@ -160,7 +166,7 @@ export class ModeExciter {
     const globalMean = sumRaw / PLATE_MODES.length + 1e-4;
     for (let i = 0; i < PLATE_MODES.length; i++) {
       const share = this.raw[i]! / globalMean;
-      const novelty = Math.min(Math.max(this.raw[i]! / (this.ema[i]! + 0.015), 0.7), 1.6);
+      const novelty = Math.min(Math.max(this.raw[i]! / (this.ema[i]! + 0.015), 0.55), 2.2);
       const relative = share * (novelty / 1.15);
 
       // アタック速く・リリース遅い包絡。毎フレームの揺れで模様が震えないように。

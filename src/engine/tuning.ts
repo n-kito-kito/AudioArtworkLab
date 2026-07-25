@@ -27,7 +27,7 @@ export const TUNING = {
   // 板のシミュレーション（CymaticsPlate: 粒子の密度場）
   sandAmount: 0.5, //     板の上の粒子の総量。再正規化でこの量に保たれ続ける
   excite: 0.8, //         励振の強さ。振動場の勾配が粒子を節線へ押す力（音量が乗る）
-  jitterBase: 0.25, //    粒子が常に受ける微細な震え
+  jitterBase: 0.12, //    粒子が常に受ける微細な震え
   scatter: 0.5, //        ノイズ的な音による散乱の増分
   lift: 1.2, //           オンセットで粒子が浮いて再配置される強さ
   settleBase: 1.2, //     摩擦の基準。大きいほど早く止まる
@@ -38,8 +38,8 @@ export const TUNING = {
 
   // 固有モードの励起と切り替え（modeBank）
   modeHysteresis: 1.15, // 候補が現在のモードを上回るべき倍率
-  modeConfirm: 0.5, //    候補が優位を保つべき秒数
-  modeHoldMin: 1.8, //    一度選んだモードの最短保持秒数（強いオンセットで短縮）
+  modeConfirm: 0.35, //    候補が優位を保つべき秒数
+  modeHoldMin: 1.2, //    一度選んだモードの最短保持秒数（強いオンセットで短縮）
   transitionMin: 0.6, //  強い励振での再配置時間（秒）
   transitionMax: 3.5, //  弱い励振での再配置時間（秒）
   secondaryMax: 0.4, //   副モードの最大混合率
@@ -49,8 +49,8 @@ export const TUNING = {
   // 動き・生成（Cymatics）
   morphDuration: 2.0, //  モードが次の形へ移行する時間（秒）
   seedCooldown: 2.4, //   構図（向き・対称性）を引き直す最短間隔（秒）
-  warpAmount: 0.22, //    低域による場のうねりの量
-  breakAmount: 0.12, //   ノイズ的な音による節線の崩れの量
+  warpAmount: 0.03, //    低域による場のうねりの量
+  breakAmount: 0.05, //   ノイズ的な音による節線の崩れの量
   scaleBase: 0.7, //      場の粗さの基準
   scaleCentroid: 1.1, //  音の明るさが場を細かくする量
 };

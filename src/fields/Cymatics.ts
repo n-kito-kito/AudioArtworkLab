@@ -55,7 +55,8 @@ export class Cymatics implements Field {
     uScale: { value: TUNING.scaleBase },
     uWarp: { value: 0 },
     uBreak: { value: 0 },
-    uRotate: { value: 0 },
+    uRotA: { value: 0 },
+    uRotB: { value: 0 },
   };
 
   readonly glsl = /* glsl */ `
@@ -71,7 +72,8 @@ export class Cymatics implements Field {
     uniform float uScale;
     uniform float uWarp;
     uniform float uBreak;
-    uniform float uRotate;
+    uniform float uRotA;
+    uniform float uRotB;
 
     // 1 つの固有モードの振動形。variant がトポロジーの族を選ぶ。
     //   0=格子 1=X 2=菱形 3=円環(楕円) 4=花弁 5=中央と外周で異なる混成
@@ -107,15 +109,18 @@ export class Cymatics implements Field {
       return value;
     }
 
+    vec2 rotate2(vec2 v, float a) {
+      float s = sin(a);
+      float c = cos(a);
+      return mat2(c, -s, s, c) * v;
+    }
+
     float field(vec2 p) {
-      // L3: 音の出来事が向きを決める（90° 単位なので対称性は保たれる）。
-      float sr = sin(uRotate);
-      float cr = cos(uRotate);
-      vec2 q = mat2(cr, -sr, sr, cr) * p;
-      q *= uScale;
+      vec2 q = p * uScale;
       gFieldCoord = q;
 
-      // 低域が場をわずかに押し曲げ、ノイズ的な音が節線を崩す。
+      // 低域が場をわずかに押し曲げ、ノイズ的な音が節線を崩す（既定はごく小さい。
+      // 実物のクラドニ図形は剛体的で、節線そのものは波打たない）。
       q += vec2(
         sin(q.y * 2.6 + uTime * 0.7),
         cos(q.x * 2.2 - uTime * 0.6)
@@ -125,11 +130,16 @@ export class Cymatics implements Field {
         cos(q.x * 5.3 - q.y * 8.9 - uTime * 1.1)
       ) * uBreak;
 
+      // 向きはモードごとに固定（L3: 音の出来事が決める・90° 単位）。
+      // 表示中の図形は回転しない。切替時に新しい図形だけが新しい向きを持つ。
+      vec2 qA = rotate2(q, uRotA);
+      vec2 qB = rotate2(q, uRotB);
+
       // 移行元 → 主モードの補間 + 副モードの限定混合。
-      float from = modeShape(q, uModeA, uAsymA);
-      float to = modeShape(q, uModeB, uAsymB);
+      float from = modeShape(qA, uModeA, uAsymA);
+      float to = modeShape(qB, uModeB, uAsymB);
       float value = mix(from, to, smoothstep(0.0, 1.0, uBlend));
-      value += modeShape(q, uModeS, uAsymS) * uSecW;
+      value += modeShape(qB, uModeS, uAsymS) * uSecW;
 
       // 共振の強さ。共振域の間では場が弱まり、模様は不安定になる。
       return value * uFieldGain;
@@ -141,7 +151,8 @@ export class Cymatics implements Field {
   private previousElapsed = -1;
   private appliedSeed = -1;
   private lastSeedTime = -Infinity;
-  private targetRotate = 0;
+  private pendingRotate = 0;
+  private lastPrimaryId = -1;
 
   setSpectrumSource(source: () => SpectrumFrame | null): void {
     this.spectrumSource = source;
@@ -173,19 +184,22 @@ export class Cymatics implements Field {
     this.uniforms.uFieldGain!.value =
       TUNING.fieldFloor + (1 - TUNING.fieldFloor) * state.excitation;
 
-    // L3: 音の出来事が向きを引き直す。90° 単位なので対称性は壊れない。
+    // L3: 音の出来事が「次の図形の向き」を引き直す（90° 単位）。
+    // 表示中の図形は回転させない。実物の板の図形は回らないため、
+    // 向きはモード切替のタイミングでのみ新しい図形側へ適用する。
     const seed = audio.seed ?? 0;
     if (seed !== this.appliedSeed && elapsed - this.lastSeedTime >= TUNING.seedCooldown) {
       this.appliedSeed = seed;
       this.lastSeedTime = elapsed;
-      this.targetRotate = Math.floor(derive(seed, 1) * 4) * (Math.PI / 2);
+      this.pendingRotate = Math.floor(derive(seed, 1) * 4) * (Math.PI / 2);
     }
-    this.uniforms.uRotate!.value = approach(
-      this.uniforms.uRotate!.value as number,
-      this.targetRotate,
-      0.9,
-      delta,
-    );
+    if (state.primary.id !== this.lastPrimaryId) {
+      if (this.lastPrimaryId >= 0) {
+        this.uniforms.uRotA!.value = this.uniforms.uRotB!.value;
+        this.uniforms.uRotB!.value = this.pendingRotate;
+      }
+      this.lastPrimaryId = state.primary.id;
+    }
 
     // 場の粗さは焼き込み定数。音量や明るさで連続ズームさせない
     // （音量だけで揺れて見える原因になるため）。
