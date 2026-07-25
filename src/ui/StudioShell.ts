@@ -44,17 +44,11 @@ export class StudioShell {
     designEmpty.innerHTML =
       '<i class="ph ph-cursor-click"></i><strong>Select a layer</strong><span>Choose an object from the canvas or Layers panel.</span>';
     this.designPanel.append(designEmpty);
-    const inspectorTabs = document.createElement('div');
-    inspectorTabs.className = 'inspector-tabs';
-    this.designTab.type = 'button';
-    this.designTab.textContent = 'Design';
-    this.effectsTab.type = 'button';
-    this.effectsTab.textContent = 'Effects';
-    this.designTab.addEventListener('click', () => this.setInspectorTab('design'));
-    this.effectsTab.addEventListener('click', () => this.setInspectorTab('effects'));
-    inspectorTabs.append(this.designTab, this.effectsTab);
-    this.rightSidebar.append(inspectorTabs, this.designPanel, this.effectsPanel);
-    this.setInspectorTab('effects');
+    // デザインレイヤーは主導線から外した（PRD D15）。タブは出さず、
+    // 右パネルは Effect のみとする。designPanel などのメンバーは
+    // 温存中の旧 UI（LayerEditor / StudioControls）が参照するため残す。
+    this.effectsPanel.hidden = false;
+    this.rightSidebar.append(this.effectsPanel);
     this.chain.className = 'effect-chain';
     this.chain.setAttribute('aria-label', 'Effect chain');
     this.gridOverlay.className = 'stage-grid';
@@ -72,7 +66,8 @@ export class StudioShell {
     const stageLabel = document.createElement('div');
     stageLabel.className = 'stage-label';
     stageLabel.innerHTML = '<span>Live composition</span><strong>Multi-layer canvas</strong>';
-    this.stage.append(this.gridOverlay, this.canvasHost, this.objectToolbar, stageLabel);
+    // objectToolbar はデザインレイヤー用のため DOM に載せない（メンバーは温存）。
+    this.stage.append(this.gridOverlay, this.canvasHost, stageLabel);
     this.root.append(this.toolbar, this.leftPanel, this.stage, this.rightSidebar, this.chain);
     container.replaceChildren(this.root);
     this.bindLeftSplitter();

@@ -8,7 +8,6 @@ import type {
   NumberEffectParameter,
 } from '../effects/Effect';
 import { THEMES } from '../engine/themes';
-import { RENDERERS } from '../renderers/catalog';
 import type { StudioShell } from './StudioShell';
 
 const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble', 'beat'];
@@ -25,7 +24,6 @@ const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble',
 export class LabControls {
   private readonly shell: StudioShell;
   private composition: FieldComposition;
-  private readonly onRendererChange: (name: string) => FieldComposition;
   private readonly onThemeChange: (name: string) => void;
   private readonly onDepthChange: (amount: number) => void;
   private readonly onZoomChange: (zoom: number) => void;
@@ -45,7 +43,6 @@ export class LabControls {
   constructor(
     shell: StudioShell,
     composition: FieldComposition,
-    onRendererChange: (name: string) => FieldComposition,
     onThemeChange: (name: string) => void,
     onDepthChange: (amount: number) => void,
     onZoomChange: (zoom: number) => void,
@@ -56,7 +53,6 @@ export class LabControls {
   ) {
     this.shell = shell;
     this.composition = composition;
-    this.onRendererChange = onRendererChange;
     this.onThemeChange = onThemeChange;
     this.onDepthChange = onDepthChange;
     this.onZoomChange = onZoomChange;
@@ -123,41 +119,20 @@ export class LabControls {
 
   private buildCompositionSection(): void {
     this.compositionBody.replaceChildren();
+    // 1 表現 = 1 見え方（PRD D16）。見え方の選択肢は出さない。
+    // 表現が増えたら、この select が表現の切り替えになる。
     const field = document.createElement('label');
     field.className = 'control-row control-row--inline';
     const fieldName = document.createElement('span');
-    fieldName.textContent = 'Field';
+    fieldName.textContent = 'Expression';
     const fieldSelect = document.createElement('select');
-    fieldSelect.setAttribute('aria-label', 'Field');
+    fieldSelect.setAttribute('aria-label', 'Expression');
     const cymatics = document.createElement('option');
     cymatics.value = 'Cymatics';
     cymatics.textContent = 'Cymatics';
     fieldSelect.append(cymatics);
     fieldSelect.disabled = true;
     field.append(fieldName, fieldSelect);
-
-    const renderer = document.createElement('fieldset');
-    renderer.className = 'segmented-control';
-    const legend = document.createElement('legend');
-    legend.textContent = 'Renderer';
-    renderer.append(legend);
-    const currentName = this.composition.name;
-    for (const definition of RENDERERS) {
-      const label = document.createElement('label');
-      const input = document.createElement('input');
-      input.type = 'radio';
-      input.name = 'field-renderer';
-      input.value = definition.name;
-      input.checked = currentName.endsWith(definition.name);
-      input.addEventListener('change', () => {
-        this.composition = this.onRendererChange(definition.name);
-        this.renderEffectStack();
-      });
-      const text = document.createElement('span');
-      text.textContent = definition.name;
-      label.append(input, text);
-      renderer.append(label);
-    }
 
     const theme = document.createElement('label');
     theme.className = 'control-row control-row--inline';
@@ -182,7 +157,7 @@ export class LabControls {
       this.onDepthChange(value),
     );
 
-    this.compositionBody.append(field, renderer, theme, zoom, depth);
+    this.compositionBody.append(field, theme, zoom, depth);
   }
 
   private renderEffectStack(): void {

@@ -35,8 +35,7 @@ if (!container) {
 
 const audioEngine = new FileAudioEngine();
 
-// 前回の状態（Preset v4）から復元して起動する。?renderer= は検証用の上書き。
-const rendererParam = new URLSearchParams(location.search).get('renderer');
+// 前回の状態から復元して起動する。
 const storedPreset = loadLabPreset();
 const initialEffects = createEffects();
 if (storedPreset) {
@@ -48,7 +47,7 @@ if (storedPreset) {
 }
 let composition = new FieldComposition(
   new Cymatics(),
-  createRenderer(rendererParam ?? storedPreset?.rendererName ?? RENDERERS[0]!.name),
+  createRenderer(storedPreset?.rendererName ?? RENDERERS[0]!.name),
   initialEffects,
   findTheme(storedPreset?.themeName ?? ''),
 );
@@ -61,7 +60,10 @@ const app = new App(shell.canvasHost, composition, audioEngine);
 
 const setRenderer = (name: string): FieldComposition => {
   const from = composition.getRenderer();
-  if (from.name === name) return composition;
+  // 名前は catalog で解決してから比較する。未知の名前（旧プリセット等）が
+  // 既定へフォールバックしたとき、同じ見え方同士のトランジションを組まないため。
+  const next = createRenderer(name);
+  if (from.name === next.name) return composition;
 
   // Effect の設定とテーマ・奥行きは表現をまたいで保つ。
   // 前の Renderer を渡すことで、切り替えはリニアトランジションになる。
@@ -71,7 +73,7 @@ const setRenderer = (name: string): FieldComposition => {
   const zoom = composition.getZoom();
   composition = new FieldComposition(
     new Cymatics(),
-    createRenderer(name),
+    next,
     effects,
     composition.getTheme(),
     from,
@@ -157,7 +159,6 @@ const recordingController = new RecordingController(shell, audioEngine);
 const labControls = new LabControls(
   shell,
   composition,
-  setRenderer,
   setTheme,
   setDepth,
   setZoom,

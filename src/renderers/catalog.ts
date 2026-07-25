@@ -1,11 +1,12 @@
 import type { FieldRenderer } from '../engine/FieldRenderer';
-import { Graph } from './Graph';
-import { LightWave } from './LightWave';
 import { MinimalShape } from './MinimalShape';
 
 /**
- * ② 表現レイヤーの一覧。新しい Renderer は 1 行追加するだけで選択可能になる。
- * 同じ Field でも Renderer を差し替えるだけで別のグラフィックになる（DESIGN.md §3）。
+ * 表現の見え方。**1 つの表現は 1 つの見え方だけを持つ**（PRD D16）。
+ *
+ * Renderer はユーザーが選ぶものではなく、表現を構成する内部部品。
+ * サイマティクスの見え方は「粒子が集まって境界が浮かぶ」MinimalShape で固定する。
+ * 過去のプリセットが別の名前を持っていても、先頭の見え方へ安全に落ちる。
  */
 export interface RendererDefinition {
   name: string;
@@ -14,8 +15,6 @@ export interface RendererDefinition {
 
 export const RENDERERS: RendererDefinition[] = [
   { name: 'Minimal shape', create: () => new MinimalShape() },
-  { name: 'Light wave', create: () => new LightWave() },
-  { name: 'Graph', create: () => new Graph() },
 ];
 
 export function createRenderer(name: string): FieldRenderer {
