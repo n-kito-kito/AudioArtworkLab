@@ -78,8 +78,12 @@ src/
 
 - **表現の本体は `src/expressions/CymaticsPlate.ts`。** 場（`fields/Cymatics.ts`）×
   砂の密度場シミュレーション × Effect チェーンを内包する。`compositions/` の旧クラス群は未接続。
-- **モード選択は `src/engine/modeBank.ts`。** FFT 全体から 16 モードの励起量を計算し、
-  ヒステリシス + 確認時間 + 最短保持で主・副モードを決める。単一の支配周波数では選ばない。
+- **V1 / V2 は `src/expressions/catalog.ts` で生成する（D22）。** V2（`fields/CymaticsV2.ts` +
+  `engine/modeBankV2.ts`）は場だけを差し替えた表現で、V1 とは状態を共有しない。
+  V1 の出力を変えないこと。収斂の判断が出るまで両方を温存する。
+- **モード選択は `src/engine/modeBank.ts`。** FFT 全体からモード表（V1: 16 種 / V2: 18 種）の
+  励起量を計算し、ヒステリシス + 確認時間 + 最短保持で主・副モードを決める。
+  単一の支配周波数では選ばない。
 - **質感の定数はすべて `src/engine/tuning.ts` の `TUNING`。** 直接値を書かない（4.5 節）。
 - **Effect レイヤーは「増やせる」設計。** `BaseShaderEffect` + `parameterSchema` により、
   新規 Effect は 1 ファイルで UI・Audio Mapping・Preset 保存が自動で付く。
@@ -124,11 +128,11 @@ src/
 
 ## 4. Preset
 
-- 現行 **v5**（`src/ui/LabPreset.ts` の `LAB_PRESET_VERSION`）。保存対象はテーマ / 奥行き / Effect 状態（有効・パラメータ・Audio Mapping・順序）。`TUNING` と zoom は保存しない。
+- 現行 **v6**（`src/ui/LabPreset.ts` の `LAB_PRESET_VERSION`）。保存対象は表現 id（`expressionId`）/ テーマ / 奥行き / Effect 状態（有効・パラメータ・Audio Mapping・順序）。`TUNING` と zoom は保存しない。
 - **v1〜v3（旧 Generator 構成）との互換はない（D8）。** 旧形式は読み込み時に破棄して初期状態に戻す。migration は書かない。キーは旧版と同じ `audio-artwork-lab:studio-preset`。
 - 自動保存は `main.ts`（1.5 秒間隔・変化時のみ書込）。Export / Import はツールバーから JSON ファイル。
 - **Effect を `name` で同定している。** 複製機能を入れると同名が複数存在して破綻するため、その際は id 導入 + 版上げが必須。
-- 形式を変えたら必ずバージョンを上げ、直前版からの migration を書く（v4 → v5 は実装済み）。
+- 形式を変えたら必ずバージョンを上げ、直前版からの migration を書く（v4 → v5 → v6 は実装済み。v5 以前は `expressionId: 'cymatics-v1'` として読む）。
 - 旧 `src/ui/StudioPreset.ts` は D1 で温存中の旧 UI 用。新コードから参照しない。
 
 ---
