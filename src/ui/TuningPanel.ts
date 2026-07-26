@@ -1,4 +1,4 @@
-import type { CymaticsPlate } from '../expressions/CymaticsPlate';
+import type { PlateExpression } from '../expressions/PlateExpression';
 import { TUNING, TUNING_DEFAULTS, type TuningKey } from '../engine/tuning';
 
 interface TuningControl {
@@ -73,9 +73,9 @@ const GROUPS: TuningGroup[] = [
 
 export class TuningPanel {
   private readonly root = document.createElement('aside');
-  private readonly getComposition: () => CymaticsPlate;
+  private readonly getComposition: () => PlateExpression;
 
-  constructor(host: HTMLElement, getComposition: () => CymaticsPlate) {
+  constructor(host: HTMLElement, getComposition: () => PlateExpression) {
     this.getComposition = getComposition;
 
     this.root.className = 'tuning-panel';

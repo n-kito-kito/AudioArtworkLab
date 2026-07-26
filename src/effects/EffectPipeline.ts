@@ -9,6 +9,14 @@ import type { DesignLayerCanvases } from '../compositions/Composition';
 export class EffectPipeline {
   private readonly composer: EffectComposer;
   readonly effects: Effect[];
+  /**
+   * Effect の寿命と毎フレーム更新を持つかどうか。
+   *
+   * V1/V2 の比較表示では 1 組の Effect を 2 つのパイプラインが共有する
+   * （同じ設定で比べるため）。`ShaderPass` は composer が描画直前に tDiffuse を
+   * 差し込むので共有できるが、update / resize / dispose は 1 回だけ行う。
+   */
+  private readonly ownsEffects: boolean;
   private overlayPass: ShaderPass | null = null;
   private cleanOverlayPass: ShaderPass | null = null;
   private overlayTextures: THREE.CanvasTexture[] = [];
@@ -18,14 +26,17 @@ export class EffectPipeline {
     scene: THREE.Scene,
     camera: THREE.Camera,
     effects: Effect[],
+    ownsEffects = true,
   ) {
     this.effects = effects;
+    this.ownsEffects = ownsEffects;
     this.composer = new EffectComposer(renderer);
     this.composer.addPass(new RenderPass(scene, camera));
     this.rebuild();
   }
 
   update(audio: AudioParameters, elapsed: number): void {
+    if (!this.ownsEffects) return;
     for (const effect of this.effects) effect.update(audio, elapsed);
   }
 
@@ -48,7 +59,19 @@ export class EffectPipeline {
   }
 
   render(): void {
+    this.composer.renderToScreen = true;
     this.composer.render();
+  }
+
+  /**
+   * 画面ではなく内部のバッファへ描く。比較表示が 2 つの結果を合成するために使う。
+   * 最終パスの出力は composer の readBuffer に残る（RenderPass は needsSwap を
+   * 持たず readBuffer へ描き、以降の ShaderPass は描画後に入れ替わるため）。
+   */
+  renderToTexture(): THREE.Texture {
+    this.composer.renderToScreen = false;
+    this.composer.render();
+    return this.composer.readBuffer.texture;
   }
 
   setOverlayCanvases(canvases: DesignLayerCanvases): void {
@@ -133,11 +156,14 @@ export class EffectPipeline {
   }
   resize(width: number, height: number): void {
     this.composer.setSize(width, height);
+    if (!this.ownsEffects) return;
     for (const effect of this.effects) effect.resize(width, height);
   }
 
   dispose(): void {
-    for (const effect of this.effects) effect.dispose();
+    if (this.ownsEffects) {
+      for (const effect of this.effects) effect.dispose();
+    }
     this.disposeOverlay();
     this.composer.dispose();
   }
