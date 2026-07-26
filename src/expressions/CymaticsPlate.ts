@@ -163,6 +163,9 @@ export class CymaticsPlate implements Composition {
         uNoise: { value: TUNING.agitationNoise },
         uRepulsion: { value: TUNING.repulsion },
         uDiffusion: { value: TUNING.diffusion },
+        uRelease: { value: 0 },
+        uScatter: { value: TUNING.releaseScatter },
+        uReverse: { value: TUNING.releaseReverse },
         ...this.field.uniforms,
       },
       vertexShader: /* glsl */ `
@@ -188,6 +191,9 @@ export class CymaticsPlate implements Composition {
         uniform float uNoise;
         uniform float uRepulsion;
         uniform float uDiffusion;
+        uniform float uRelease;
+        uniform float uScatter;
+        uniform float uReverse;
 
         const float PI = 3.141592653589793;
         float gDepth = 0.0;
@@ -209,6 +215,10 @@ export class CymaticsPlate implements Composition {
         // これが自己捕捉ランダムウォークの捕捉側にあたる。
         float mobility(float a, vec2 uv) {
           float m = smoothstep(uMobFloor, uMobFloor + max(uMobSoft, 0.01), a);
+          // モード切替の過渡: 板全体が大きく鳴り、節に溜まっていた砂も跳ね上がる。
+          // ここで移動度の下限を外さないと、節にいた砂だけが動かず模様が
+          // そのまま次の模様へ変形して見えてしまう。
+          m = mix(m, 1.0, uRelease);
           // 粒ごとのばらつき。線を有機的にする決定論的ノイズ。
           float n = hash(floor(uv * 256.0) + floor(uTime * 3.0) * 0.31);
           return m * uAgitation * (1.0 - uNoise * 0.5 + uNoise * n);
@@ -248,10 +258,13 @@ export class CymaticsPlate implements Composition {
           // ref を小さく取ることで、わずかな傾きでも全速で寄る。
           // 慣性は持たない。砂は跳ねて着地するだけで、速度を蓄えない。
           float ref = 0.003;
-          float vR = -uDrift * min(mC, mR) * clamp((aR - aC) / ref, -1.0, 1.0);
-          float vL = -uDrift * min(mL, mC) * clamp((aC - aL) / ref, -1.0, 1.0);
-          float vU = -uDrift * min(mC, mU) * clamp((aU - aC) / ref, -1.0, 1.0);
-          float vD = -uDrift * min(mD, mC) * clamp((aC - aD) / ref, -1.0, 1.0);
+          // 過渡の間は寄る向きを反転させ、節から砂を追い出す。収まるにつれて
+          // 通常の向きへ戻り、散った砂が新しい節へ一気に集まる。
+          float drift = uDrift * mix(1.0, -uReverse, uRelease);
+          float vR = -drift * min(mC, mR) * clamp((aR - aC) / ref, -1.0, 1.0);
+          float vL = -drift * min(mL, mC) * clamp((aC - aL) / ref, -1.0, 1.0);
+          float vU = -drift * min(mC, mU) * clamp((aU - aC) / ref, -1.0, 1.0);
+          float vD = -drift * min(mD, mC) * clamp((aC - aD) / ref, -1.0, 1.0);
 
           // 高密度からの反発。山が潰れて幅が不均一になる。
           float rep = uDrift * uRepulsion;
@@ -275,7 +288,9 @@ export class CymaticsPlate implements Composition {
 
           // 着地位置のばらつきもフラックスとして足す。面ごとに対称な式にしないと
           // 隣接セルで出入りが釣り合わず、総量が漏れる。
-          float dif = uDiffusion * uDrift;
+          // 過渡の間は等方的に強く散らす（跳ね上げられた砂が板へばらける）。
+          // 拡散も移流と同じ CFL 条件に従うため、同じ上限で頭を押さえる。
+          float dif = min(uDiffusion * uDrift + uRelease * uScatter, maxFlow);
           fR += -dif * min(mC, mR) * (dR - dC);
           fL += -dif * min(mL, mC) * (dC - dL);
           fU += -dif * min(mC, mU) * (dU - dC);
@@ -474,14 +489,24 @@ export class CymaticsPlate implements Composition {
       u.uDiffusion!.value = TUNING.diffusion;
       u.uTargetMass!.value = TUNING.sandAmount;
       u.uTime!.value = elapsed;
+      // モード切替直後だけ立つ跳ね上げ。V1 の場は常に 0 を返す。
+      const release = this.field.getRelease();
+      u.uRelease!.value = release;
+      u.uScatter!.value = TUNING.releaseScatter;
+      u.uReverse!.value = TUNING.releaseReverse;
 
       // 平均密度の計測はフレームに 1 回で足りる（再正規化はゆるやかに効くため）。
       this.measureMass();
 
       // CFL 制限のため 1 フレームを分割して進める。
       // 分割数だけ砂が速く動けるので、再配置が一瞬で終わるようになる。
+      // 跳ね上げの間はさらに増やす。1 サブステップで運べる量は texel/dt に
+      // 縛られるため、分割数を上げないと散らばりが上限に張り付いて効かない。
       const frame = delta > 0 ? Math.min(delta, 0.033) : 0.016;
-      const steps = Math.max(1, Math.round(TUNING.substeps));
+      const steps = Math.max(
+        1,
+        Math.round(TUNING.substeps * (1 + release * TUNING.releaseSubsteps)),
+      );
       u.uDelta!.value = frame / steps;
       for (let i = 0; i < steps; i++) this.stepSimulation();
     }

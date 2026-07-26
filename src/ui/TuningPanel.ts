@@ -60,6 +60,15 @@ const GROUPS: TuningGroup[] = [
     ],
   },
   {
+    title: 'モード切替の跳ね上げ（V2 のみ）',
+    controls: [
+      { key: 'releaseTime', label: '跳ね上げの長さ (秒)', min: 0, max: 1.2, step: 0.01 },
+      { key: 'releaseScatter', label: '散らばりの強さ', min: 0, max: 1.2, step: 0.01 },
+      { key: 'releaseReverse', label: '節から離れる強さ', min: 0, max: 2, step: 0.01 },
+      { key: 'releaseSubsteps', label: '跳ね上げ中の分割数の倍率', min: 0, max: 5, step: 0.1 },
+    ],
+  },
+  {
     title: '共振と切替',
     controls: [
       { key: 'modeHysteresis', label: '切替のしきい倍率', min: 1, max: 2, step: 0.01 },

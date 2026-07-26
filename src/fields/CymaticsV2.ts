@@ -114,6 +114,22 @@ export class CymaticsV2 extends Cymatics {
     return TUNING.scaleBaseV2;
   }
 
+  /**
+   * モードが切り替わった瞬間だけ立つ跳ね上げ。
+   *
+   * 駆動周波数が変われば板は過渡的に大きく鳴り、節に溜まっていた砂まで
+   * 跳ね上げられる。切替の瞬間に 1、`releaseTime` をかけて 0 へ戻す。
+   * 立ち上がりを瞬時にし、戻りを S 字にすることで「バッと散って、
+   * すっと集まり直す」動きになる。
+   */
+  protected override computeRelease(): number {
+    const span = Math.max(TUNING.releaseTime, 0.01);
+    const since = this.sinceModeSwitch;
+    if (!Number.isFinite(since) || since >= span) return 0;
+    const x = 1 - since / span;
+    return x * x * (3 - 2 * x);
+  }
+
   override update(audio: AudioParameters, elapsed: number): void {
     super.update(audio, elapsed);
     this.uniforms.uAniso!.value = TUNING.anisotropyV2;

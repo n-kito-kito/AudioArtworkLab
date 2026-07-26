@@ -143,6 +143,9 @@ export class Cymatics implements Field {
   private lastSeedTime = -Infinity;
   private pendingRotate = 0;
   private lastPrimaryId = -1;
+  private releaseValue = 0;
+  /** 主モードが切り替わってからの経過秒。跳ね上げの計算に使う。 */
+  protected sinceModeSwitch = Infinity;
 
   /** モード表を差し替えられる。V2 は自前の表を渡す（既定は V1 の PLATE_MODES）。 */
   constructor(modes?: readonly PlateMode[]) {
@@ -152,6 +155,21 @@ export class Cymatics implements Field {
   /** 場の粗さの基準。V2 は板全体を定義域にするため別の値を使う。 */
   protected scaleBase(): number {
     return TUNING.scaleBase;
+  }
+
+  /**
+   * モード切替直後の跳ね上げ 0..1。砂の運動は CymaticsPlate が担うため、
+   * 場は「今どれだけ過渡状態か」だけを伝える。
+   *
+   * V1 は常に 0（跳ね上げを起こさない）。V1 の見え方は変えない（PRD D22）。
+   */
+  protected computeRelease(): number {
+    return 0;
+  }
+
+  /** 跳ね上げの強さ 0..1。CymaticsPlate が砂の移動度と散らばりへ反映する。 */
+  getRelease(): number {
+    return this.releaseValue;
   }
 
   setSpectrumSource(source: () => SpectrumFrame | null): void {
@@ -172,6 +190,8 @@ export class Cymatics implements Field {
     // スペクトルによるモード励起（Phase 1 の核）。
     this.exciter.update(this.spectrumSource?.() ?? null, audio, elapsed, delta);
     const state = this.exciter.getState();
+    this.sinceModeSwitch = state.sinceSwitch;
+    this.releaseValue = this.computeRelease();
 
     packMode(this.uniforms.uModeB!.value as THREE.Vector4, state.primary);
     packMode(this.uniforms.uModeS!.value as THREE.Vector4, state.secondary);
