@@ -8,6 +8,7 @@ import type {
   NumberEffectParameter,
 } from '../effects/Effect';
 import { THEMES } from '../engine/themes';
+import { EXPRESSIONS, type ExpressionId } from '../expressions/catalog';
 import type { StudioShell } from './StudioShell';
 
 const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble', 'beat'];
@@ -24,6 +25,7 @@ const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble',
 export class LabControls {
   private readonly shell: StudioShell;
   private composition: CymaticsPlate;
+  private readonly onExpressionChange: (id: ExpressionId) => void;
   private readonly onThemeChange: (name: string) => void;
   private readonly onDepthChange: (amount: number) => void;
   private readonly exportPng: () => void;
@@ -42,6 +44,7 @@ export class LabControls {
   constructor(
     shell: StudioShell,
     composition: CymaticsPlate,
+    onExpressionChange: (id: ExpressionId) => void,
     onThemeChange: (name: string) => void,
     onDepthChange: (amount: number) => void,
     exportPng: () => void,
@@ -51,6 +54,7 @@ export class LabControls {
   ) {
     this.shell = shell;
     this.composition = composition;
+    this.onExpressionChange = onExpressionChange;
     this.onThemeChange = onThemeChange;
     this.onDepthChange = onDepthChange;
     this.onExportPreset = onExportPreset;
@@ -116,19 +120,24 @@ export class LabControls {
 
   private buildCompositionSection(): void {
     this.compositionBody.replaceChildren();
-    // 1 表現 = 1 見え方（PRD D16）。見え方の選択肢は出さない。
-    // 表現が増えたら、この select が表現の切り替えになる。
+    // 1 表現 = 1 見え方（PRD D16）は維持しつつ、V2 の開発期間中だけ
+    // V1/V2 を併置して同じ音源で見比べられるようにする（PRD D22）。
     const field = document.createElement('label');
     field.className = 'control-row control-row--inline';
     const fieldName = document.createElement('span');
     fieldName.textContent = 'Expression';
     const fieldSelect = document.createElement('select');
     fieldSelect.setAttribute('aria-label', 'Expression');
-    const cymatics = document.createElement('option');
-    cymatics.value = 'Cymatics';
-    cymatics.textContent = 'Cymatics';
-    fieldSelect.append(cymatics);
-    fieldSelect.disabled = true;
+    for (const definition of EXPRESSIONS) {
+      const option = document.createElement('option');
+      option.value = definition.id;
+      option.textContent = definition.label;
+      option.selected = definition.id === this.composition.id;
+      fieldSelect.append(option);
+    }
+    fieldSelect.addEventListener('change', () =>
+      this.onExpressionChange(fieldSelect.value as ExpressionId),
+    );
     field.append(fieldName, fieldSelect);
 
     const theme = document.createElement('label');

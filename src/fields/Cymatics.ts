@@ -40,7 +40,7 @@ function packMode(target: THREE.Vector4, mode: PlateMode): void {
 }
 
 export class Cymatics implements Field {
-  readonly name = 'Cymatics';
+  readonly name: string = 'Cymatics';
 
   readonly uniforms: FieldUniforms = {
     uModeB: { value: new THREE.Vector4() },
@@ -136,13 +136,23 @@ export class Cymatics implements Field {
     }
   `;
 
-  private readonly exciter = new ModeExciter();
+  private readonly exciter: ModeExciter;
   private spectrumSource: (() => SpectrumFrame | null) | null = null;
   private previousElapsed = -1;
   private appliedSeed = -1;
   private lastSeedTime = -Infinity;
   private pendingRotate = 0;
   private lastPrimaryId = -1;
+
+  /** モード表を差し替えられる。V2 は自前の表を渡す（既定は V1 の PLATE_MODES）。 */
+  constructor(modes?: readonly PlateMode[]) {
+    this.exciter = new ModeExciter(modes);
+  }
+
+  /** 場の粗さの基準。V2 は板全体を定義域にするため別の値を使う。 */
+  protected scaleBase(): number {
+    return TUNING.scaleBase;
+  }
 
   setSpectrumSource(source: () => SpectrumFrame | null): void {
     this.spectrumSource = source;
@@ -187,7 +197,7 @@ export class Cymatics implements Field {
 
     // 場の粗さは焼き込み定数。音量や明るさで連続ズームさせない
     // （音量だけで揺れて見える原因になるため）。
-    this.uniforms.uScale!.value = TUNING.scaleBase;
+    this.uniforms.uScale!.value = this.scaleBase();
     this.uniforms.uWarp!.value = approach(
       this.uniforms.uWarp!.value as number,
       Math.min(Math.max(audio.bass ?? 0, 0), 1) * TUNING.warpAmount,

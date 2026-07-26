@@ -81,11 +81,13 @@ export interface ModeExciterState {
 }
 
 export class ModeExciter {
+  /** 励起対象のモード表。V1 と V2 で表だけが異なり、選択の仕組みは共有する。 */
+  private readonly modes: readonly PlateMode[];
   private weights: Float32Array[] | null = null;
   private weightBins = 0;
-  private readonly raw = new Float32Array(PLATE_MODES.length);
-  private readonly ema = new Float32Array(PLATE_MODES.length).fill(0.03);
-  private readonly env = new Float32Array(PLATE_MODES.length);
+  private readonly raw: Float32Array;
+  private readonly ema: Float32Array;
+  private readonly env: Float32Array;
   private primaryIdx = 2;
   private previousIdx = 2;
   private switchedAt = -Infinity;
@@ -100,13 +102,21 @@ export class ModeExciter {
   private lastPeaksAt = 0;
 
   /** モードごとの高域プリエンファシス（帯域平均に後段で掛ける傾斜）。 */
-  private readonly tilt = PLATE_MODES.map((mode) =>
-    Math.min(Math.max(Math.pow(mode.frequency / 500, 0.55), 0.35), 2.6),
-  );
+  private readonly tilt: number[];
+
+  constructor(modes: readonly PlateMode[] = PLATE_MODES) {
+    this.modes = modes;
+    this.raw = new Float32Array(modes.length);
+    this.ema = new Float32Array(modes.length).fill(0.03);
+    this.env = new Float32Array(modes.length);
+    this.tilt = modes.map((mode) =>
+      Math.min(Math.max(Math.pow(mode.frequency / 500, 0.55), 0.35), 2.6),
+    );
+  }
 
   /** ビンごとの帯域応答（対数ガウス・帯域内で正規化）を作る。 */
   private buildWeights(bins: number, nyquist: number): void {
-    this.weights = PLATE_MODES.map((mode) => {
+    this.weights = this.modes.map((mode) => {
       const w = new Float32Array(bins);
       let sum = 0;
       for (let b = 1; b < bins; b++) {
@@ -149,7 +159,7 @@ export class ModeExciter {
 
     // 各モードの生エネルギーと、新規性（数秒平均との比・有界）。
     let sumRaw = 0;
-    for (let i = 0; i < PLATE_MODES.length; i++) {
+    for (let i = 0; i < this.modes.length; i++) {
       const w = this.weights![i]!;
       let energy = 0;
       for (let b = 1; b < magnitudes.length; b++) energy += (magnitudes[b]! / 255) * w[b]!;
@@ -164,8 +174,8 @@ export class ModeExciter {
     // 分布ベースの正規化: 全帯域の平均に対するシェア。
     // 音量・入力ゲインに依存せず、持続音でも共振が立ち続ける。
     // 新規性は有界の重み付けに留め、持続で共振が消えないようにする。
-    const globalMean = sumRaw / PLATE_MODES.length + 1e-4;
-    for (let i = 0; i < PLATE_MODES.length; i++) {
+    const globalMean = sumRaw / this.modes.length + 1e-4;
+    for (let i = 0; i < this.modes.length; i++) {
       const share = this.raw[i]! / globalMean;
       const novelty = Math.min(Math.max(this.raw[i]! / (this.ema[i]! + 0.015), 0.55), 2.2);
       const relative = share * (novelty / 1.15);
@@ -178,7 +188,7 @@ export class ModeExciter {
     // 主モードの選択: ヒステリシス + 継続時間 + 最短保持。
     let bestIdx = 0;
     let secondIdx = 1;
-    for (let i = 1; i < PLATE_MODES.length; i++) {
+    for (let i = 1; i < this.modes.length; i++) {
       if (this.env[i]! > this.env[bestIdx]!) {
         secondIdx = bestIdx;
         bestIdx = i;
@@ -251,12 +261,12 @@ export class ModeExciter {
 
   getState(): ModeExciterState {
     return {
-      primary: PLATE_MODES[this.primaryIdx]!,
-      previous: PLATE_MODES[this.previousIdx]!,
+      primary: this.modes[this.primaryIdx]!,
+      previous: this.modes[this.previousIdx]!,
       sinceSwitch: Math.max(this.now - this.switchedAt, 0),
-      secondary: PLATE_MODES[this.secondaryIdx]!,
+      secondary: this.modes[this.secondaryIdx]!,
       secondaryWeight: this.secondaryW,
-      candidate: this.candidateIdx >= 0 ? PLATE_MODES[this.candidateIdx]! : null,
+      candidate: this.candidateIdx >= 0 ? this.modes[this.candidateIdx]! : null,
       excitation: this.excitationValue,
       energies: this.env,
       holdRemaining: Math.max(this.holdUntil, 0),

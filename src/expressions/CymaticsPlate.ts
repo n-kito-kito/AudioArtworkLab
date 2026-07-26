@@ -7,6 +7,7 @@ import type {
 import type { Effect } from '../effects/Effect';
 import { EffectPipeline } from '../effects/EffectPipeline';
 import { Cymatics } from '../fields/Cymatics';
+import type { ExpressionId } from './catalog';
 import { THEMES, type Theme } from '../engine/themes';
 import { TUNING } from '../engine/tuning';
 
@@ -46,8 +47,10 @@ const clamp01 = (value: number | undefined): number => Math.min(Math.max(value ?
 export class CymaticsPlate implements Composition {
   readonly animated = true;
   readonly name = 'Cymatics';
+  /** 表現の安定 id（保存データに入る）。V1 = 'cymatics-v1' / V2 = 'cymatics-v2'。 */
+  readonly id: ExpressionId;
 
-  private readonly field = new Cymatics();
+  private readonly field: Cymatics;
   private readonly effects: Effect[];
   private theme: Theme;
   private depthAmount = 0;
@@ -72,9 +75,20 @@ export class CymaticsPlate implements Composition {
   private pipeline: EffectPipeline | null = null;
   private previousElapsed = -1;
 
-  constructor(effects: Effect[] = [], theme?: Theme) {
+  /**
+   * 場（振動モードの体系）は注入できる。省略時は V1（Cymatics）。
+   * V2 は同じ砂の物理・Effect 基盤の上で場だけを差し替える（catalog.ts 経由で作る）。
+   */
+  constructor(
+    effects: Effect[] = [],
+    theme?: Theme,
+    field: Cymatics = new Cymatics(),
+    id: ExpressionId = 'cymatics-v1',
+  ) {
     this.effects = effects;
     this.theme = theme ?? THEMES[0]!;
+    this.field = field;
+    this.id = id;
   }
 
   setup(context: CompositionContext): void {

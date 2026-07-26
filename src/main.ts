@@ -2,9 +2,13 @@ import './style.css';
 import { FileAudioEngine } from './audio/FileAudioEngine';
 import { REFERENCE_AUDIO_NAME, REFERENCE_AUDIO_URL } from './audio/referenceAudio';
 import { App } from './core/App';
-import { createEffects } from './effects/catalog';
+import { createEffects, transferEffectState } from './effects/catalog';
 import { findTheme } from './engine/themes';
-import { CymaticsPlate } from './expressions/CymaticsPlate';
+import {
+  createExpression,
+  normalizeExpressionId,
+  type ExpressionId,
+} from './expressions/catalog';
 import { AudioControls } from './ui/AudioControls';
 import { LabControls } from './ui/LabControls';
 import { DebugPanel } from './ui/DebugPanel';
@@ -45,7 +49,8 @@ if (storedPreset) {
     storedPreset.effects.map((entry) => entry.name),
   );
 }
-const composition = new CymaticsPlate(
+let composition = createExpression(
+  normalizeExpressionId(storedPreset?.expressionId),
   initialEffects,
   findTheme(storedPreset?.themeName ?? ''),
 );
@@ -70,7 +75,25 @@ const notify = (message: string, error = false): void => {
   window.setTimeout(() => notice.remove(), 2200);
 };
 
+/**
+ * 表現（V1/V2）を切り替える。状態は共有しない: 旧 composition は dispose され、
+ * Effect はシェーダーごと破棄されるため、新しいインスタンスへ設定だけ引き継ぐ。
+ */
+const switchExpression = (id: ExpressionId): void => {
+  if (id === composition.id) return;
+  const effects = createEffects();
+  transferEffectState(composition.getEffects(), effects);
+  const next = createExpression(id, effects, composition.getTheme());
+  next.setDepth(composition.getDepth());
+  next.setZoom(composition.getZoom());
+  app.setComposition(next);
+  composition = next;
+  labControls.refresh(composition);
+  savePresetNow();
+};
+
 const applyPreset = (preset: LabPreset): void => {
+  switchExpression(normalizeExpressionId(preset.expressionId));
   setTheme(preset.themeName);
   setDepth(preset.depth);
   applyEffectStates(composition.getEffects(), preset.effects);
@@ -123,6 +146,7 @@ const recordingController = new RecordingController(shell, audioEngine);
 const labControls = new LabControls(
   shell,
   composition,
+  (id) => switchExpression(id),
   setTheme,
   setDepth,
   () => app.exportPng(),

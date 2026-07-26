@@ -4,15 +4,16 @@ import type {
   EffectParameterValues,
 } from '../effects/Effect';
 import type { CymaticsPlate } from '../expressions/CymaticsPlate';
+import { normalizeExpressionId, type ExpressionId } from '../expressions/catalog';
 
 /**
- * Preset v4。Field × Renderer 構成の保存形式（DESIGN.md D8）。
+ * Preset v6。表現（V1/V2）・テーマ・奥行き・Effect 状態の保存形式。
  *
  * v1〜v3（旧 Generator 構成）との互換は持たない。旧形式を見つけたら
  * 破棄して初期状態に戻す。キーは旧版と同じものを使い、残っている
  * 旧データはここで一掃される。
  */
-export const LAB_PRESET_VERSION = 5;
+export const LAB_PRESET_VERSION = 6;
 export const LAB_PRESET_KEY = 'audio-artwork-lab:studio-preset';
 
 export interface LabPresetEffect {
@@ -24,6 +25,8 @@ export interface LabPresetEffect {
 
 export interface LabPreset {
   version: typeof LAB_PRESET_VERSION;
+  /** 表現の安定 id。旧データ（v5 以前）は cymatics-v1 として読む。 */
+  expressionId: ExpressionId;
   fieldName: string;
   rendererName: string;
   themeName: string;
@@ -36,6 +39,7 @@ export interface LabPreset {
 export function createLabPreset(composition: CymaticsPlate): LabPreset {
   return {
     version: LAB_PRESET_VERSION,
+    expressionId: composition.id,
     fieldName: 'Cymatics',
     // 1 表現 = 1 見え方（D16）。互換のため形だけ残している固定値。
     rendererName: 'Minimal shape',
@@ -55,9 +59,12 @@ export function createLabPreset(composition: CymaticsPlate): LabPreset {
  * 旧バージョンを現行形式へ引き上げる。扱えない形式は null。
  * v1〜v3（旧 Generator 構成）は D8 により破棄する。
  */
-function migrate(preset: Record<string, unknown>): Record<string, unknown> | null {
+function migrate(raw: Record<string, unknown>): Record<string, unknown> | null {
+  let preset = raw;
   // v4 → v5: ズームが増えた。既存のプリセットは等倍とみなす。
-  if (preset.version === 4) return { ...preset, version: 5, zoom: 1 };
+  if (preset.version === 4) preset = { ...preset, version: 5, zoom: 1 };
+  // v5 → v6: 表現の選択が増えた。旧 Cymatics は V1 として扱う。
+  if (preset.version === 5) preset = { ...preset, version: 6, expressionId: 'cymatics-v1' };
   if (preset.version === LAB_PRESET_VERSION) return preset;
   return null;
 }
@@ -84,6 +91,8 @@ export function parseLabPreset(raw: unknown): LabPreset | null {
     if (typeof effect.parameters !== 'object' || effect.parameters === null) return null;
     if (typeof effect.audioMappings !== 'object' || effect.audioMappings === null) return null;
   }
+  // 不明な表現 id は V1 に寄せる（旧データ・手編集された JSON への防御）。
+  preset.expressionId = normalizeExpressionId(preset.expressionId);
   // 移行後のオブジェクトを返す。元データを返すと移行で補った値が失われる。
   return preset as unknown as LabPreset;
 }
