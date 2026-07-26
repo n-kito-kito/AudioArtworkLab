@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import type {
+  Composition,
   CompositionContext,
   DesignLayerCanvases,
 } from '../compositions/Composition';
 import type { Effect } from '../effects/Effect';
 import { EffectPipeline } from '../effects/EffectPipeline';
 import { Cymatics } from '../fields/Cymatics';
-import type { ExpressionId, PlateExpression } from './PlateExpression';
+import type { ExpressionId } from './catalog';
 import { THEMES, type Theme } from '../engine/themes';
 import { TUNING } from '../engine/tuning';
 
@@ -43,7 +44,7 @@ const SIM_SIZE = 256;
 
 const clamp01 = (value: number | undefined): number => Math.min(Math.max(value ?? 0, 0), 1);
 
-export class CymaticsPlate implements PlateExpression {
+export class CymaticsPlate implements Composition {
   readonly animated = true;
   readonly name = 'Cymatics';
   /** 表現の安定 id（保存データに入る）。V1 = 'cymatics-v1' / V2 = 'cymatics-v2'。 */
@@ -51,8 +52,6 @@ export class CymaticsPlate implements PlateExpression {
 
   private readonly field: Cymatics;
   private readonly effects: Effect[];
-  /** 比較表示では 1 組の Effect を 2 つの板が共有する。所有者だけが更新・破棄する。 */
-  private readonly ownsEffects: boolean;
   private theme: Theme;
   private depthAmount = 0;
   private smoothedBass = 0;
@@ -85,13 +84,11 @@ export class CymaticsPlate implements PlateExpression {
     theme?: Theme,
     field: Cymatics = new Cymatics(),
     id: ExpressionId = 'cymatics-v1',
-    ownsEffects = true,
   ) {
     this.effects = effects;
     this.theme = theme ?? THEMES[0]!;
     this.field = field;
     this.id = id;
-    this.ownsEffects = ownsEffects;
   }
 
   setup(context: CompositionContext): void {
@@ -431,7 +428,6 @@ export class CymaticsPlate implements PlateExpression {
       this.displayScene,
       this.camera,
       this.effects,
-      this.ownsEffects,
     );
   }
 
@@ -528,11 +524,6 @@ export class CymaticsPlate implements PlateExpression {
 
   render(): void {
     this.pipeline?.render();
-  }
-
-  /** 開発用の比較表示が、画面ではなくテクスチャへ描かせるために使う。 */
-  renderToTexture(): THREE.Texture | null {
-    return this.pipeline?.renderToTexture() ?? null;
   }
 
   resize(width: number, height: number): void {

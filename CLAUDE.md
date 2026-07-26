@@ -90,8 +90,7 @@ src/
 - **`generators/` `renderers/` `compositions/` は旧構成の残骸**（未接続・温存）。新コードから参照しない。
 - 音声解析は 10 種（`volume/bass/mid/treble/beat/pitch/centroid/flatness/onset/sustain`）+
   帯域ごとのピーク追従自動較正。**BPM・曲構造の検出はまだない。**
-- **開発ツール**: `?tune=1` チューニングパネル / `?debug=1` モード励起の可視化 /
-  `?compare=1` V1・V2 のワイプ比較（`expressions/ComparisonPlate.ts`）。本番ビルドには含まれない。
+- **開発ツール**: `?tune=1` チューニングパネル / `?debug=1` モード励起の可視化。本番ビルドには含まれない。
 
 ### 触るときに注意するファイル
 

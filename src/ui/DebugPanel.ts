@@ -1,6 +1,5 @@
 import type { AudioEngine } from '../audio/AudioEngine';
-import type { ComparisonPlate } from '../expressions/ComparisonPlate';
-import type { PlateExpression } from '../expressions/PlateExpression';
+import type { CymaticsPlate } from '../expressions/CymaticsPlate';
 
 /**
  * 開発用デバッグパネル（`?debug=1`・dev のみ）。
@@ -14,20 +13,16 @@ export class DebugPanel {
   private readonly stats = document.createElement('pre');
   private readonly timer: number;
   private collapsed = false;
-  private readonly getComposition: () => PlateExpression;
+  private readonly getComposition: () => CymaticsPlate;
   private readonly audioEngine: AudioEngine;
-  /** 比較表示のとき、左右それぞれの状態とワイプ位置を出す（?compare=1）。 */
-  private readonly comparison: ComparisonPlate | null;
 
   constructor(
     host: HTMLElement,
-    getComposition: () => PlateExpression,
+    getComposition: () => CymaticsPlate,
     audioEngine: AudioEngine,
-    comparison: ComparisonPlate | null = null,
   ) {
     this.getComposition = getComposition;
     this.audioEngine = audioEngine;
-    this.comparison = comparison;
     this.root.className = 'tuning-panel debug-panel';
     this.root.setAttribute('aria-label', 'Debug (development)');
 
@@ -63,32 +58,7 @@ export class DebugPanel {
     view.addEventListener('change', () => this.getComposition().setDebugView(Number(view.value)));
 
     this.stats.className = 'debug-panel__stats';
-    this.root.append(header, view);
-
-    // ワイプ比較。0 = V2 のみ / 1 = V1 のみ / 0.5 = 左右分割。
-    if (this.comparison) {
-      const row = document.createElement('label');
-      row.className = 'control-row control-row--range';
-      const name = document.createElement('span');
-      name.textContent = 'V2 ← ワイプ → V1';
-      const output = document.createElement('output');
-      const input = document.createElement('input');
-      input.type = 'range';
-      input.min = '0';
-      input.max = '1';
-      input.step = '0.01';
-      input.value = String(this.comparison.getSplit());
-      input.setAttribute('aria-label', 'Comparison wipe');
-      output.textContent = input.value;
-      input.addEventListener('input', () => {
-        output.textContent = input.value;
-        this.comparison?.setSplit(Number(input.value));
-      });
-      row.append(name, output, input);
-      this.root.append(row);
-    }
-
-    this.root.append(this.stats);
+    this.root.append(header, view, this.stats);
     host.append(this.root);
 
     this.timer = window.setInterval(() => this.refresh(), 200);
@@ -105,21 +75,10 @@ export class DebugPanel {
     const energies = Array.from(state.energies)
       .map((energy, index) => `${index}:${energy.toFixed(1)}`)
       .join(' ');
-    // 比較表示では左右の主モードを並べる（同じ音・同じ時刻での差が読める）。
-    const sides = this.comparison?.getSideStates();
-    const sideLines = sides
-      ? [
-          `left  V1 #${sides.v1.primary.id} ${sides.v1.primary.label}`,
-          `right V2 #${sides.v2.primary.id} ${sides.v2.primary.label}` +
-            `${sides.v2.primary.symmetry ? ` sym=${sides.v2.primary.symmetry}` : ''}`,
-        ]
-      : [];
-
     this.stats.textContent = [
       `RMS ${f(audio.volume)}  centroid ${f(audio.centroid)}  flatness ${f(audio.flatness)}`,
       `onset ${f(audio.onset)}  sustain ${f(audio.sustain)}`,
       `peaks: ${peaks || '-'}`,
-      ...sideLines,
       `primary  #${state.primary.id} ${state.primary.label}` +
         `${state.primary.symmetry ? ` sym=${state.primary.symmetry}` : ''}` +
         ` (E=${state.energies[state.primary.id]!.toFixed(2)})`,

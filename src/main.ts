@@ -8,9 +8,7 @@ import {
   createExpression,
   normalizeExpressionId,
   type ExpressionId,
-  type PlateExpression,
 } from './expressions/catalog';
-import { ComparisonPlate } from './expressions/ComparisonPlate';
 import { AudioControls } from './ui/AudioControls';
 import { LabControls } from './ui/LabControls';
 import { DebugPanel } from './ui/DebugPanel';
@@ -51,19 +49,11 @@ if (storedPreset) {
     storedPreset.effects.map((entry) => entry.name),
   );
 }
-// 開発用の V1 / V2 比較表示（?compare=1）。同じ音・同じ時刻で並走させる。
-const comparison =
-  import.meta.env.DEV && new URLSearchParams(location.search).get('compare') === '1'
-    ? new ComparisonPlate(initialEffects, findTheme(storedPreset?.themeName ?? ''))
-    : null;
-
-let composition: PlateExpression =
-  comparison ??
-  createExpression(
-    normalizeExpressionId(storedPreset?.expressionId),
-    initialEffects,
-    findTheme(storedPreset?.themeName ?? ''),
-  );
+let composition = createExpression(
+  normalizeExpressionId(storedPreset?.expressionId),
+  initialEffects,
+  findTheme(storedPreset?.themeName ?? ''),
+);
 // zoom は開発用（PRD D17）のため保存値は適用せず、常に等倍で起動する。
 if (storedPreset) composition.setDepth(storedPreset.depth);
 const shell = new StudioShell(container);
@@ -90,8 +80,7 @@ const notify = (message: string, error = false): void => {
  * Effect はシェーダーごと破棄されるため、新しいインスタンスへ設定だけ引き継ぐ。
  */
 const switchExpression = (id: ExpressionId): void => {
-  // 比較表示では両方を同時に走らせているため、切り替えは行わない。
-  if (comparison || id === composition.id) return;
+  if (id === composition.id) return;
   const effects = createEffects();
   transferEffectState(composition.getEffects(), effects);
   const next = createExpression(id, effects, composition.getTheme());
@@ -176,7 +165,7 @@ const tuningPanel =
 // 開発用デバッグパネル（?debug=1）。励起状態と各表示の切り替え。
 const debugPanel =
   import.meta.env.DEV && new URLSearchParams(location.search).get('debug') === '1'
-    ? new DebugPanel(shell.root, () => composition, audioEngine, comparison)
+    ? new DebugPanel(shell.root, () => composition, audioEngine)
     : null;
 let disposed = false;
 
