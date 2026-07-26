@@ -53,6 +53,11 @@ export const TUNING = {
   breakAmount: 0.05, //   ノイズ的な音による節線の崩れの量
   scaleBase: 0.7, //      場の粗さの基準
   scaleCentroid: 1.1, //  音の明るさが場を細かくする量
+
+  // V2 の場（CymaticsV2: 自由端の正方形板）
+  scaleBaseV2: 1.0, //    V2 の定義域。1 で板の縁 = 自由端（cos の微分ゼロ）に一致する
+  anisotropyV2: 0.012, // 材料の異方性（x と y の剛性差）。板の個体差として固定
+  exciteOffsetV2: 0.02, // 励振点の中心からのずれ。節線をわずかに非対称にする
 };
 
 export const TUNING_DEFAULTS = { ...TUNING };

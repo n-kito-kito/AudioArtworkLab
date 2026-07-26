@@ -55,7 +55,7 @@ export class Cymatics implements Field {
     uRotB: { value: 0 },
   };
 
-  readonly glsl = /* glsl */ `
+  readonly glsl: string = /* glsl */ `
     uniform vec4 uModeB;
     uniform vec4 uModeS;
     uniform float uAsymB;

@@ -54,6 +54,9 @@ const GROUPS: TuningGroup[] = [
       { key: 'warpAmount', label: '低域 → うねり', min: 0, max: 1, step: 0.01 },
       { key: 'breakAmount', label: 'ノイズ → 崩れ', min: 0, max: 0.6, step: 0.01 },
       { key: 'fieldFloor', label: '非共振時の場の下限', min: 0, max: 1, step: 0.01 },
+      { key: 'scaleBaseV2', label: 'V2: 定義域（1 = 板全体）', min: 0.4, max: 2, step: 0.01 },
+      { key: 'anisotropyV2', label: 'V2: 材料の異方性', min: 0, max: 0.08, step: 0.001 },
+      { key: 'exciteOffsetV2', label: 'V2: 励振点のずれ', min: 0, max: 0.12, step: 0.001 },
     ],
   },
   {

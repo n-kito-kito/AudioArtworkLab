@@ -31,6 +31,8 @@ export interface PlateMode {
   /** わずかな非対称性（励振点の偏りの近似）。 */
   readonly asym: number;
   readonly label: string;
+  /** 対称性の族（デバッグ表示用・V2 で使用）。 */
+  readonly symmetry?: string;
 }
 
 /** 低次→高次へ対数間隔で並ぶ 16 モード。トポロジーが十分に異なるよう族を交互に置く。 */
