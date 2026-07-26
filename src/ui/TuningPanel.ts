@@ -1,5 +1,5 @@
 import type { CymaticsPlate } from '../expressions/CymaticsPlate';
-import { TUNING, TUNING_DEFAULTS, type TuningKey } from '../engine/tuning';
+import { TUNING, tuningDefaults, type TuningKey } from '../engine/tuning';
 
 interface TuningControl {
   key: TuningKey;
@@ -19,7 +19,7 @@ interface TuningGroup {
  *
  * 範囲と感度は作り手が焼き込む内部定数であり、本番 UI には出さない（PRD D17）。
  * ここで良い値を見つけ、`Copy values` で書き出し、`engine/tuning.ts` の
- * 既定値へ転記して確定する。
+ * **その版の**既定値へ転記して確定する。質感は版ごとに持つ（PRD D22）。
  *
  * 値はプリセットに保存しない。実行時のユーザーには存在しない層である。
  */
@@ -74,6 +74,7 @@ const GROUPS: TuningGroup[] = [
 export class TuningPanel {
   private readonly root = document.createElement('aside');
   private readonly getComposition: () => CymaticsPlate;
+  private readonly note = document.createElement('span');
 
   constructor(host: HTMLElement, getComposition: () => CymaticsPlate) {
     this.getComposition = getComposition;
@@ -84,9 +85,8 @@ export class TuningPanel {
     const header = document.createElement('header');
     const title = document.createElement('strong');
     title.textContent = 'Tuning';
-    const note = document.createElement('span');
-    note.textContent = '開発用。値は保存されない';
-    header.append(title, note);
+    this.note.textContent = '開発用。値は保存されない';
+    header.append(title, this.note);
     this.root.append(header);
 
     // ズームは開発用（PRD D17）。良い見え感を探すためここに置く。
@@ -124,12 +124,21 @@ export class TuningPanel {
       this.button('Reset', () => this.reset()),
     );
     this.root.append(actions);
+    this.syncSliders();
 
     host.append(this.root);
   }
 
   dispose(): void {
     this.root.remove();
+  }
+
+  /**
+   * 表現を切り替えたあとに呼ぶ。質感は版ごとに焼き込まれているため、
+   * 切替で `TUNING` の中身が入れ替わり、スライダーの表示が実体とずれる。
+   */
+  refresh(): void {
+    this.syncSliders();
   }
 
   /** tuning.ts へ貼り戻せる形で書き出す。 */
@@ -148,18 +157,27 @@ export class TuningPanel {
     }
   }
 
+  /** 表示中の版の焼き込み値へ戻す。 */
   private reset(): void {
-    for (const key of Object.keys(TUNING_DEFAULTS) as TuningKey[]) {
-      TUNING[key] = TUNING_DEFAULTS[key];
+    const defaults = tuningDefaults(this.getComposition().id);
+    for (const key of Object.keys(defaults) as TuningKey[]) {
+      TUNING[key] = defaults[key];
     }
+    this.syncSliders();
+    this.flash('既定値へ戻しました');
+  }
+
+  /** スライダーの表示を `TUNING` の現在値に合わせる。 */
+  private syncSliders(): void {
+    this.note.textContent = `開発用。値は保存されない（${this.getComposition().id}）`;
     this.root.querySelectorAll('input[type="range"]').forEach((element) => {
       const input = element as HTMLInputElement;
       const key = input.dataset.key as TuningKey | undefined;
       if (!key) return;
-      input.value = String(TUNING_DEFAULTS[key]);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.value = String(TUNING[key]);
+      const output = input.parentElement?.querySelector('output');
+      if (output) output.textContent = String(Number(TUNING[key].toFixed(3)));
     });
-    this.flash('既定値へ戻しました');
   }
 
   private flash(message: string): void {

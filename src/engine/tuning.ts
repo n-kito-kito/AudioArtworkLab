@@ -6,8 +6,18 @@
  * 良い値が見つかったらここの既定値を書き換えて確定する（= 焼き込み）。
  *
  * プリセットには保存しない。実行時のユーザーには存在しない層である。
+ *
+ * **質感は版ごとに持つ。** V1 と V2 はモードの体系が違うため、同じ砂の量・
+ * 同じ帯の太さでは同じようには見えない。どちらへ収斂するかを決めるまでは
+ * それぞれの一番良い状態どうしで見比べる必要がある（PRD D22）。
+ * 表現を切り替えると、その版の値が `TUNING` へ読み込まれる。
  */
-export const TUNING = {
+
+/** どの版の質感を使うか。`expressions` の ExpressionId と対応する。 */
+export type TuningVariant = 'cymatics-v1' | 'cymatics-v2';
+
+/** V1（サイマティクス Version 1）の焼き込み値。 */
+const V1 = {
   // 質感（MinimalShape）
   bandBase: 0.7, //       境界の帯の太さの基準
   bandBass: 1.5, //       低域が帯を太らせる量
@@ -54,12 +64,57 @@ export const TUNING = {
   scaleBase: 0.7, //      場の粗さの基準
   scaleCentroid: 1.1, //  音の明るさが場を細かくする量
 
-  // V2 の場（CymaticsV2: 自由端の正方形板）
+  // V2 の場（CymaticsV2: 自由端の正方形板）。V1 では読まれない。
   scaleBaseV2: 1.0, //    V2 の定義域。1 で板の縁 = 自由端（cos の微分ゼロ）に一致する
   anisotropyV2: 0.012, // 材料の異方性（x と y の剛性差）。板の個体差として固定
   exciteOffsetV2: 0.02, // 励振点の中心からのずれ。節線をわずかに非対称にする
 };
 
-export const TUNING_DEFAULTS = { ...TUNING };
+export type TuningValues = typeof V1;
+export type TuningKey = keyof TuningValues;
 
-export type TuningKey = keyof typeof TUNING;
+/**
+ * V2（サイマティクス Version 2）の焼き込み値。V1 との差だけを書く。
+ *
+ * V2 は節線が曲がり閉領域が多いため、V1 より砂を厚く積み、帯を太く、
+ * 濃く出す。切替のしきいと保持を下げて共振の移り変わりを素直に見せ、
+ * うねりは切って崩れ側へ寄せている。
+ */
+const V2_OVERRIDES: Partial<TuningValues> = {
+  grainBase: 1.5,
+  inkBase: 0.7,
+  inkSustain: 0.7,
+  sandAmount: 0.8,
+  driftSpeed: 0.5,
+  mobilitySoft: 0.12,
+  agitationNoise: 0.6,
+  quietFloor: 0.15,
+  repulsion: 1.15,
+  modeHysteresis: 1.1,
+  modeHoldMin: 0.5,
+  fieldFloor: 0.5,
+  seedCooldown: 2.5,
+  warpAmount: 0,
+  breakAmount: 0.2,
+  scaleBaseV2: 0.8,
+  anisotropyV2: 0.005,
+  exciteOffsetV2: 0.012,
+};
+
+const V2: TuningValues = { ...V1, ...V2_OVERRIDES };
+
+/** その版の焼き込み値（読み取り専用のつもりで扱う）。 */
+export function tuningDefaults(variant: TuningVariant): TuningValues {
+  return variant === 'cymatics-v2' ? V2 : V1;
+}
+
+/**
+ * 実行中に読まれる値。表現の生成・切替のたびに、その版の焼き込み値で上書きされる。
+ * チューニングパネルはこのオブジェクトを直接書き換える。
+ */
+export const TUNING: TuningValues = { ...V1 };
+
+/** 表現に合わせて質感を読み込む。`createExpression` から呼ばれる。 */
+export function applyTuning(variant: TuningVariant): void {
+  Object.assign(TUNING, tuningDefaults(variant));
+}

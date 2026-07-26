@@ -89,6 +89,8 @@ const switchExpression = (id: ExpressionId): void => {
   app.setComposition(next);
   composition = next;
   labControls.refresh(composition);
+  // 質感は版ごとに焼き込まれている。切替で TUNING が入れ替わるため追従させる。
+  tuningPanel?.refresh();
   savePresetNow();
 };
 
