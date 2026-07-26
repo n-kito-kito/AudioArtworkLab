@@ -154,7 +154,10 @@ npm run build
 ```
 
 - dev サーバーは `http://localhost:5173`（すでに起動していることが多い。**重複起動しない**）。
-- **本番確認 URL: https://audio-artwork-lab.vercel.app/** — Production Branch は `agent/audio-reactive-mvp`。push すると自動デプロイされる。
+- **本番確認 URL: https://audio-artwork-lab.vercel.app/** — Production は **`main`** を追う。
+  **作業ブランチへの push だけでは Preview しか作られず本番は変わらない。**
+  本番へ出すときは `git push origin HEAD:main`（早送り）も行うこと。
+  デプロイ状況は `gh api repos/n-kito-kito/AudioArtworkLab/deployments` の `environment` で確認できる。
 - 作業ブランチ `agent/audio-reactive-mvp` / リモート `origin`（GitHub: n-kito-kito/AudioArtworkLab）。
 - Asana プロジェクト「Audio Artwork Lab」でタスク管理。
 
