@@ -111,6 +111,13 @@ const V2_OVERRIDES: Partial<TuningValues> = {
   scaleBaseV2: 0.8,
   anisotropyV2: 0.005,
   exciteOffsetV2: 0.012,
+
+  // 跳ね上げは現時点では切っている（`releaseTime: 0` = 起こさない）。
+  // 機構は残してあり、長さを戻せばそのまま効く（PRD D23）。
+  releaseTime: 0,
+  releaseScatter: 0,
+  releaseReverse: 0.4,
+  releaseSubsteps: 0,
 };
 
 const V2: TuningValues = { ...V1, ...V2_OVERRIDES };

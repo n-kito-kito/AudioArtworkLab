@@ -123,7 +123,9 @@ export class CymaticsV2 extends Cymatics {
    * すっと集まり直す」動きになる。
    */
   protected override computeRelease(): number {
-    const span = Math.max(TUNING.releaseTime, 0.01);
+    // 長さ 0 は「跳ね上げない」。切替フレームだけ 1 が立つのを防ぐ。
+    const span = TUNING.releaseTime;
+    if (span <= 0) return 0;
     const since = this.sinceModeSwitch;
     if (!Number.isFinite(since) || since >= span) return 0;
     const x = 1 - since / span;
