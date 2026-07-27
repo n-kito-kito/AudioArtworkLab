@@ -4,7 +4,11 @@ import type {
   EffectParameterValues,
 } from '../effects/Effect';
 import type { CymaticsPlate } from '../expressions/CymaticsPlate';
-import { normalizeExpressionId, type ExpressionId } from '../expressions/catalog';
+import {
+  normalizeAspectId,
+  normalizeExpressionId,
+  type ExpressionId,
+} from '../expressions/catalog';
 
 /**
  * Preset v7。表現（V1/V2）・テーマ・Effect 状態の保存形式。
@@ -16,8 +20,9 @@ import { normalizeExpressionId, type ExpressionId } from '../expressions/catalog
  * 表現ごとに持つ調整機能は異なる（PRD D25）。サイマティクスは奥行きを
  * 持たないため、v7 で depth の保存をやめた。
  * v8 で演奏面の帯域ゲイン（response。PRD D24 案 1）を保存対象に加えた。
+ * v9 で画角（aspect。PRD D26）を保存対象に加えた。
  */
-export const LAB_PRESET_VERSION = 8;
+export const LAB_PRESET_VERSION = 9;
 export const LAB_PRESET_KEY = 'audio-artwork-lab:studio-preset';
 
 export interface LabPresetEffect {
@@ -37,6 +42,8 @@ export interface LabPreset {
   zoom: number;
   /** 演奏面の帯域ゲイン（0..2、既定 1）。 */
   response: { bass: number; mid: number; treble: number };
+  /** 画角の id（'1:1' 等）。板そのものの比率（D26）。 */
+  aspect: string;
   /** チェーンの並び順どおりに格納する。 */
   effects: LabPresetEffect[];
 }
@@ -51,6 +58,7 @@ export function createLabPreset(composition: CymaticsPlate): LabPreset {
     themeName: composition.getTheme().name,
     zoom: composition.getZoom(),
     response: composition.getResponse(),
+    aspect: composition.getAspectId(),
     effects: composition.getEffects().map((effect) => ({
       name: effect.name,
       enabled: effect.enabled,
@@ -80,6 +88,8 @@ function migrate(raw: Record<string, unknown>): Record<string, unknown> | null {
   if (preset.version === 7) {
     preset = { ...preset, version: 8, response: { bass: 1, mid: 1, treble: 1 } };
   }
+  // v8 → v9: 画角が増えた。既存のプリセットは正方形とみなす。
+  if (preset.version === 8) preset = { ...preset, version: 9, aspect: '1:1' };
   if (preset.version === LAB_PRESET_VERSION) return preset;
   return null;
 }
@@ -110,8 +120,9 @@ export function parseLabPreset(raw: unknown): LabPreset | null {
     if (typeof effect.parameters !== 'object' || effect.parameters === null) return null;
     if (typeof effect.audioMappings !== 'object' || effect.audioMappings === null) return null;
   }
-  // 不明な表現 id は V1 に寄せる（旧データ・手編集された JSON への防御）。
+  // 不明な表現 id / 画角 id は既定へ寄せる（旧データ・手編集された JSON への防御）。
   preset.expressionId = normalizeExpressionId(preset.expressionId);
+  preset.aspect = normalizeAspectId(preset.aspect);
   // 移行後のオブジェクトを返す。元データを返すと移行で補った値が失われる。
   return preset as unknown as LabPreset;
 }

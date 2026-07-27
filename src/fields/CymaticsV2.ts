@@ -33,6 +33,7 @@ export class CymaticsV2 extends Cymatics {
     uniform float uWarp;
     uniform float uBreak;
     uniform float uRotB;
+    uniform vec2 uPlate;
     uniform float uAniso;
     uniform vec2 uExciteOff;
 
@@ -68,7 +69,10 @@ export class CymaticsV2 extends Cymatics {
     }
 
     float field(vec2 p) {
-      vec2 q = p * uScale;
+      // 長方形の板: uv を物理座標へ（D26）。節線間隔の等方性（図形を伸縮させない）を
+      // 優先する。縁と節の厳密な境界一致は、正方形でも scaleBaseV2 の焼き込みで
+      // 既に崩してあるため、ここでも同じ扱いとする。
+      vec2 q = p * uPlate * uScale;
       gFieldCoord = q;
 
       // 材料のごく小さな異方性（x と y の剛性差）。板の個体差として固定し、

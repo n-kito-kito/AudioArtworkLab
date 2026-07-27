@@ -53,6 +53,9 @@ export class Cymatics implements Field {
     uWarp: { value: 0 },
     uBreak: { value: 0 },
     uRotB: { value: 0 },
+    // 板の半辺長（面積 1 に正規化した物理座標）。正方形は (1,1)、
+    // 16:9 なら (1.333, 0.75)。長方形の板の固有モードは物理座標で評価する（D26）。
+    uPlate: { value: new THREE.Vector2(1, 1) },
   };
 
   readonly glsl: string = /* glsl */ `
@@ -66,6 +69,7 @@ export class Cymatics implements Field {
     uniform float uWarp;
     uniform float uBreak;
     uniform float uRotB;
+    uniform vec2 uPlate;
 
     // 1 つの固有モードの振動形。variant がトポロジーの族を選ぶ。
     //   0=格子 1=X 2=菱形 3=円環(楕円) 4=花弁 5=中央と外周で異なる混成
@@ -108,7 +112,9 @@ export class Cymatics implements Field {
     }
 
     float field(vec2 p) {
-      vec2 q = p * uScale;
+      // 長方形の板: uv を物理座標へ。節線の間隔が縦横で等しくなり、
+      // 円環は円のまま、格子は長辺に多くの節が並ぶ（D26）。
+      vec2 q = p * uPlate * uScale;
       gFieldCoord = q;
 
       // 低域が場をわずかに押し曲げ、ノイズ的な音が節線を崩す（既定はごく小さい。
@@ -204,11 +210,14 @@ export class Cymatics implements Field {
     // L3: 音の出来事が「次の図形の向き」を引き直す（90° 単位）。
     // 表示中の図形は回転させない。実物の板の図形は回らないため、
     // 向きはモード切替のタイミングでのみ新しい図形側へ適用する。
+    // 長方形の板は 90° 回転で自分に重ならないため、向きは 180° 単位に落とす（D26）。
+    const plate = this.uniforms.uPlate!.value as THREE.Vector2;
+    const turns = Math.abs(plate.x - plate.y) < 1e-6 ? 4 : 2;
     const seed = audio.seed ?? 0;
     if (seed !== this.appliedSeed && elapsed - this.lastSeedTime >= TUNING.seedCooldown) {
       this.appliedSeed = seed;
       this.lastSeedTime = elapsed;
-      this.pendingRotate = Math.floor(derive(seed, 1) * 4) * (Math.PI / 2);
+      this.pendingRotate = Math.floor(derive(seed, 1) * turns) * ((2 * Math.PI) / turns);
     }
     if (state.primary.id !== this.lastPrimaryId) {
       if (this.lastPrimaryId >= 0) this.uniforms.uRotB!.value = this.pendingRotate;

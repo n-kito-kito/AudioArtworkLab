@@ -5,7 +5,7 @@ import type {
   EffectParameterValue,
 } from '../effects/Effect';
 import { THEMES } from '../engine/themes';
-import { EXPRESSION_FAMILIES, type ExpressionId } from '../expressions/catalog';
+import { ASPECT_RATIOS, EXPRESSION_FAMILIES, type ExpressionId } from '../expressions/catalog';
 import type { StudioShell } from './StudioShell';
 
 /**
@@ -30,6 +30,7 @@ export class LabControls {
   private readonly onExpressionChange: (id: ExpressionId) => void;
   private readonly onThemeChange: (name: string) => void;
   private readonly onResponseChange: (gains: Partial<{ bass: number; mid: number; treble: number }>) => void;
+  private readonly onAspectChange: (id: string) => void;
   private readonly exportPng: () => void;
   private readonly recordToggle: () => boolean;
   private readonly onExportPreset: () => void;
@@ -49,6 +50,7 @@ export class LabControls {
     onExpressionChange: (id: ExpressionId) => void,
     onThemeChange: (name: string) => void,
     onResponseChange: (gains: Partial<{ bass: number; mid: number; treble: number }>) => void,
+    onAspectChange: (id: string) => void,
     exportPng: () => void,
     recordToggle: () => boolean,
     onExportPreset: () => void,
@@ -59,6 +61,7 @@ export class LabControls {
     this.onExpressionChange = onExpressionChange;
     this.onThemeChange = onThemeChange;
     this.onResponseChange = onResponseChange;
+    this.onAspectChange = onAspectChange;
     this.onExportPreset = onExportPreset;
     this.onImportPreset = onImportPreset;
     this.exportPng = exportPng;
@@ -197,6 +200,23 @@ export class LabControls {
     themeSelect.addEventListener('change', () => this.onThemeChange(themeSelect.value));
     theme.append(themeName, themeSelect);
 
+    // 画角（PRD D26）。板そのものがこの比率の長方形になる。
+    const aspect = document.createElement('label');
+    aspect.className = 'control-row control-row--inline';
+    const aspectName = document.createElement('span');
+    aspectName.textContent = 'Aspect';
+    const aspectSelect = document.createElement('select');
+    aspectSelect.setAttribute('aria-label', 'Aspect ratio');
+    for (const definition of ASPECT_RATIOS) {
+      const option = document.createElement('option');
+      option.value = definition.id;
+      option.textContent = definition.label;
+      option.selected = definition.id === this.composition.getAspectId();
+      aspectSelect.append(option);
+    }
+    aspectSelect.addEventListener('change', () => this.onAspectChange(aspectSelect.value));
+    aspect.append(aspectName, aspectSelect);
+
     // 演奏面（PRD D24 案 1）: 各帯域が砂の励振へどれだけ効くか。
     // 像を結ぶ値（モード選択）ではないので、実行時に触って良い。
     const response = this.composition.getResponse();
@@ -216,7 +236,7 @@ export class LabControls {
 
     // 持つ調整機能は表現ごとに宣言する（PRD D25）。サイマティクスは色のテーマのみで、
     // 奥行きは持たない。ズームは開発用（PRD D17）。
-    this.compositionBody.append(field, versionRow, theme, responseTitle, ...responseRows);
+    this.compositionBody.append(field, versionRow, theme, aspect, responseTitle, ...responseRows);
   }
 
   private renderEffectStack(): void {

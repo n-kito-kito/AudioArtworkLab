@@ -5,7 +5,9 @@ import { App } from './core/App';
 import { createEffects, transferEffectState } from './effects/catalog';
 import { findTheme } from './engine/themes';
 import {
+  ASPECT_RATIOS,
   createExpression,
+  normalizeAspectId,
   normalizeExpressionId,
   type ExpressionId,
 } from './expressions/catalog';
@@ -67,6 +69,29 @@ const setResponse = (gains: Partial<{ bass: number; mid: number; treble: number 
   composition.setResponse(gains);
 };
 
+/**
+ * 画角（D26）。板そのものを取り替える操作。キャンバスの比率を板に合わせ、
+ * ResizeObserver 経由でレンダラーが追従する。砂は撒き直しになる。
+ */
+const setAspect = (rawId: string): void => {
+  const id = normalizeAspectId(rawId);
+  const definition = ASPECT_RATIOS.find((entry) => entry.id === id)!;
+  composition.setAspect(definition.id, definition.ratio);
+  shell.canvasHost.style.aspectRatio = `${definition.ratio}`;
+  if (definition.ratio < 1) {
+    // 縦長は高さ基準にしないと画面からはみ出す。幅は aspect-ratio が決める。
+    shell.canvasHost.style.width = 'auto';
+    shell.canvasHost.style.height = 'min(72vmin, 760px)';
+  } else {
+    shell.canvasHost.style.width = '';
+    shell.canvasHost.style.height = '';
+  }
+  app.resizeNow();
+};
+
+// 前回の画角を復元する（キャンバスの比率も揃える）。
+if (storedPreset) setAspect(storedPreset.aspect);
+
 const notify = (message: string, error = false): void => {
   const notice = document.createElement('div');
   notice.className = `studio-notice${error ? ' is-error' : ''}`;
@@ -86,6 +111,7 @@ const switchExpression = (id: ExpressionId): void => {
   const next = createExpression(id, effects, composition.getTheme());
   next.setZoom(composition.getZoom());
   next.setResponse(composition.getResponse());
+  next.setAspect(composition.getAspectId(), composition.getAspectRatio());
   app.setComposition(next);
   composition = next;
   labControls.refresh(composition);
@@ -98,6 +124,7 @@ const applyPreset = (preset: LabPreset): void => {
   switchExpression(normalizeExpressionId(preset.expressionId));
   setTheme(preset.themeName);
   setResponse(preset.response);
+  setAspect(preset.aspect);
   applyEffectStates(composition.getEffects(), preset.effects);
   composition.setEffectOrder(preset.effects.map((entry) => entry.name));
   labControls.refresh(composition);
@@ -151,6 +178,10 @@ const labControls = new LabControls(
   (id) => switchExpression(id),
   setTheme,
   setResponse,
+  (id) => {
+    setAspect(id);
+    savePresetNow();
+  },
   () => app.exportPng(),
   () => recordingController.toggle(),
   exportPreset,

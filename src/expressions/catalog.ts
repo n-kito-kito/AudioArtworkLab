@@ -29,6 +29,31 @@ export interface ExpressionFamily {
   readonly versions: readonly ExpressionVersion[];
 }
 
+/**
+ * 画角。板そのものがこの比率の長方形になる（D26。切り取りや余白ではない）。
+ * ratio = 幅 / 高さ。
+ */
+export interface AspectDefinition {
+  readonly id: string;
+  readonly label: string;
+  readonly ratio: number;
+}
+
+export const ASPECT_RATIOS: readonly AspectDefinition[] = [
+  { id: '1:1', label: '1:1', ratio: 1 },
+  { id: '16:9', label: '16:9', ratio: 16 / 9 },
+  { id: '9:16', label: '9:16', ratio: 9 / 16 },
+  { id: '4:3', label: '4:3', ratio: 4 / 3 },
+  { id: '3:4', label: '3:4', ratio: 3 / 4 },
+  { id: '3:2', label: '3:2', ratio: 3 / 2 },
+  { id: '2:3', label: '2:3', ratio: 2 / 3 },
+];
+
+/** 不明な画角 id は 1:1 に寄せる（保存データへの防御）。 */
+export function normalizeAspectId(raw: unknown): string {
+  return ASPECT_RATIOS.some((entry) => entry.id === raw) ? (raw as string) : '1:1';
+}
+
 export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   {
     id: 'cymatics',

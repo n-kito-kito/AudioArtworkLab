@@ -61,6 +61,12 @@ export class CymaticsPlate implements Composition {
    * 像を結ぶ値（モード選択）には触れない。全部 1 のとき従来の音量駆動と厳密に一致する。
    */
   private response = { bass: 1, mid: 1, treble: 1 };
+  /**
+   * 画角（D26）。板そのものがこの比率の長方形になる。
+   * 面積 1 に正規化: 半辺長は (√r, 1/√r)。シムのテクセルは物理的に正方形を保つ。
+   */
+  private aspectId = '1:1';
+  private aspectRatio = 1;
 
   private context: CompositionContext | null = null;
   private displayScene: THREE.Scene | null = null;
@@ -96,15 +102,23 @@ export class CymaticsPlate implements Composition {
     this.id = id;
   }
 
-  setup(context: CompositionContext): void {
-    this.context = context;
-    // 固有モードの励起はスペクトル全体から計算する（modeBank.ts）。
-    this.field.setSpectrumSource(() => context.audioEngine.getSpectrum?.() ?? null);
-    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
-    this.camera.position.z = 1;
+  /** 板の半辺長（面積 1 正規化）。x が √r、y が 1/√r。 */
+  private plateExtents(): { x: number; y: number } {
+    const s = Math.sqrt(Math.max(this.aspectRatio, 1e-6));
+    return { x: s, y: 1 / s };
+  }
 
+  /**
+   * シムターゲットを板の比率で作る。テクセルが物理的に正方形になるよう
+   * 解像度も比率で割り振る（CFL・拡散の等方性が保たれる）。
+   */
+  private createSimTargets(): void {
+    this.targets?.forEach((target) => target.dispose());
+    const extents = this.plateExtents();
+    const width = Math.max(Math.round(SIM_SIZE * extents.x), 16);
+    const height = Math.max(Math.round(SIM_SIZE * extents.y), 16);
     const makeTarget = (): THREE.WebGLRenderTarget =>
-      new THREE.WebGLRenderTarget(SIM_SIZE, SIM_SIZE, {
+      new THREE.WebGLRenderTarget(width, height, {
         type: THREE.HalfFloatType,
         format: THREE.RGBAFormat,
         minFilter: THREE.LinearFilter,
@@ -114,6 +128,19 @@ export class CymaticsPlate implements Composition {
       });
     this.targets = [makeTarget(), makeTarget()];
     this.needsInit = true;
+    if (this.simMaterial) {
+      (this.simMaterial.uniforms.uTexel!.value as THREE.Vector2).set(1 / width, 1 / height);
+    }
+  }
+
+  setup(context: CompositionContext): void {
+    this.context = context;
+    // 固有モードの励起はスペクトル全体から計算する（modeBank.ts）。
+    this.field.setSpectrumSource(() => context.audioEngine.getSpectrum?.() ?? null);
+    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    this.camera.position.z = 1;
+
+    this.createSimTargets();
 
     // ---- 質量の計測（1×1 に平均密度を落とす） ----
     // 数値誤差でも粒子が減り続けないよう、シミュレーションはこの平均を
@@ -171,6 +198,7 @@ export class CymaticsPlate implements Composition {
         uRelease: { value: 0 },
         uScatter: { value: TUNING.releaseScatter },
         uReverse: { value: TUNING.releaseReverse },
+        uTexel: { value: new THREE.Vector2(1 / SIM_SIZE, 1 / SIM_SIZE) },
         ...this.field.uniforms,
       },
       vertexShader: /* glsl */ `
@@ -199,6 +227,7 @@ export class CymaticsPlate implements Composition {
         uniform float uRelease;
         uniform float uScatter;
         uniform float uReverse;
+        uniform vec2 uTexel;
 
         const float PI = 3.141592653589793;
         float gDepth = 0.0;
@@ -230,7 +259,12 @@ export class CymaticsPlate implements Composition {
         }
 
         void main() {
+          // 物理のセル幅。解像度を板の比率で割り振るため、テクセルは
+          // どの画角でも物理的に正方形で、この値は一定になる（D26）。
           float texel = 1.0 / ${SIM_SIZE.toFixed(1)};
+          // uv 空間での隣接テクセルへのオフセット（軸ごとに異なる）。
+          vec2 tX = vec2(uTexel.x, 0.0);
+          vec2 tY = vec2(0.0, uTexel.y);
 
           // 初期状態: 板に砂をほぼ均一に撒く（わずかな決定論的むら）。
           if (uInitState > 0.5) {
@@ -240,22 +274,22 @@ export class CymaticsPlate implements Composition {
           }
 
           float dC = texture2D(tState, vUv).r;
-          float dL = texture2D(tState, vUv - vec2(texel, 0.0)).r;
-          float dR = texture2D(tState, vUv + vec2(texel, 0.0)).r;
-          float dD = texture2D(tState, vUv - vec2(0.0, texel)).r;
-          float dU = texture2D(tState, vUv + vec2(0.0, texel)).r;
+          float dL = texture2D(tState, vUv - tX).r;
+          float dR = texture2D(tState, vUv + tX).r;
+          float dD = texture2D(tState, vUv - tY).r;
+          float dU = texture2D(tState, vUv + tY).r;
 
           float aC = amp(vUv);
-          float aL = amp(vUv - vec2(texel, 0.0));
-          float aR = amp(vUv + vec2(texel, 0.0));
-          float aD = amp(vUv - vec2(0.0, texel));
-          float aU = amp(vUv + vec2(0.0, texel));
+          float aL = amp(vUv - tX);
+          float aR = amp(vUv + tX);
+          float aD = amp(vUv - tY);
+          float aU = amp(vUv + tY);
 
           float mC = mobility(aC, vUv);
-          float mL = mobility(aL, vUv - vec2(texel, 0.0));
-          float mR = mobility(aR, vUv + vec2(texel, 0.0));
-          float mD = mobility(aD, vUv - vec2(0.0, texel));
-          float mU = mobility(aU, vUv + vec2(0.0, texel));
+          float mL = mobility(aL, vUv - tX);
+          float mR = mobility(aR, vUv + tX);
+          float mD = mobility(aD, vUv - tY);
+          float mU = mobility(aU, vUv + tY);
 
           // 面ごとの速度: 跳ねている砂は振幅の低い側へ寄る。
           // 速さは移動度だけで決まり、斜面の急さでは決まらない。跳ね上げられた砂は
@@ -302,10 +336,10 @@ export class CymaticsPlate implements Composition {
           fD += -dif * min(mD, mC) * (dC - dD);
 
           // 板の縁は壁。外へは流れない。
-          fR *= step(vUv.x + texel, 1.0);
-          fL *= step(texel, vUv.x);
-          fU *= step(vUv.y + texel, 1.0);
-          fD *= step(texel, vUv.y);
+          fR *= step(vUv.x + uTexel.x, 1.0);
+          fL *= step(uTexel.x, vUv.x);
+          fU *= step(vUv.y + uTexel.y, 1.0);
+          fD *= step(uTexel.y, vUv.y);
 
           float density = dC - uDelta * (fR - fL + fU - fD) / texel;
 
@@ -333,7 +367,6 @@ export class CymaticsPlate implements Composition {
         uThemeLight: { value: new THREE.Vector3(...this.theme.light) },
         uThemeAccent: { value: new THREE.Vector3(...this.theme.accent) },
         uDebugView: { value: 0 },
-        uViewport: { value: new THREE.Vector2(1, 1) },
         uSandRef: { value: TUNING.sandAmount },
         ...this.field.uniforms,
       },
@@ -358,7 +391,6 @@ export class CymaticsPlate implements Composition {
         uniform vec3 uThemeLight;
         uniform vec3 uThemeAccent;
         uniform float uDebugView;
-        uniform vec2 uViewport;
         uniform float uSandRef;
 
         const float PI = 3.141592653589793;
@@ -378,10 +410,9 @@ export class CymaticsPlate implements Composition {
             return;
           }
 
-          // 板は正方形。画面が正方形でないときは短辺に合わせ、外side は黒のままにする。
-          // 背景が黒なので、はみ出した領域は帯として見えない。
-          vec2 res = max(uViewport, vec2(1.0));
-          vec2 p = (vUv * 2.0 - 1.0) * (res / min(res.x, res.y)) / max(uZoom, 0.05);
+          // 板は選択中の画角そのもの（D26: 長方形の板）。キャンバスの比率は
+          // 板の比率に一致させてあるので、uv がそのまま板の全面になる。
+          vec2 p = (vUv * 2.0 - 1.0) / max(uZoom, 0.05);
 
           // 開発用の可視化（本番では uDebugView = 0 のまま）。
           // 1 = 粒子密度 / 2 = 振動場 / 3 = 節線候補（振幅の谷）
@@ -449,6 +480,9 @@ export class CymaticsPlate implements Composition {
       this.camera,
       this.effects,
     );
+
+    // setup 前に setAspect が呼ばれていても、ここで板の寸法が uniform に揃う。
+    this.syncPlateUniforms();
   }
 
   update(elapsed: number): void {
@@ -570,8 +604,7 @@ export class CymaticsPlate implements Composition {
   }
 
   resize(width: number, height: number): void {
-    const viewport = this.displayMaterial?.uniforms.uViewport?.value as THREE.Vector2 | undefined;
-    viewport?.set(width, height);
+    // キャンバスの比率は板の比率（D26）に main 側で揃えられる。
     this.pipeline?.resize(width, height);
   }
 
@@ -597,6 +630,40 @@ export class CymaticsPlate implements Composition {
     (this.displayMaterial.uniforms.uThemeDark!.value as THREE.Vector3).set(...theme.dark);
     (this.displayMaterial.uniforms.uThemeLight!.value as THREE.Vector3).set(...theme.light);
     (this.displayMaterial.uniforms.uThemeAccent!.value as THREE.Vector3).set(...theme.accent);
+  }
+
+  /** 画角（D26）。板そのものの比率。 */
+  getAspectId(): string {
+    return this.aspectId;
+  }
+
+  getAspectRatio(): number {
+    return this.aspectRatio;
+  }
+
+  /**
+   * 画角を切り替える。板を取り替える操作なので、砂は撒き直しになる
+   * （模様は音が鳴っていれば数秒で再形成される）。
+   */
+  setAspect(id: string, ratio: number): void {
+    if (id === this.aspectId) return;
+    this.aspectId = id;
+    this.aspectRatio = Math.min(Math.max(ratio, 0.25), 4);
+    if (this.targets) this.createSimTargets();
+    this.syncPlateUniforms();
+  }
+
+  /** 板の寸法を場とシムの uniform へ反映する。 */
+  private syncPlateUniforms(): void {
+    const extents = this.plateExtents();
+    (this.field.uniforms.uPlate!.value as THREE.Vector2).set(extents.x, extents.y);
+    if (this.simMaterial && this.targets) {
+      const size = this.targets[0]!;
+      (this.simMaterial.uniforms.uTexel!.value as THREE.Vector2).set(
+        1 / size.width,
+        1 / size.height,
+      );
+    }
   }
 
   /** 演奏面（D24 案 1）: 帯域ごとの励振ゲイン。 */

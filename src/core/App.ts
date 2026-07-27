@@ -100,6 +100,15 @@ export class App {
     this.composition.render();
   }
 
+  /**
+   * コンテナの寸法を今すぐ取り直す。画角の切替（D26）のように
+   * コード側でコンテナの比率を変えた直後に呼ぶ。ResizeObserver は
+   * 非表示タブでは発火しないことがあるため、それには依存しない。
+   */
+  resizeNow(): void {
+    this.onResize();
+  }
+
   private startComposition(): void {
     if (this.contextLost) return;
     if (!this.composition.animated) {
