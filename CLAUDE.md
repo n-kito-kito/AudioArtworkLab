@@ -199,3 +199,4 @@ npm run build
 | `PROJECT.md` | 目的・設計思想・ビジョン |
 | `ROADMAP.md` | 実装計画と進捗（新しい部品を追加したら更新する） |
 | `RESEARCH.md` | 表現研究ノート |
+| `docs/other-spectrum-healthy-psychedelia-dossier.pdf` | O/S / Healthy Psychedelia 思想ドシエ（一次情報）。目的・体験設計はこの思想と接続する。確定語彙は置き換えない |
