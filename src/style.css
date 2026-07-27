@@ -1133,10 +1133,10 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
+/* レイヤーパネルを外した（PRD D1）ので上下の固定分割はやめ、中身を上から流す。 */
 .control-panel--left {
-  --left-top-height: 62%;
-  display: grid;
-  grid-template-rows: var(--left-top-height) 7px minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -1149,30 +1149,13 @@ textarea:focus-visible {
   scrollbar-width: thin;
 }
 
-.left-panel__splitter {
-  position: relative;
-  z-index: 2;
-  cursor: row-resize;
-  touch-action: none;
+/* 上段が残り全部を使う。leftBottom は温存中の旧 UI 用で、空なら高さ 0 になる。 */
+.left-panel__top {
+  flex: 1 1 auto;
 }
 
-.left-panel__splitter::after {
-  position: absolute;
-  top: 3px;
-  right: 0;
-  left: 0;
-  height: 1px;
-  background: var(--border);
-  content: '';
-  transition: height 120ms ease, background 120ms ease;
-}
-
-.left-panel__splitter:hover::after,
-.left-panel__splitter:focus-visible::after,
-.control-panel--left.is-resizing .left-panel__splitter::after {
-  top: 2px;
-  height: 3px;
-  background: var(--accent);
+.left-panel__bottom {
+  flex: 0 1 auto;
 }
 
 .inspector-tabs {

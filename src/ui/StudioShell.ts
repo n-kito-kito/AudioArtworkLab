@@ -14,7 +14,6 @@ export class StudioShell {
   readonly gridOverlay = document.createElement('div');
   private readonly designTab = document.createElement('button');
   private readonly effectsTab = document.createElement('button');
-  private readonly leftSplitter = document.createElement('div');
 
   constructor(container: HTMLElement) {
     this.root.className = 'studio-shell';
@@ -24,12 +23,10 @@ export class StudioShell {
     this.leftPanel.setAttribute('aria-label', 'Source controls');
     this.leftTop.className = 'left-panel__top';
     this.leftBottom.className = 'left-panel__bottom';
-    this.leftSplitter.className = 'left-panel__splitter';
-    this.leftSplitter.tabIndex = 0;
-    this.leftSplitter.setAttribute('role', 'separator');
-    this.leftSplitter.setAttribute('aria-label', 'Resize source and layers panels');
-    this.leftSplitter.setAttribute('aria-orientation', 'horizontal');
-    this.leftPanel.append(this.leftTop, this.leftSplitter, this.leftBottom);
+    // レイヤーパネルを UI から外した（PRD D1）ため、上下を分ける仕切りは役目を終えた。
+    // leftBottom は温存中の旧 UI（LayerEditor）が append 先として参照するので
+    // メンバーごと DOM に残す。中身が空なら高さ 0 になり、見た目には出ない。
+    this.leftPanel.append(this.leftTop, this.leftBottom);
     this.stage.className = 'stage';
     this.canvasHost.className = 'artboard';
     this.canvasHost.setAttribute('aria-label', 'Artwork preview');
@@ -68,7 +65,6 @@ export class StudioShell {
     this.stage.append(this.gridOverlay, this.canvasHost);
     this.root.append(this.toolbar, this.leftPanel, this.stage, this.rightSidebar, this.chain);
     container.replaceChildren(this.root);
-    this.bindLeftSplitter();
   }
 
   setInspectorTab(tab: 'design' | 'effects'): void {
@@ -79,37 +75,6 @@ export class StudioShell {
     this.effectsTab.setAttribute('aria-selected', String(!designActive));
     this.designPanel.hidden = !designActive;
     this.effectsPanel.hidden = designActive;
-  }
-
-  private bindLeftSplitter(): void {
-    const resize = (clientY: number): void => {
-      const bounds = this.leftPanel.getBoundingClientRect();
-      const minimum = 150;
-      const maximum = Math.max(bounds.height - 130, minimum);
-      const height = Math.min(Math.max(clientY - bounds.top, minimum), maximum);
-      this.leftPanel.style.setProperty('--left-top-height', `${height}px`);
-      this.leftSplitter.setAttribute('aria-valuenow', String(Math.round(height)));
-    };
-    this.leftSplitter.addEventListener('pointerdown', (event) => {
-      this.leftSplitter.setPointerCapture(event.pointerId);
-      this.leftPanel.classList.add('is-resizing');
-      resize(event.clientY);
-    });
-    this.leftSplitter.addEventListener('pointermove', (event) => {
-      if (this.leftSplitter.hasPointerCapture(event.pointerId)) resize(event.clientY);
-    });
-    this.leftSplitter.addEventListener('pointerup', (event) => {
-      if (this.leftSplitter.hasPointerCapture(event.pointerId)) {
-        this.leftSplitter.releasePointerCapture(event.pointerId);
-      }
-      this.leftPanel.classList.remove('is-resizing');
-    });
-    this.leftSplitter.addEventListener('keydown', (event) => {
-      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-      event.preventDefault();
-      const bounds = this.leftTop.getBoundingClientRect();
-      resize(bounds.bottom + (event.key === 'ArrowUp' ? -24 : 24));
-    });
   }
 
   dispose(): void {
