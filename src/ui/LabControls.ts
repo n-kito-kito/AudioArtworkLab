@@ -33,6 +33,7 @@ export class LabControls {
   private readonly onAspectChange: (id: string) => void;
   private readonly exportPng: () => void;
   private readonly recordToggle: () => boolean;
+  private readonly outputToggle: () => boolean;
   private readonly onExportPreset: () => void;
   private readonly onImportPreset: (json: string) => void;
   private readonly presetInput = document.createElement('input');
@@ -53,6 +54,7 @@ export class LabControls {
     onAspectChange: (id: string) => void,
     exportPng: () => void,
     recordToggle: () => boolean,
+    outputToggle: () => boolean,
     onExportPreset: () => void,
     onImportPreset: (json: string) => void,
   ) {
@@ -66,6 +68,7 @@ export class LabControls {
     this.onImportPreset = onImportPreset;
     this.exportPng = exportPng;
     this.recordToggle = recordToggle;
+    this.outputToggle = outputToggle;
     this.selectedEffectName = composition.getEffects()[0]?.name ?? '';
 
     this.presetInput.type = 'file';
@@ -120,9 +123,16 @@ export class LabControls {
       },
       true,
     );
+    // VJ 用の出力ウィンドウ。書き出しではないので主 CTA にはしない。
+    const output = this.button('ph-monitor', 'Output', () => {
+      const opened = this.outputToggle();
+      output.classList.toggle('is-active', opened);
+      output.querySelector('span')!.textContent = opened ? 'Close output' : 'Output';
+    });
     this.toolbarActions.append(
       this.button('ph-download-simple', 'Export preset', () => this.onExportPreset()),
       this.button('ph-upload-simple', 'Import preset', () => this.presetInput.click()),
+      output,
       this.button('ph-export', 'Export PNG', this.exportPng),
       record,
     );

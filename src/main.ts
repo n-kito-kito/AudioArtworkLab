@@ -24,6 +24,7 @@ import {
   saveLabPreset,
   type LabPreset,
 } from './ui/LabPreset';
+import { OutputWindow } from './ui/OutputWindow';
 import { RecordingController } from './ui/RecordingController';
 import { StudioShell } from './ui/StudioShell';
 
@@ -172,6 +173,7 @@ const savePresetNow = (): void => {
 const autosaveTimer = window.setInterval(savePresetNow, 1500);
 const audioControls = new AudioControls(shell.leftTop, audioEngine);
 const recordingController = new RecordingController(shell, audioEngine);
+const outputWindow = new OutputWindow(shell, notify);
 const labControls = new LabControls(
   shell,
   composition,
@@ -184,6 +186,7 @@ const labControls = new LabControls(
   },
   () => app.exportPng(),
   () => recordingController.toggle(),
+  () => outputWindow.toggle(),
   exportPreset,
   importPreset,
 );
@@ -213,6 +216,7 @@ const dispose = (): void => {
   savePresetNow();
   audioControls.dispose();
   recordingController.dispose();
+  outputWindow.dispose();
   tuningPanel?.dispose();
   debugPanel?.dispose();
   labControls.dispose();
