@@ -63,11 +63,9 @@ export class StudioShell {
     brand.append(mark, descriptor);
     this.toolbar.append(brand);
 
-    const stageLabel = document.createElement('div');
-    stageLabel.className = 'stage-label';
-    stageLabel.innerHTML = '<span>Live composition</span><strong>Multi-layer canvas</strong>';
-    // objectToolbar はデザインレイヤー用のため DOM に載せない（メンバーは温存）。
-    this.stage.append(this.gridOverlay, this.canvasHost, stageLabel);
+    // ステージ下のラベル（"Multi-layer canvas" 等）は意味を説明できないため出さない
+    // （MTG 2026-07-27）。objectToolbar はデザインレイヤー用のため DOM に載せない（温存）。
+    this.stage.append(this.gridOverlay, this.canvasHost);
     this.root.append(this.toolbar, this.leftPanel, this.stage, this.rightSidebar, this.chain);
     container.replaceChildren(this.root);
     this.bindLeftSplitter();

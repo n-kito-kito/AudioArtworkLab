@@ -1,17 +1,19 @@
 import type { CymaticsPlate } from '../expressions/CymaticsPlate';
 import type {
-  AudioSource,
   Effect,
-  EffectAudioMapping,
   EffectParameterSchema,
   EffectParameterValue,
-  NumberEffectParameter,
 } from '../effects/Effect';
 import { THEMES } from '../engine/themes';
-import { EXPRESSIONS, type ExpressionId } from '../expressions/catalog';
+import { EXPRESSION_FAMILIES, type ExpressionId } from '../expressions/catalog';
 import type { StudioShell } from './StudioShell';
 
-const AUDIO_SOURCES: AudioSource[] = ['none', 'volume', 'bass', 'mid', 'treble', 'beat'];
+/**
+ * 使い方を説明できるまで UI から隠す共通パラメータ（MTG 2026-07-27）。
+ * 機能・状態・プリセット互換は温存し、表示だけしない。
+ * Audio Mapping の UI も同じ理由で出していない（D24 の演奏 UI 設計と合流予定）。
+ */
+const HIDDEN_COMMON_PARAMS = new Set(['dryWet', 'effectOpacity', 'blendMode']);
 
 /**
  * Field × Renderer 構成の操作パネル。
@@ -27,7 +29,6 @@ export class LabControls {
   private composition: CymaticsPlate;
   private readonly onExpressionChange: (id: ExpressionId) => void;
   private readonly onThemeChange: (name: string) => void;
-  private readonly onDepthChange: (amount: number) => void;
   private readonly exportPng: () => void;
   private readonly recordToggle: () => boolean;
   private readonly onExportPreset: () => void;
@@ -46,7 +47,6 @@ export class LabControls {
     composition: CymaticsPlate,
     onExpressionChange: (id: ExpressionId) => void,
     onThemeChange: (name: string) => void,
-    onDepthChange: (amount: number) => void,
     exportPng: () => void,
     recordToggle: () => boolean,
     onExportPreset: () => void,
@@ -56,7 +56,6 @@ export class LabControls {
     this.composition = composition;
     this.onExpressionChange = onExpressionChange;
     this.onThemeChange = onThemeChange;
-    this.onDepthChange = onDepthChange;
     this.onExportPreset = onExportPreset;
     this.onImportPreset = onImportPreset;
     this.exportPng = exportPng;
@@ -104,41 +103,80 @@ export class LabControls {
 
   private buildToolbar(): void {
     this.toolbarActions.className = 'topbar__actions';
-    const record = this.button('ph-record', 'Record WebM', () => {
-      const recording = this.recordToggle();
-      record.classList.toggle('is-recording', recording);
-      record.querySelector('span')!.textContent = recording ? 'Stop recording' : 'Record WebM';
-    });
+    // 主 CTA は動画の書き出し（Record MP4）。PNG はその左に控えめに置く。
+    const record = this.button(
+      'ph-record',
+      'Record MP4',
+      () => {
+        const recording = this.recordToggle();
+        record.classList.toggle('is-recording', recording);
+        record.querySelector('span')!.textContent = recording ? 'Stop recording' : 'Record MP4';
+      },
+      true,
+    );
     this.toolbarActions.append(
       this.button('ph-download-simple', 'Export preset', () => this.onExportPreset()),
       this.button('ph-upload-simple', 'Import preset', () => this.presetInput.click()),
+      this.button('ph-export', 'Export PNG', this.exportPng),
       record,
-      this.button('ph-export', 'Export PNG', this.exportPng, true),
     );
     this.shell.toolbar.append(this.toolbarActions);
   }
 
   private buildCompositionSection(): void {
     this.compositionBody.replaceChildren();
-    // 1 表現 = 1 見え方（PRD D16）は維持しつつ、V2 の開発期間中だけ
-    // V1/V2 を併置して同じ音源で見比べられるようにする（PRD D22）。
+    // 表現は「ファミリー（サイマティクス等）」→「版（V1/V2）」の 2 段で選ぶ。
+    // 今後の表現はファミリーとして増え、版の比較は D22 の収斂判断が出るまで残す。
+    const currentFamily =
+      EXPRESSION_FAMILIES.find((family) =>
+        family.versions.some((version) => version.id === this.composition.id),
+      ) ?? EXPRESSION_FAMILIES[0]!;
+
     const field = document.createElement('label');
     field.className = 'control-row control-row--inline';
     const fieldName = document.createElement('span');
     fieldName.textContent = 'Expression';
     const fieldSelect = document.createElement('select');
     fieldSelect.setAttribute('aria-label', 'Expression');
-    for (const definition of EXPRESSIONS) {
+    for (const family of EXPRESSION_FAMILIES) {
       const option = document.createElement('option');
-      option.value = definition.id;
-      option.textContent = definition.label;
-      option.selected = definition.id === this.composition.id;
+      option.value = family.id;
+      option.textContent = family.label;
+      option.selected = family.id === currentFamily.id;
       fieldSelect.append(option);
     }
-    fieldSelect.addEventListener('change', () =>
-      this.onExpressionChange(fieldSelect.value as ExpressionId),
-    );
+    fieldSelect.addEventListener('change', () => {
+      const family = EXPRESSION_FAMILIES.find((entry) => entry.id === fieldSelect.value);
+      if (family && family.id !== currentFamily.id) {
+        this.onExpressionChange(family.versions[0]!.id);
+      }
+    });
     field.append(fieldName, fieldSelect);
+
+    // 版の切り替え。選択中のファミリーが複数の版を持つときだけ出す。
+    const versionRow = document.createElement('div');
+    versionRow.className = 'control-row control-row--inline';
+    if (currentFamily.versions.length > 1) {
+      const versionName = document.createElement('span');
+      versionName.textContent = 'Version';
+      const versionButtons = document.createElement('div');
+      versionButtons.className = 'button-row';
+      for (const version of currentFamily.versions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className =
+          version.id === this.composition.id ? 'ui-button is-primary' : 'ui-button';
+        button.textContent = version.label;
+        button.setAttribute('aria-label', `${currentFamily.label} ${version.label}`);
+        button.setAttribute(
+          'aria-pressed',
+          String(version.id === this.composition.id),
+        );
+        button.addEventListener('click', () => this.onExpressionChange(version.id));
+        versionButtons.append(button);
+      }
+      versionRow.append(versionName, versionButtons);
+    }
 
     const theme = document.createElement('label');
     theme.className = 'control-row control-row--inline';
@@ -156,13 +194,9 @@ export class LabControls {
     themeSelect.addEventListener('change', () => this.onThemeChange(themeSelect.value));
     theme.append(themeName, themeSelect);
 
-    // ズームは開発用（PRD D17）。主 UI には出さない。
-    // 開発時は __lab.composition.setZoom() で操作する。
-    const depth = this.range('Depth', this.composition.getDepth(), 0, 1, 0.01, (value) =>
-      this.onDepthChange(value),
-    );
-
-    this.compositionBody.append(field, theme, depth);
+    // 持つ調整機能は表現ごとに宣言する（PRD D25）。サイマティクスは色のテーマのみで、
+    // 奥行きは持たない。ズームは開発用（PRD D17）。
+    this.compositionBody.append(field, versionRow, theme);
   }
 
   private renderEffectStack(): void {
@@ -207,12 +241,11 @@ export class LabControls {
     );
 
     for (const parameter of effect.parameterSchema) {
+      // 説明できるまで隠す（MTG 2026-07-27）。状態は温存し、表示だけしない。
+      if (HIDDEN_COMMON_PARAMS.has(parameter.key)) continue;
       const block = document.createElement('div');
       block.className = 'effect-parameter-block';
       block.append(this.parameterControl(effect, parameter));
-      if (parameter.type === 'number') {
-        block.append(this.audioMappingControl(effect, parameter));
-      }
       this.effectSettings.append(block);
     }
 
@@ -283,63 +316,6 @@ export class LabControls {
     input.addEventListener('input', () => update(input.value));
     label.append(text, input);
     return label;
-  }
-
-  private audioMappingControl(effect: Effect, parameter: NumberEffectParameter): HTMLElement {
-    const root = document.createElement('div');
-    root.className = 'effect-audio-mapping';
-    const title = document.createElement('h4');
-    title.textContent = `${parameter.label} audio mapping`;
-    const span = Math.max(parameter.max - parameter.min, parameter.step);
-    const fallback: EffectAudioMapping = {
-      source: 'none',
-      amount: 0,
-      min: parameter.min,
-      max: parameter.max,
-      smoothing: 0.7,
-      invert: false,
-    };
-    const mapping = effect.getAudioMappings()[parameter.key] ?? fallback;
-    const update = (change: Partial<EffectAudioMapping>): void => {
-      const current = effect.getAudioMappings()[parameter.key] ?? mapping;
-      effect.setAudioMappings({
-        ...effect.getAudioMappings(),
-        [parameter.key]: { ...current, ...change },
-      });
-    };
-    const source = document.createElement('label');
-    source.className = 'control-row control-row--inline';
-    const sourceText = document.createElement('span');
-    sourceText.textContent = 'Source';
-    const select = document.createElement('select');
-    select.setAttribute('aria-label', `${parameter.label} audio source`);
-    for (const item of AUDIO_SOURCES) {
-      const option = document.createElement('option');
-      option.value = item;
-      option.textContent = item.charAt(0).toUpperCase() + item.slice(1);
-      option.selected = item === mapping.source;
-      select.append(option);
-    }
-    select.addEventListener('change', () => update({ source: select.value as AudioSource }));
-    source.append(sourceText, select);
-    root.append(
-      title,
-      source,
-      this.range('Amount', mapping.amount, -span, span, parameter.step, (value) =>
-        update({ amount: value }),
-      ),
-      this.range('Minimum', mapping.min, parameter.min, parameter.max, parameter.step, (value) =>
-        update({ min: value }),
-      ),
-      this.range('Maximum', mapping.max, parameter.min, parameter.max, parameter.step, (value) =>
-        update({ max: value }),
-      ),
-      this.range('Smoothing', mapping.smoothing, 0, 0.99, 0.01, (value) =>
-        update({ smoothing: value }),
-      ),
-      this.toggle('Invert', mapping.invert, (value) => update({ invert: value })),
-    );
-    return root;
   }
 
   private section(titleText: string, iconClass: string): HTMLElement {

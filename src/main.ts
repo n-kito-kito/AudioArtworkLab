@@ -22,7 +22,6 @@ import {
   saveLabPreset,
   type LabPreset,
 } from './ui/LabPreset';
-import { QualityMonitor } from './ui/QualityMonitor';
 import { RecordingController } from './ui/RecordingController';
 import { StudioShell } from './ui/StudioShell';
 
@@ -55,16 +54,12 @@ let composition = createExpression(
   findTheme(storedPreset?.themeName ?? ''),
 );
 // zoom は開発用（PRD D17）のため保存値は適用せず、常に等倍で起動する。
-if (storedPreset) composition.setDepth(storedPreset.depth);
+// 奥行きはサイマティクスでは持たない（PRD D25）。
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 
 const setTheme = (name: string): void => {
   composition.setTheme(findTheme(name));
-};
-
-const setDepth = (amount: number): void => {
-  composition.setDepth(amount);
 };
 
 const notify = (message: string, error = false): void => {
@@ -84,7 +79,6 @@ const switchExpression = (id: ExpressionId): void => {
   const effects = createEffects();
   transferEffectState(composition.getEffects(), effects);
   const next = createExpression(id, effects, composition.getTheme());
-  next.setDepth(composition.getDepth());
   next.setZoom(composition.getZoom());
   app.setComposition(next);
   composition = next;
@@ -97,7 +91,6 @@ const switchExpression = (id: ExpressionId): void => {
 const applyPreset = (preset: LabPreset): void => {
   switchExpression(normalizeExpressionId(preset.expressionId));
   setTheme(preset.themeName);
-  setDepth(preset.depth);
   applyEffectStates(composition.getEffects(), preset.effects);
   composition.setEffectOrder(preset.effects.map((entry) => entry.name));
   labControls.refresh(composition);
@@ -150,13 +143,12 @@ const labControls = new LabControls(
   composition,
   (id) => switchExpression(id),
   setTheme,
-  setDepth,
   () => app.exportPng(),
   () => recordingController.toggle(),
   exportPreset,
   importPreset,
 );
-const qualityMonitor = new QualityMonitor(shell, app, () => composition.getEffects());
+// QualityMonitor（FPS・解像度セレクト）は説明できるまで載せない（MTG 2026-07-27。温存）。
 
 // 開発用チューニングパネル（PRD D17）。?tune=1 のときだけ現れる。
 const tuningPanel =
@@ -182,7 +174,6 @@ const dispose = (): void => {
   savePresetNow();
   audioControls.dispose();
   recordingController.dispose();
-  qualityMonitor.dispose();
   tuningPanel?.dispose();
   debugPanel?.dispose();
   labControls.dispose();

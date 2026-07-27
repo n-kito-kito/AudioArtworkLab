@@ -14,14 +14,30 @@ import { CymaticsPlate } from './CymaticsPlate';
 
 export type ExpressionId = 'cymatics-v1' | 'cymatics-v2';
 
-export interface ExpressionDefinition {
+export interface ExpressionVersion {
   readonly id: ExpressionId;
   readonly label: string;
 }
 
-export const EXPRESSIONS: readonly ExpressionDefinition[] = [
-  { id: 'cymatics-v1', label: 'Cymatics — Version 1' },
-  { id: 'cymatics-v2', label: 'Cymatics — Version 2' },
+/**
+ * 表現のファミリー。UI はまずファミリー（サイマティクス等）を選び、
+ * 版（V1/V2）はその下のボタンで切り替える。今後の表現はファミリーとして増える。
+ */
+export interface ExpressionFamily {
+  readonly id: string;
+  readonly label: string;
+  readonly versions: readonly ExpressionVersion[];
+}
+
+export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
+  {
+    id: 'cymatics',
+    label: 'Cymatics',
+    versions: [
+      { id: 'cymatics-v1', label: 'V1' },
+      { id: 'cymatics-v2', label: 'V2' },
+    ],
+  },
 ];
 
 /** 旧データ（'Cymatics' など id 以前の表記・不明値）はすべて V1 として扱う。 */

@@ -7,13 +7,16 @@ import type { CymaticsPlate } from '../expressions/CymaticsPlate';
 import { normalizeExpressionId, type ExpressionId } from '../expressions/catalog';
 
 /**
- * Preset v6。表現（V1/V2）・テーマ・奥行き・Effect 状態の保存形式。
+ * Preset v7。表現（V1/V2）・テーマ・Effect 状態の保存形式。
  *
  * v1〜v3（旧 Generator 構成）との互換は持たない。旧形式を見つけたら
  * 破棄して初期状態に戻す。キーは旧版と同じものを使い、残っている
  * 旧データはここで一掃される。
+ *
+ * 表現ごとに持つ調整機能は異なる（PRD D25）。サイマティクスは奥行きを
+ * 持たないため、v7 で depth の保存をやめた。
  */
-export const LAB_PRESET_VERSION = 6;
+export const LAB_PRESET_VERSION = 7;
 export const LAB_PRESET_KEY = 'audio-artwork-lab:studio-preset';
 
 export interface LabPresetEffect {
@@ -30,7 +33,6 @@ export interface LabPreset {
   fieldName: string;
   rendererName: string;
   themeName: string;
-  depth: number;
   zoom: number;
   /** チェーンの並び順どおりに格納する。 */
   effects: LabPresetEffect[];
@@ -44,7 +46,6 @@ export function createLabPreset(composition: CymaticsPlate): LabPreset {
     // 1 表現 = 1 見え方（D16）。互換のため形だけ残している固定値。
     rendererName: 'Minimal shape',
     themeName: composition.getTheme().name,
-    depth: composition.getDepth(),
     zoom: composition.getZoom(),
     effects: composition.getEffects().map((effect) => ({
       name: effect.name,
@@ -65,6 +66,12 @@ function migrate(raw: Record<string, unknown>): Record<string, unknown> | null {
   if (preset.version === 4) preset = { ...preset, version: 5, zoom: 1 };
   // v5 → v6: 表現の選択が増えた。旧 Cymatics は V1 として扱う。
   if (preset.version === 5) preset = { ...preset, version: 6, expressionId: 'cymatics-v1' };
+  // v6 → v7: 奥行きの保存をやめた（サイマティクスは奥行きを持たない。PRD D25）。
+  if (preset.version === 6) {
+    const next: Record<string, unknown> = { ...preset, version: 7 };
+    delete next.depth;
+    preset = next;
+  }
   if (preset.version === LAB_PRESET_VERSION) return preset;
   return null;
 }
@@ -80,7 +87,6 @@ export function parseLabPreset(raw: unknown): LabPreset | null {
   if (preset === null) return null;
   if (typeof preset.rendererName !== 'string') return null;
   if (typeof preset.themeName !== 'string') return null;
-  if (typeof preset.depth !== 'number' || !Number.isFinite(preset.depth)) return null;
   if (typeof preset.zoom !== 'number' || !Number.isFinite(preset.zoom)) return null;
   if (!Array.isArray(preset.effects)) return null;
   for (const entry of preset.effects) {
