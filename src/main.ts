@@ -55,11 +55,16 @@ let composition = createExpression(
 );
 // zoom は開発用（PRD D17）のため保存値は適用せず、常に等倍で起動する。
 // 奥行きはサイマティクスでは持たない（PRD D25）。
+if (storedPreset) composition.setResponse(storedPreset.response);
 const shell = new StudioShell(container);
 const app = new App(shell.canvasHost, composition, audioEngine);
 
 const setTheme = (name: string): void => {
   composition.setTheme(findTheme(name));
+};
+
+const setResponse = (gains: Partial<{ bass: number; mid: number; treble: number }>): void => {
+  composition.setResponse(gains);
 };
 
 const notify = (message: string, error = false): void => {
@@ -80,6 +85,7 @@ const switchExpression = (id: ExpressionId): void => {
   transferEffectState(composition.getEffects(), effects);
   const next = createExpression(id, effects, composition.getTheme());
   next.setZoom(composition.getZoom());
+  next.setResponse(composition.getResponse());
   app.setComposition(next);
   composition = next;
   labControls.refresh(composition);
@@ -91,6 +97,7 @@ const switchExpression = (id: ExpressionId): void => {
 const applyPreset = (preset: LabPreset): void => {
   switchExpression(normalizeExpressionId(preset.expressionId));
   setTheme(preset.themeName);
+  setResponse(preset.response);
   applyEffectStates(composition.getEffects(), preset.effects);
   composition.setEffectOrder(preset.effects.map((entry) => entry.name));
   labControls.refresh(composition);
@@ -143,6 +150,7 @@ const labControls = new LabControls(
   composition,
   (id) => switchExpression(id),
   setTheme,
+  setResponse,
   () => app.exportPng(),
   () => recordingController.toggle(),
   exportPreset,

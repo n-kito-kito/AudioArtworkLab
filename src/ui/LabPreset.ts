@@ -15,8 +15,9 @@ import { normalizeExpressionId, type ExpressionId } from '../expressions/catalog
  *
  * 表現ごとに持つ調整機能は異なる（PRD D25）。サイマティクスは奥行きを
  * 持たないため、v7 で depth の保存をやめた。
+ * v8 で演奏面の帯域ゲイン（response。PRD D24 案 1）を保存対象に加えた。
  */
-export const LAB_PRESET_VERSION = 7;
+export const LAB_PRESET_VERSION = 8;
 export const LAB_PRESET_KEY = 'audio-artwork-lab:studio-preset';
 
 export interface LabPresetEffect {
@@ -34,6 +35,8 @@ export interface LabPreset {
   rendererName: string;
   themeName: string;
   zoom: number;
+  /** 演奏面の帯域ゲイン（0..2、既定 1）。 */
+  response: { bass: number; mid: number; treble: number };
   /** チェーンの並び順どおりに格納する。 */
   effects: LabPresetEffect[];
 }
@@ -47,6 +50,7 @@ export function createLabPreset(composition: CymaticsPlate): LabPreset {
     rendererName: 'Minimal shape',
     themeName: composition.getTheme().name,
     zoom: composition.getZoom(),
+    response: composition.getResponse(),
     effects: composition.getEffects().map((effect) => ({
       name: effect.name,
       enabled: effect.enabled,
@@ -72,6 +76,10 @@ function migrate(raw: Record<string, unknown>): Record<string, unknown> | null {
     delete next.depth;
     preset = next;
   }
+  // v7 → v8: 演奏面の帯域ゲインが増えた。既存のプリセットは等倍（従来挙動）とみなす。
+  if (preset.version === 7) {
+    preset = { ...preset, version: 8, response: { bass: 1, mid: 1, treble: 1 } };
+  }
   if (preset.version === LAB_PRESET_VERSION) return preset;
   return null;
 }
@@ -88,6 +96,11 @@ export function parseLabPreset(raw: unknown): LabPreset | null {
   if (typeof preset.rendererName !== 'string') return null;
   if (typeof preset.themeName !== 'string') return null;
   if (typeof preset.zoom !== 'number' || !Number.isFinite(preset.zoom)) return null;
+  if (typeof preset.response !== 'object' || preset.response === null) return null;
+  for (const band of ['bass', 'mid', 'treble'] as const) {
+    const value = (preset.response as Record<string, unknown>)[band];
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  }
   if (!Array.isArray(preset.effects)) return null;
   for (const entry of preset.effects) {
     if (typeof entry !== 'object' || entry === null) return null;

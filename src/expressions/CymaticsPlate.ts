@@ -56,6 +56,11 @@ export class CymaticsPlate implements Composition {
   private depthAmount = 0;
   private smoothedBass = 0;
   private zoom = 1;
+  /**
+   * 演奏面（PRD D24 案 1）: 各帯域が砂の励振へどれだけ寄与するか（0..2、既定 1）。
+   * 像を結ぶ値（モード選択）には触れない。全部 1 のとき従来の音量駆動と厳密に一致する。
+   */
+  private response = { bass: 1, mid: 1, treble: 1 };
 
   private context: CompositionContext | null = null;
   private displayScene: THREE.Scene | null = null;
@@ -475,10 +480,23 @@ export class CymaticsPlate implements Composition {
 
       // 音 → 板の励振。音量とオンセットが「どれだけ砂が跳ねるか」を決める。
       // 図形の種類は決めない（それはモード＝周波数構成の仕事）。
+      //
+      // 演奏面（D24 案 1）: 帯域の再重み付け。どの帯域が励振に効くかを VJ 中に
+      // 変えられる。全ゲイン 1 のとき weight = 1 となり従来の音量駆動と一致する。
       const volume = clamp01(audio.volume);
+      const bass = clamp01(audio.bass);
+      const mid = clamp01(audio.mid);
+      const treble = clamp01(audio.treble);
+      const bandTotal = bass + mid + treble;
+      const weight =
+        bandTotal > 1e-4
+          ? (this.response.bass * bass + this.response.mid * mid + this.response.treble * treble) /
+            bandTotal
+          : 1;
+      const drive = clamp01(volume * weight);
       const u = this.simMaterial.uniforms;
       const agitation =
-        (TUNING.quietFloor + (1 - TUNING.quietFloor) * volume) *
+        (TUNING.quietFloor + (1 - TUNING.quietFloor) * drive) *
         (1 + clamp01(audio.onset) * TUNING.onsetBurst);
       u.uAgitation!.value = agitation;
       u.uDrift!.value = TUNING.driftSpeed;
@@ -579,6 +597,23 @@ export class CymaticsPlate implements Composition {
     (this.displayMaterial.uniforms.uThemeDark!.value as THREE.Vector3).set(...theme.dark);
     (this.displayMaterial.uniforms.uThemeLight!.value as THREE.Vector3).set(...theme.light);
     (this.displayMaterial.uniforms.uThemeAccent!.value as THREE.Vector3).set(...theme.accent);
+  }
+
+  /** 演奏面（D24 案 1）: 帯域ごとの励振ゲイン。 */
+  getResponse(): { bass: number; mid: number; treble: number } {
+    return { ...this.response };
+  }
+
+  setResponse(gains: Partial<{ bass: number; mid: number; treble: number }>): void {
+    const clamp = (value: number | undefined, fallback: number): number =>
+      typeof value === 'number' && Number.isFinite(value)
+        ? Math.min(Math.max(value, 0), 2)
+        : fallback;
+    this.response = {
+      bass: clamp(gains.bass, this.response.bass),
+      mid: clamp(gains.mid, this.response.mid),
+      treble: clamp(gains.treble, this.response.treble),
+    };
   }
 
   getDepth(): number {

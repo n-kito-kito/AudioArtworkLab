@@ -29,6 +29,7 @@ export class LabControls {
   private composition: CymaticsPlate;
   private readonly onExpressionChange: (id: ExpressionId) => void;
   private readonly onThemeChange: (name: string) => void;
+  private readonly onResponseChange: (gains: Partial<{ bass: number; mid: number; treble: number }>) => void;
   private readonly exportPng: () => void;
   private readonly recordToggle: () => boolean;
   private readonly onExportPreset: () => void;
@@ -47,6 +48,7 @@ export class LabControls {
     composition: CymaticsPlate,
     onExpressionChange: (id: ExpressionId) => void,
     onThemeChange: (name: string) => void,
+    onResponseChange: (gains: Partial<{ bass: number; mid: number; treble: number }>) => void,
     exportPng: () => void,
     recordToggle: () => boolean,
     onExportPreset: () => void,
@@ -56,6 +58,7 @@ export class LabControls {
     this.composition = composition;
     this.onExpressionChange = onExpressionChange;
     this.onThemeChange = onThemeChange;
+    this.onResponseChange = onResponseChange;
     this.onExportPreset = onExportPreset;
     this.onImportPreset = onImportPreset;
     this.exportPng = exportPng;
@@ -194,9 +197,26 @@ export class LabControls {
     themeSelect.addEventListener('change', () => this.onThemeChange(themeSelect.value));
     theme.append(themeName, themeSelect);
 
+    // 演奏面（PRD D24 案 1）: 各帯域が砂の励振へどれだけ効くか。
+    // 像を結ぶ値（モード選択）ではないので、実行時に触って良い。
+    const response = this.composition.getResponse();
+    const responseTitle = document.createElement('h3');
+    responseTitle.className = 'control-subheading';
+    responseTitle.textContent = 'Response';
+    const responseRows = (['bass', 'mid', 'treble'] as const).map((band) =>
+      this.range(
+        band.charAt(0).toUpperCase() + band.slice(1),
+        response[band],
+        0,
+        2,
+        0.01,
+        (value) => this.onResponseChange({ [band]: value }),
+      ),
+    );
+
     // 持つ調整機能は表現ごとに宣言する（PRD D25）。サイマティクスは色のテーマのみで、
     // 奥行きは持たない。ズームは開発用（PRD D17）。
-    this.compositionBody.append(field, versionRow, theme);
+    this.compositionBody.append(field, versionRow, theme, responseTitle, ...responseRows);
   }
 
   private renderEffectStack(): void {
