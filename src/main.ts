@@ -14,6 +14,7 @@ import {
 import { AudioControls } from './ui/AudioControls';
 import { LabControls } from './ui/LabControls';
 import { DebugPanel } from './ui/DebugPanel';
+import { applyUiVariant, parseUiVariant } from './ui/devUiVariants';
 import { TuningPanel } from './ui/TuningPanel';
 import {
   applyEffectStates,
@@ -192,6 +193,14 @@ const labControls = new LabControls(
 );
 // QualityMonitor（FPS・解像度セレクト）は説明できるまで載せない（MTG 2026-07-27。温存）。
 
+// 開発用の UI レイアウト試作（?ui=1|2|3）。Expression / 反応の調整 / Effect の
+// 主従を画面に出せるか見比べるための仮組み。パラメータなしでは何もしない。
+// LabControls の DOM を移動させるため、必ずその生成後に呼ぶこと。
+const uiVariant = import.meta.env.DEV
+  ? parseUiVariant(new URLSearchParams(location.search).get('ui'))
+  : null;
+const disposeUiVariant = uiVariant ? applyUiVariant(uiVariant, shell) : null;
+
 // 開発用チューニングパネル（PRD D17）。?tune=1 のときだけ現れる。
 const tuningPanel =
   import.meta.env.DEV && new URLSearchParams(location.search).get('tune') === '1'
@@ -219,6 +228,7 @@ const dispose = (): void => {
   outputWindow.dispose();
   tuningPanel?.dispose();
   debugPanel?.dispose();
+  disposeUiVariant?.();
   labControls.dispose();
   app.dispose();
   shell.dispose();

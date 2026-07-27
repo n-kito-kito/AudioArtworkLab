@@ -2182,3 +2182,161 @@ textarea:focus-visible {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ---- 開発用 UI 試作（?ui=1|2|3）---- */
+/* 思想上の主従（Expression > 反応の調整 > Effect）を画面の目立ち方に反映できるか
+   見比べるための仮組み。src/ui/devUiVariants.ts から body[data-ui-variant] が
+   立ったときだけ効く。既定 UI（属性なし）には一切影響させないこと。
+   ステージ内の .artboard が z-index: 1000 を持つため、浮かせる要素はそれより上に置く。 */
+
+body[data-ui-variant] .dev-ui-toggle {
+  z-index: 1200;
+  border-color: var(--border);
+  background: #2e2e2e;
+  color: #c2c2c2;
+}
+
+body[data-ui-variant] .dev-ui-toggle.is-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+/* --- 案 1 / 案 2 共通: Effect stack を引き出しにする --- */
+body[data-ui-variant='1'] .dev-ui-toggle--drawer,
+body[data-ui-variant='2'] .dev-ui-toggle--drawer {
+  position: fixed;
+  top: 58px;
+  right: 12px;
+}
+
+/* 開いている間はパネルに被らないよう脇へどける。 */
+body[data-ui-variant='1'][data-ui-effects='on'] .dev-ui-toggle--drawer,
+body[data-ui-variant='2'][data-ui-effects='on'] .dev-ui-toggle--drawer {
+  right: calc(var(--right-panel-width, 320px) + 12px);
+}
+
+/* 閉じているときは列そのものを畳む。ステージがその分広がる。 */
+body[data-ui-variant='1'][data-ui-effects='off'] .studio-shell,
+body[data-ui-variant='2'][data-ui-effects='off'] .studio-shell {
+  --right-panel-width: 0px;
+}
+
+body[data-ui-variant='1'][data-ui-effects='off'] .control-panel--right,
+body[data-ui-variant='2'][data-ui-effects='off'] .control-panel--right {
+  display: none;
+}
+
+/* --- 案 2: Response（反応の調整）を Effect より上位に見せる --- */
+/* .control-subheading は Response 見出しにしか使われていないため、
+   見出しとそれ以降の range 行だけを狙える。中身が作り直されても効き続ける。 */
+body[data-ui-variant='2'] .control-panel--left .control-subheading {
+  margin-top: 18px;
+  color: #e8e8e8;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+body[data-ui-variant='2'] .control-panel--left .control-subheading ~ .control-row--range {
+  margin-top: 12px;
+  padding: 6px 9px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  background: rgb(255 255 255 / 4%);
+}
+
+/* --- 案 3: ステージ中心の HUD --- */
+body[data-ui-variant='3'] .studio-shell {
+  --left-panel-width: 0px;
+  --right-panel-width: 0px;
+}
+
+/* 左右パネルはグリッドから外し、必要なときだけ重ねて出す。 */
+body[data-ui-variant='3'] .control-panel--left,
+body[data-ui-variant='3'] .control-panel--right {
+  position: fixed;
+  z-index: 1200;
+  top: 48px;
+  bottom: 0;
+  width: 300px;
+  box-shadow: 0 0 24px rgb(0 0 0 / 50%);
+}
+
+body[data-ui-variant='3'] .control-panel--left { left: 0; }
+body[data-ui-variant='3'] .control-panel--right { right: 0; }
+
+body[data-ui-variant='3'][data-ui-audio='off'] .control-panel--left { display: none; }
+body[data-ui-variant='3'][data-ui-effects='off'] .control-panel--right { display: none; }
+
+/* HUD の高さぶん下を空ける。キャンバスが隠れないようにするため。 */
+body[data-ui-variant='3'] .stage {
+  padding: 24px 24px 108px;
+}
+
+body[data-ui-variant='3'] .dev-hud {
+  position: absolute;
+  z-index: 1200;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgb(30 30 30 / 92%);
+}
+
+body[data-ui-variant='3'] .dev-hud__main {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+/* 移設した Composition セクションを横一列に潰す（見出しは場所を食うので隠す）。 */
+body[data-ui-variant='3'] .dev-hud .visual-section {
+  padding: 0;
+  border: 0;
+}
+
+body[data-ui-variant='3'] .dev-hud .visual-section > h2 { display: none; }
+
+body[data-ui-variant='3'] .dev-hud .visual-section > div {
+  display: flex;
+  width: max-content;
+  align-items: center;
+  gap: 14px;
+}
+
+body[data-ui-variant='3'] .dev-hud .control-row { margin-top: 0; }
+
+body[data-ui-variant='3'] .dev-hud .control-row--inline { gap: 6px; }
+
+body[data-ui-variant='3'] .dev-hud .control-row select {
+  min-width: 84px;
+  padding-right: 22px;
+}
+
+body[data-ui-variant='3'] .dev-hud .control-row--range {
+  width: 96px;
+  gap: 0 6px;
+}
+
+body[data-ui-variant='3'] .dev-hud .control-row--range input[type='range'] { height: 10px; }
+
+body[data-ui-variant='3'] .dev-hud .control-subheading {
+  margin: 0;
+  color: #8f8f8f;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+body[data-ui-variant='3'] .dev-hud .button-row { gap: 4px; }
+
+body[data-ui-variant='3'] .dev-hud__toggles {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
