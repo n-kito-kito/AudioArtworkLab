@@ -247,6 +247,20 @@ export class LabControls {
     // 持つ調整機能は表現ごとに宣言する（PRD D25）。サイマティクスは色のテーマのみで、
     // 奥行きは持たない。ズームは開発用（PRD D17）。
     this.compositionBody.append(field, versionRow, theme, aspect, responseTitle, ...responseRows);
+
+    // 周期を持つ表現だけが出す操作。像そのものを描く値ではなく、
+    // 新しいシードで生成をやり直すだけなので実行時に触ってよい。
+    const restart = this.composition.restartCycle;
+    if (restart) {
+      const row = document.createElement('div');
+      row.className = 'control-row control-row--inline';
+      row.append(
+        this.button('ph-arrow-counter-clockwise', 'Restart cycle', () =>
+          this.composition.restartCycle?.(),
+        ),
+      );
+      this.compositionBody.append(row);
+    }
   }
 
   private renderEffectStack(): void {

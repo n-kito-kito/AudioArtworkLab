@@ -197,6 +197,11 @@ RecordingController・QualityMonitor は再接続済み。
 - [ ] キーボードショートカット — 表現・テーマ・Effect の切替や反応の調整をキーで直感的に操作する。制約のあるツールだからこそ割当を固定できる（UI 本設計と合わせて設計。2026-07-28）
 - Effect は絞り込まない（2026-07-27 決定）。現状の 14 個は全て残す。今後はむしろ各 Effect の詰め・細かい調整の方向
 - [ ] G4 2 つ目の表現を追加し、表現の切り替え（トランジション）を作る
+  - [x] 試作: Modular Pattern Field（`modular-v1`）— 円の重なりを偶奇で抜く段と、角丸セルのグリッド段を
+        1 枚のフラグメントシェーダーで繋いだ表現。Spawn → Expand → GridMorph → RowCascade → Merge →
+        Subdivide → FinalCluster → Clear の周期を CPU 側のフェーズ機械が音で進める。
+        質感の定数は表現内の `MODULAR`（`TUNING` には混ぜない）。持つ機能は色のテーマと Restart cycle のみ
+  - [ ] Modular の詰め — 周期の長さ（現状 1 周 10 秒前後）・90°回転の見え方・花型の抜きの読みやすさ
 - [ ] G5 リアルタイム入力（VJ）とパフォーマンス最適化
 
 ## 共通の完了条件

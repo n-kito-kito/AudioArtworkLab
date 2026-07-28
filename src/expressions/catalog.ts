@@ -4,6 +4,7 @@ import { applyTuning } from '../engine/tuning';
 import { Cymatics } from '../fields/Cymatics';
 import { CymaticsV2 } from '../fields/CymaticsV2';
 import { CymaticsPlate } from './CymaticsPlate';
+import { ModularPatternField } from './ModularPatternField';
 import type { LabExpression } from './Expression';
 
 /**
@@ -13,7 +14,7 @@ import type { LabExpression } from './Expression';
  * id は保存データに入るため安定させる。表示名だけを変えること。
  */
 
-export type ExpressionId = 'cymatics-v1' | 'cymatics-v2';
+export type ExpressionId = 'cymatics-v1' | 'cymatics-v2' | 'modular-v1';
 
 export interface ExpressionVersion {
   readonly id: ExpressionId;
@@ -64,11 +65,22 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
       { id: 'cymatics-v2', label: 'V2' },
     ],
   },
+  {
+    id: 'modular',
+    label: 'Modular Pattern Field',
+    versions: [{ id: 'modular-v1', label: 'V1' }],
+  },
 ];
+
+const KNOWN_EXPRESSION_IDS = new Set<string>(
+  EXPRESSION_FAMILIES.flatMap((family) => family.versions.map((version) => version.id)),
+);
 
 /** 旧データ（'Cymatics' など id 以前の表記・不明値）はすべて V1 として扱う。 */
 export function normalizeExpressionId(raw: unknown): ExpressionId {
-  return raw === 'cymatics-v2' ? 'cymatics-v2' : 'cymatics-v1';
+  return typeof raw === 'string' && KNOWN_EXPRESSION_IDS.has(raw)
+    ? (raw as ExpressionId)
+    : 'cymatics-v1';
 }
 
 /**
@@ -84,6 +96,8 @@ export function createExpression(
   effects: Effect[],
   theme?: Theme,
 ): LabExpression {
+  // サイマティクス以外の表現は TUNING を使わない（質感の定数は表現ごとに持つ）。
+  if (id === 'modular-v1') return new ModularPatternField(effects, theme);
   applyTuning(id);
   const field = id === 'cymatics-v2' ? new CymaticsV2() : new Cymatics();
   return new CymaticsPlate(effects, theme, field, id);
