@@ -2185,30 +2185,8 @@ body[data-ui-variant] .dev-ui-toggle.is-active {
   color: #fff;
 }
 
-/* --- 案 1 / 案 2 共通: Effect stack を引き出しにする --- */
-body[data-ui-variant='1'] .dev-ui-toggle--drawer,
-body[data-ui-variant='2'] .dev-ui-toggle--drawer {
-  position: fixed;
-  top: 58px;
-  right: 12px;
-}
-
-/* 開いている間はパネルに被らないよう脇へどける。 */
-body[data-ui-variant='1'][data-ui-effects='on'] .dev-ui-toggle--drawer,
-body[data-ui-variant='2'][data-ui-effects='on'] .dev-ui-toggle--drawer {
-  right: calc(var(--right-panel-width, 320px) + 12px);
-}
-
-/* 閉じているときは列そのものを畳む。ステージがその分広がる。 */
-body[data-ui-variant='1'][data-ui-effects='off'] .studio-shell,
-body[data-ui-variant='2'][data-ui-effects='off'] .studio-shell {
-  --right-panel-width: 0px;
-}
-
-body[data-ui-variant='1'][data-ui-effects='off'] .control-panel--right,
-body[data-ui-variant='2'][data-ui-effects='off'] .control-panel--right {
-  display: none;
-}
+/* 案 1 / 案 2 の Effect 引き出しは本 UI の既定になった（.right-collapsed）ため、
+   試作側の CSS は持たない。案 2 は左パネルの見せ方だけを試す。 */
 
 /* --- 案 2: Response（反応の調整）を Effect より上位に見せる --- */
 /* .control-subheading は Response 見出しにしか使われていないため、
@@ -2248,8 +2226,22 @@ body[data-ui-variant='3'] .control-panel--right {
 body[data-ui-variant='3'] .control-panel--left { left: 0; }
 body[data-ui-variant='3'] .control-panel--right { right: 0; }
 
+/* 本 UI は右パネルを既定で畳む（.right-collapsed が visibility と transform を殺す）。
+   案 3 は同じパネルをオーバーレイとして data-ui-* で出し入れするので、
+   畳みの見た目だけを打ち消す。セレクタが 1 段詳しいので後勝ちに頼らない。 */
+body[data-ui-variant='3'] .control-panel--left,
+body[data-ui-variant='3'] .control-panel--right {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
 body[data-ui-variant='3'][data-ui-audio='off'] .control-panel--left { display: none; }
 body[data-ui-variant='3'][data-ui-effects='off'] .control-panel--right { display: none; }
+
+/* Effect の開閉は HUD 側が持つ。ツールバーのトグルは二重になるので出さない。 */
+body[data-ui-variant='3'] .effects-toggle { display: none; }
 
 /* HUD の高さぶん下を空ける。キャンバスが隠れないようにするため。 */
 body[data-ui-variant='3'] .stage {

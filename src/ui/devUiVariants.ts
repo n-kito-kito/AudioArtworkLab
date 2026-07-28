@@ -3,9 +3,13 @@ import type { StudioShell } from './StudioShell';
 /**
  * 開発用の UI レイアウト試作（?ui=1|2|3）。
  *
- * 思想上の主従は Expression > 反応の調整 > Effect（PRD §3.2）だが、現行 UI は
- * 右パネル全体を占める Effect stack が最も目立ち、画面が語る順序が逆になっている。
+ * 思想上の主従は Expression > 反応の調整 > Effect（PRD §3.2）。
  * どのレイアウトなら主従が伝わるかを実機で見比べるための仮組みで、選定用の使い捨て。
+ *
+ * 案 1（Effect を引き出しにする）は選定の結果、本 UI の既定になった（LabControls の
+ * Effects トグル）。よって案 1 は「本 UI そのまま」、案 2 は「そこに左パネルの
+ * 並べ替えを足したもの」になり、試作側では Effect の開閉に一切触れない。
+ * 案 3 だけは左右をオーバーレイに置き換えるので、開閉も HUD 側が自前で持つ。
  *
  * 設計上の制約：
  * - パラメータなしのときは既定 UI を 1 ピクセルも変えない。よって既定では何も呼ばれず、
@@ -50,15 +54,12 @@ export function applyUiVariant(variant: UiVariantId, shell: StudioShell): () => 
     body.dataset[key] = open ? 'on' : 'off';
   };
 
-  // 3 案とも Effect は既定で畳む。「Effect は主役ではない」を画面で試すのが目的のため。
-  setPanel('uiEffects', false);
-
   const created: HTMLElement[] = [];
 
-  const toggleButton = (label: string, key: PanelKey, extraClass = ''): HTMLButtonElement => {
+  const toggleButton = (label: string, key: PanelKey): HTMLButtonElement => {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `ui-button dev-ui-toggle${extraClass ? ` ${extraClass}` : ''}`;
+    button.className = 'ui-button dev-ui-toggle';
     button.textContent = label;
     const sync = (): void => {
       const open = body.dataset[key] === 'on';
@@ -73,12 +74,8 @@ export function applyUiVariant(variant: UiVariantId, shell: StudioShell): () => 
     return button;
   };
 
-  // 案 1・2: Effect stack を引き出しにする。右上に浮かせたトグルで出し入れする。
-  if (variant === 1 || variant === 2) {
-    const drawerToggle = toggleButton('Effects', 'uiEffects', 'dev-ui-toggle--drawer');
-    shell.root.append(drawerToggle);
-    created.push(drawerToggle);
-  }
+  // 案 1: Effect の引き出し化は本 UI に取り込まれたので、試作側ですることはない。
+  // トグルを重ねると本体の開閉と二重管理になるため、意図的に何も足さない。
 
   // 案 2: 左パネルの並びを Composition → Audio に入れ替え、Expression を最上位に置く。
   // Response の強調は CSS 側（見出しと ~ 結合子）で行う。中身が作り直されても効く。
@@ -90,6 +87,9 @@ export function applyUiVariant(variant: UiVariantId, shell: StudioShell): () => 
   // 案 3: ステージを主役にし、操作は下部の HUD バーへ。左右パネルはオーバーレイ。
   if (variant === 3) {
     setPanel('uiAudio', false);
+    // 案 3 だけは左右をオーバーレイに置き換えるので、開閉も HUD が自前で持つ
+    // （ツールバーの Effects トグルは案 3 の CSS 側で隠している）。
+    setPanel('uiEffects', false);
 
     const hud = document.createElement('div');
     hud.className = 'dev-hud';

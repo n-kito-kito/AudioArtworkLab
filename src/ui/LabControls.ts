@@ -66,6 +66,15 @@ export class LabControls {
   private readonly effectStack = document.createElement('div');
   private readonly effectSettings = document.createElement('div');
   private selectedEffectName: string;
+  private effectsToggle: HTMLButtonElement | null = null;
+  /**
+   * Effect パネル（右サイドバー）を開いているか。
+   *
+   * 既定は閉じる。画面が語る主従は Expression > 反応の調整 > Effect（PRD §3.2）で、
+   * Effect stack が常時いちばん目立つ状態は思想と逆になるため、必要なときだけ開く。
+   * 見え方の一時的な状態でしかないのでプリセットには保存しない。
+   */
+  private effectsPanelOpen = false;
 
   constructor(
     shell: StudioShell,
@@ -119,6 +128,8 @@ export class LabControls {
   }
 
   dispose(): void {
+    // 開閉クラスは shell 側に付けているので、剥がすのもこちらの責任。
+    this.shell.root.classList.remove('right-collapsed', 'right-open');
     this.toolbarActions.remove();
     this.compositionSection.remove();
     this.effectSection.remove();
@@ -151,14 +162,39 @@ export class LabControls {
       output.classList.toggle('is-active', opened);
       output.querySelector('span')!.textContent = opened ? 'Close output' : 'Output';
     });
+    // Effect パネルの引き出し。主従を画面に出すため既定は閉じておく（PRD §3.2）。
+    const effects = this.button('ph-sliders-horizontal', 'Effects', () =>
+      this.setEffectsPanelOpen(!this.effectsPanelOpen),
+    );
+    // 案 3（?ui=3）が HUD 側に自前のトグルを持つので、CSS から名指しで隠せるようにする。
+    effects.classList.add('effects-toggle');
+    this.effectsToggle = effects;
     this.toolbarActions.append(
       this.button('ph-download-simple', 'Export preset', () => this.onExportPreset()),
       this.button('ph-upload-simple', 'Import preset', () => this.presetInput.click()),
+      effects,
       output,
       this.button('ph-export', 'Export PNG', this.exportPng),
       record,
     );
     this.shell.toolbar.append(this.toolbarActions);
+    this.setEffectsPanelOpen(this.effectsPanelOpen);
+  }
+
+  /**
+   * Effect パネルの開閉。
+   *
+   * 広い画面では `right-collapsed` でグリッドの列ごと畳み、ステージを広げる
+   * （幅は `--right-panel-width` を 0 にするだけなので既存の transition が効く）。
+   * 820px 以下では右パネルが固定配置の引き出しに変わり `right-open` で出す。
+   * どちらの経路で描かれても矛盾しないよう、2 つのクラスを常に対で整える。
+   */
+  private setEffectsPanelOpen(open: boolean): void {
+    this.effectsPanelOpen = open;
+    this.shell.root.classList.toggle('right-collapsed', !open);
+    this.shell.root.classList.toggle('right-open', open);
+    this.effectsToggle?.classList.toggle('is-active', open);
+    this.effectsToggle?.setAttribute('aria-pressed', String(open));
   }
 
   private buildCompositionSection(): void {
