@@ -209,6 +209,14 @@ RecordingController・QualityMonitor は再接続済み。
         点 → 線 → 帯 → 雲 をシミュレーションを止めずに行き来できる。
         表現ごとの調整つまみの仕組み（`LabExpression.getExpressionParams`。PRD D25）をここで追加した
   - [ ] Light Traces の詰め — テーマ非対応（黒背景固定）・表現つまみが Preset 未保存・軌跡の曲がり方
+  - [x] 試作: Reactive Geometry（`reactive-geometry-v1`）— 黒い空間に線と幾何学図形が生まれ、育ち、消える表現。
+        内部は 2 系統で、Line System は持続音・音程に反応する固定点数のリボン（Wave / Straight / Orbit /
+        Freeform を CPU のパラメトリック関数で毎フレーム更新・最大 20 本）、Shape System はオンセットに反応する
+        InstancedMesh 1 枚（Dot / Circle / Capsule / Bar / Ring をフラグメントの SDF で描き分け・最大 200 個）。
+        目標密度はエネルギー履歴の蓄積（buildup）の単調増加関数で、満ちるとクライマックスとして
+        一部または全部が消える。固定周期を持たない。
+        表現つまみの仕組みを select（Mode / Line Type / Shape Type）と action（Clear / New Variation）へ拡張した
+  - [ ] Reactive Geometry の詰め — Preset 未保存・消滅遷移中の線のにじみ・線種ごとの密度バランス
 - [ ] G5 リアルタイム入力（VJ）とパフォーマンス最適化
 
 ## 共通の完了条件

@@ -6,6 +6,7 @@ import { CymaticsV2 } from '../fields/CymaticsV2';
 import { CymaticsPlate } from './CymaticsPlate';
 import { LightTraces } from './LightTraces';
 import { ModularPatternField } from './ModularPatternField';
+import { ReactiveGeometry } from './ReactiveGeometry';
 import type { LabExpression } from './Expression';
 
 /**
@@ -19,7 +20,8 @@ export type ExpressionId =
   | 'cymatics-v1'
   | 'cymatics-v2'
   | 'modular-v1'
-  | 'light-traces-v1';
+  | 'light-traces-v1'
+  | 'reactive-geometry-v1';
 
 export interface ExpressionVersion {
   readonly id: ExpressionId;
@@ -80,6 +82,11 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
     label: 'Light Traces',
     versions: [{ id: 'light-traces-v1', label: 'V1' }],
   },
+  {
+    id: 'reactive-geometry',
+    label: 'Reactive Geometry',
+    versions: [{ id: 'reactive-geometry-v1', label: 'V1' }],
+  },
 ];
 
 const KNOWN_EXPRESSION_IDS = new Set<string>(
@@ -109,6 +116,7 @@ export function createExpression(
   // サイマティクス以外の表現は TUNING を使わない（質感の定数は表現ごとに持つ）。
   if (id === 'modular-v1') return new ModularPatternField(effects, theme);
   if (id === 'light-traces-v1') return new LightTraces(effects, theme);
+  if (id === 'reactive-geometry-v1') return new ReactiveGeometry(effects, theme);
   applyTuning(id);
   const field = id === 'cymatics-v2' ? new CymaticsV2() : new Cymatics();
   return new CymaticsPlate(effects, theme, field, id);

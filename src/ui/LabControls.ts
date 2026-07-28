@@ -1,4 +1,4 @@
-import type { LabExpression } from '../expressions/Expression';
+import type { ExpressionParam, LabExpression } from '../expressions/Expression';
 import type {
   Effect,
   EffectParameterSchema,
@@ -256,14 +256,7 @@ export class LabControls {
       paramsTitle.className = 'control-subheading';
       paramsTitle.textContent = this.composition.name;
       const paramRows = expressionParams.map((parameter) =>
-        this.range(
-          parameter.label,
-          parameter.value,
-          parameter.min,
-          parameter.max,
-          parameter.step,
-          (value) => this.composition.setExpressionParam?.(parameter.key, value),
-        ),
+        this.expressionParamControl(parameter),
       );
       this.compositionBody.append(paramsTitle, ...paramRows);
     }
@@ -281,6 +274,51 @@ export class LabControls {
       );
       this.compositionBody.append(row);
     }
+  }
+
+  /**
+   * 表現ごとの調整つまみ 1 本を描く（PRD D25）。
+   * `type` を持たない宣言は number として扱うので、既存表現の見た目は変わらない。
+   */
+  private expressionParamControl(parameter: ExpressionParam): HTMLElement {
+    if (parameter.type === 'select') {
+      const label = document.createElement('label');
+      label.className = 'control-row control-row--inline';
+      const text = document.createElement('span');
+      text.textContent = parameter.label;
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', parameter.label);
+      for (const option of parameter.options) {
+        const node = document.createElement('option');
+        node.value = option.value;
+        node.textContent = option.label;
+        node.selected = option.value === parameter.value;
+        select.append(node);
+      }
+      select.addEventListener('change', () =>
+        this.composition.setExpressionParam?.(parameter.key, select.value),
+      );
+      label.append(text, select);
+      return label;
+    }
+    if (parameter.type === 'action') {
+      const row = document.createElement('div');
+      row.className = 'control-row control-row--inline';
+      row.append(
+        this.button('ph-play', parameter.label, () =>
+          this.composition.setExpressionParam?.(parameter.key, 1),
+        ),
+      );
+      return row;
+    }
+    return this.range(
+      parameter.label,
+      parameter.value,
+      parameter.min,
+      parameter.max,
+      parameter.step,
+      (value) => this.composition.setExpressionParam?.(parameter.key, value),
+    );
   }
 
   private renderEffectStack(): void {

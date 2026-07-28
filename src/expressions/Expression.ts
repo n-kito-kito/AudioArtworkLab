@@ -18,15 +18,48 @@ import type { ExpressionId } from './catalog';
 /**
  * 表現ごとの調整つまみ 1 本ぶんの宣言（PRD D25）。
  * どのつまみを持つかは表現が決め、UI は宣言されたものだけを並べる。
+ *
+ * 種別は `type` で分かれる。**`type` を省略した宣言は number として扱う**ため、
+ * 既存表現（Light Traces）の宣言はそのまま同じスライダーとして描かれる。
  */
-export interface ExpressionParam {
+export interface ExpressionParamBase {
   readonly key: string;
   readonly label: string;
+}
+
+/** 連続値のつまみ。省略時の既定であり、UI はスライダーを出す。 */
+export interface ExpressionNumberParam extends ExpressionParamBase {
+  readonly type?: 'number';
   readonly min: number;
   readonly max: number;
   readonly step: number;
   readonly value: number;
 }
+
+export interface ExpressionSelectOption {
+  readonly value: string;
+  readonly label: string;
+}
+
+/** 排他の選択肢。UI は select を出し、選ばれた value を文字列で返す。 */
+export interface ExpressionSelectParam extends ExpressionParamBase {
+  readonly type: 'select';
+  readonly options: readonly ExpressionSelectOption[];
+  readonly value: string;
+}
+
+/**
+ * 押した瞬間だけ意味を持つ操作。UI はボタンを出し、
+ * 押されたら `setExpressionParam(key, 1)` を呼ぶ（値に意味はない）。
+ */
+export interface ExpressionActionParam extends ExpressionParamBase {
+  readonly type: 'action';
+}
+
+export type ExpressionParam =
+  | ExpressionNumberParam
+  | ExpressionSelectParam
+  | ExpressionActionParam;
 
 export interface LabExpression extends Composition {
   /** 表現の安定 id（保存データに入る）。 */
@@ -79,6 +112,9 @@ export interface LabExpression extends Composition {
    */
   getExpressionParams?(): ExpressionParam[];
 
-  /** 上で宣言したつまみの更新。実行中に効き、シミュレーションは再起動しない。 */
-  setExpressionParam?(key: string, value: number): void;
+  /**
+   * 上で宣言したつまみの更新。実行中に効き、シミュレーションは再起動しない。
+   * number は数値、select は選択肢の value（文字列）、action は 1 が渡る。
+   */
+  setExpressionParam?(key: string, value: number | string): void;
 }
