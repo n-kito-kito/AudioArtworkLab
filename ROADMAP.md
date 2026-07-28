@@ -202,6 +202,13 @@ RecordingController・QualityMonitor は再接続済み。
         Subdivide → FinalCluster → Clear の周期を CPU 側のフェーズ機械が音で進める。
         質感の定数は表現内の `MODULAR`（`TUNING` には混ぜない）。持つ機能は色のテーマと Restart cycle のみ
   - [ ] Modular の詰め — 周期の長さ（現状 1 周 10 秒前後）・90°回転の見え方・花型の抜きの読みやすさ
+  - [x] 試作: Light Traces（`light-traces-v1`）— 黒い空間にオンセットで光源が生まれ、短い曲線移動が
+        軌跡を残す表現。光源は CPU 側（最大 24 個・決定論ハッシュのみ）、軌跡は GPU の
+        ping-pong Feedback Buffer（HalfFloat）で `feedback = previous * decay + emission`。
+        表示は 1 - exp(-x) のトーンマッピング。Trail スライダーが decay だけを差し替えるので、
+        点 → 線 → 帯 → 雲 をシミュレーションを止めずに行き来できる。
+        表現ごとの調整つまみの仕組み（`LabExpression.getExpressionParams`。PRD D25）をここで追加した
+  - [ ] Light Traces の詰め — テーマ非対応（黒背景固定）・表現つまみが Preset 未保存・軌跡の曲がり方
 - [ ] G5 リアルタイム入力（VJ）とパフォーマンス最適化
 
 ## 共通の完了条件

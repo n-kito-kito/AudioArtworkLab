@@ -15,6 +15,19 @@ import type { ExpressionId } from './catalog';
  * 表現ごとに持つ調整機能は異なる（PRD D25）ため、全表現が持てないものは
  * オプショナルにするか、値を持たないことを表せる戻り値型にする。
  */
+/**
+ * 表現ごとの調整つまみ 1 本ぶんの宣言（PRD D25）。
+ * どのつまみを持つかは表現が決め、UI は宣言されたものだけを並べる。
+ */
+export interface ExpressionParam {
+  readonly key: string;
+  readonly label: string;
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+  readonly value: number;
+}
+
 export interface LabExpression extends Composition {
   /** 表現の安定 id（保存データに入る）。 */
   readonly id: ExpressionId;
@@ -59,4 +72,13 @@ export interface LabExpression extends Composition {
 
   /** 開発用: 周期を最初からやり直す。周期を持たない表現は実装しない。 */
   restartCycle?(): void;
+
+  /**
+   * 表現ごとの調整つまみ（PRD D25）。持たない表現は実装しない。
+   * 「像そのものを決める値」ではなく、見え方の幅を運転するつまみだけを載せる。
+   */
+  getExpressionParams?(): ExpressionParam[];
+
+  /** 上で宣言したつまみの更新。実行中に効き、シミュレーションは再起動しない。 */
+  setExpressionParam?(key: string, value: number): void;
 }

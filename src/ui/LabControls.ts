@@ -248,6 +248,26 @@ export class LabControls {
     // 奥行きは持たない。ズームは開発用（PRD D17）。
     this.compositionBody.append(field, versionRow, theme, aspect, responseTitle, ...responseRows);
 
+    // 表現ごとの調整つまみ（PRD D25）。宣言した表現だけがこの節を出す。
+    // 既存表現は getExpressionParams を持たないので UI は変わらない。
+    const expressionParams = this.composition.getExpressionParams?.() ?? [];
+    if (expressionParams.length > 0) {
+      const paramsTitle = document.createElement('h3');
+      paramsTitle.className = 'control-subheading';
+      paramsTitle.textContent = this.composition.name;
+      const paramRows = expressionParams.map((parameter) =>
+        this.range(
+          parameter.label,
+          parameter.value,
+          parameter.min,
+          parameter.max,
+          parameter.step,
+          (value) => this.composition.setExpressionParam?.(parameter.key, value),
+        ),
+      );
+      this.compositionBody.append(paramsTitle, ...paramRows);
+    }
+
     // 周期を持つ表現だけが出す操作。像そのものを描く値ではなく、
     // 新しいシードで生成をやり直すだけなので実行時に触ってよい。
     const restart = this.composition.restartCycle;
