@@ -3,7 +3,7 @@ import type {
   EffectAudioMappings,
   EffectParameterValues,
 } from '../effects/Effect';
-import type { CymaticsPlate } from '../expressions/CymaticsPlate';
+import type { LabExpression } from '../expressions/Expression';
 import {
   normalizeAspectId,
   normalizeExpressionId,
@@ -48,7 +48,7 @@ export interface LabPreset {
   effects: LabPresetEffect[];
 }
 
-export function createLabPreset(composition: CymaticsPlate): LabPreset {
+export function createLabPreset(composition: LabExpression): LabPreset {
   return {
     version: LAB_PRESET_VERSION,
     expressionId: composition.id,

@@ -13,7 +13,10 @@
  * 表現を切り替えると、その版の値が `TUNING` へ読み込まれる。
  */
 
-/** どの版の質感を使うか。`expressions` の ExpressionId と対応する。 */
+/**
+ * 質感を持つ版の一覧。`expressions` の ExpressionId と対応する。
+ * `tuningDefaults` / `applyTuning` はこの型では受けない（下のコメント参照）。
+ */
 export type TuningVariant = 'cymatics-v1' | 'cymatics-v2';
 
 /** V1（サイマティクス Version 1）の焼き込み値。 */
@@ -122,8 +125,15 @@ const V2_OVERRIDES: Partial<TuningValues> = {
 
 const V2: TuningValues = { ...V1, ...V2_OVERRIDES };
 
-/** その版の焼き込み値（読み取り専用のつもりで扱う）。 */
-export function tuningDefaults(variant: TuningVariant): TuningValues {
+/**
+ * その版の焼き込み値（読み取り専用のつもりで扱う）。
+ *
+ * 引数を `TuningVariant` に狭めず `string` で受ける。サイマティクス以外の表現も
+ * 生成時にここを通るため、未知の id が来たときに型エラーで止めるのではなく
+ * V1 の値へ落とす必要がある（TUNING は表現をまたぐ単一のオブジェクトで、
+ * 読まれないキーは単に無視される）。
+ */
+export function tuningDefaults(variant: string): TuningValues {
   return variant === 'cymatics-v2' ? V2 : V1;
 }
 
@@ -133,7 +143,10 @@ export function tuningDefaults(variant: TuningVariant): TuningValues {
  */
 export const TUNING: TuningValues = { ...V1 };
 
-/** 表現に合わせて質感を読み込む。`createExpression` から呼ばれる。 */
-export function applyTuning(variant: TuningVariant): void {
+/**
+ * 表現に合わせて質感を読み込む。`createExpression` から呼ばれる。
+ * 引数を緩めている理由は `tuningDefaults` と同じ。
+ */
+export function applyTuning(variant: string): void {
   Object.assign(TUNING, tuningDefaults(variant));
 }

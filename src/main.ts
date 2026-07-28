@@ -11,6 +11,7 @@ import {
   normalizeExpressionId,
   type ExpressionId,
 } from './expressions/catalog';
+import type { LabExpression } from './expressions/Expression';
 import { AudioControls } from './ui/AudioControls';
 import { LabControls } from './ui/LabControls';
 import { DebugPanel } from './ui/DebugPanel';
@@ -52,7 +53,9 @@ if (storedPreset) {
     storedPreset.effects.map((entry) => entry.name),
   );
 }
-let composition = createExpression(
+// UI 層は表現の共通面（LabExpression）に対して書く。実体がサイマティクスでも
+// ここで面を固定しておくと、別の表現ファミリーを足すときに main を書き換えずに済む。
+let composition: LabExpression = createExpression(
   normalizeExpressionId(storedPreset?.expressionId),
   initialEffects,
   findTheme(storedPreset?.themeName ?? ''),

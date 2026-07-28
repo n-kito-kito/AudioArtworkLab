@@ -4,6 +4,7 @@ import { applyTuning } from '../engine/tuning';
 import { Cymatics } from '../fields/Cymatics';
 import { CymaticsV2 } from '../fields/CymaticsV2';
 import { CymaticsPlate } from './CymaticsPlate';
+import type { LabExpression } from './Expression';
 
 /**
  * 表現のカタログ。
@@ -82,7 +83,7 @@ export function createExpression(
   id: ExpressionId,
   effects: Effect[],
   theme?: Theme,
-): CymaticsPlate {
+): LabExpression {
   applyTuning(id);
   const field = id === 'cymatics-v2' ? new CymaticsV2() : new Cymatics();
   return new CymaticsPlate(effects, theme, field, id);

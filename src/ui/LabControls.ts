@@ -1,4 +1,4 @@
-import type { CymaticsPlate } from '../expressions/CymaticsPlate';
+import type { LabExpression } from '../expressions/Expression';
 import type {
   Effect,
   EffectParameterSchema,
@@ -26,7 +26,7 @@ const HIDDEN_COMMON_PARAMS = new Set(['dryWet', 'effectOpacity', 'blendMode']);
  */
 export class LabControls {
   private readonly shell: StudioShell;
-  private composition: CymaticsPlate;
+  private composition: LabExpression;
   private readonly onExpressionChange: (id: ExpressionId) => void;
   private readonly onThemeChange: (name: string) => void;
   private readonly onResponseChange: (gains: Partial<{ bass: number; mid: number; treble: number }>) => void;
@@ -47,7 +47,7 @@ export class LabControls {
 
   constructor(
     shell: StudioShell,
-    composition: CymaticsPlate,
+    composition: LabExpression,
     onExpressionChange: (id: ExpressionId) => void,
     onThemeChange: (name: string) => void,
     onResponseChange: (gains: Partial<{ bass: number; mid: number; treble: number }>) => void,
@@ -104,7 +104,7 @@ export class LabControls {
   }
 
   /** Preset 適用など、外部で composition が差し替わったときに UI を追従させる。 */
-  refresh(composition: CymaticsPlate): void {
+  refresh(composition: LabExpression): void {
     this.composition = composition;
     this.buildCompositionSection();
     this.renderEffectStack();

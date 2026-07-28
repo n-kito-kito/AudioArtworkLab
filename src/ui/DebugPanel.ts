@@ -1,5 +1,5 @@
 import type { AudioEngine } from '../audio/AudioEngine';
-import type { CymaticsPlate } from '../expressions/CymaticsPlate';
+import type { LabExpression } from '../expressions/Expression';
 
 /**
  * 開発用デバッグパネル（`?debug=1`・dev のみ）。
@@ -13,12 +13,12 @@ export class DebugPanel {
   private readonly stats = document.createElement('pre');
   private readonly timer: number;
   private collapsed = false;
-  private readonly getComposition: () => CymaticsPlate;
+  private readonly getComposition: () => LabExpression;
   private readonly audioEngine: AudioEngine;
 
   constructor(
     host: HTMLElement,
-    getComposition: () => CymaticsPlate,
+    getComposition: () => LabExpression,
     audioEngine: AudioEngine,
   ) {
     this.getComposition = getComposition;
@@ -67,8 +67,23 @@ export class DebugPanel {
   private refresh(): void {
     if (this.collapsed) return;
     const audio = this.audioEngine.getParameters();
-    const state = this.getComposition().getDebugState();
+    const composition = this.getComposition();
+    const state = composition.getDebugState();
     const f = (value: number | undefined, digits = 2): string => (value ?? 0).toFixed(digits);
+    const head = [
+      `RMS ${f(audio.volume)}  centroid ${f(audio.centroid)}  flatness ${f(audio.flatness)}`,
+      `onset ${f(audio.onset)}  sustain ${f(audio.sustain)}`,
+    ];
+    // モード励起はサイマティクス固有の機構。持たない表現は state が null になる。
+    // その場合でも音声特徴量は見たいので、モード欄だけを差し替える。
+    if (!state) {
+      const phase = composition.getPhase?.();
+      this.stats.textContent = [
+        ...head,
+        phase ? `phase ${phase}` : 'no mode info for this expression',
+      ].join('\n');
+      return;
+    }
     const peaks = state.peaks
       .map((peak) => `${peak.hz}Hz(${peak.level.toFixed(2)})`)
       .join(' ');
@@ -76,8 +91,7 @@ export class DebugPanel {
       .map((energy, index) => `${index}:${energy.toFixed(1)}`)
       .join(' ');
     this.stats.textContent = [
-      `RMS ${f(audio.volume)}  centroid ${f(audio.centroid)}  flatness ${f(audio.flatness)}`,
-      `onset ${f(audio.onset)}  sustain ${f(audio.sustain)}`,
+      ...head,
       `peaks: ${peaks || '-'}`,
       `primary  #${state.primary.id} ${state.primary.label}` +
         `${state.primary.symmetry ? ` sym=${state.primary.symmetry}` : ''}` +

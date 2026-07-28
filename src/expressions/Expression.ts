@@ -1,0 +1,62 @@
+import type { Composition } from '../compositions/Composition';
+import type { Effect } from '../effects/Effect';
+import type { ModeExciterState } from '../engine/modeBank';
+import type { Theme } from '../engine/themes';
+import type { ExpressionId } from './catalog';
+
+/**
+ * 表現（Expression）の共通面。
+ *
+ * UI 層（LabControls / LabPreset / TuningPanel / DebugPanel / main）は
+ * サイマティクスの実装クラスではなくこの面に対して書く。サイマティクス以外の
+ * 表現ファミリーを足すときに UI を書き換えずに済ませるためである。
+ *
+ * ここに載せるのは「UI が触る面」だけで、表現の内部（場・シミュレーション）は含めない。
+ * 表現ごとに持つ調整機能は異なる（PRD D25）ため、全表現が持てないものは
+ * オプショナルにするか、値を持たないことを表せる戻り値型にする。
+ */
+export interface LabExpression extends Composition {
+  /** 表現の安定 id（保存データに入る）。 */
+  readonly id: ExpressionId;
+
+  // ---- Effect チェーン（③）----
+  getEffects(): readonly Effect[];
+  moveEffect(effect: Effect, direction: -1 | 1): void;
+  setEffectOrder(names: string[]): void;
+
+  // ---- 色のテーマ ----
+  getTheme(): Theme;
+  setTheme(theme: Theme): void;
+
+  /** ズームは開発用（PRD D17）。本番 UI には出さず、プリセットにも効かせない。 */
+  getZoom(): number;
+  setZoom(zoom: number): void;
+
+  /** 反応の調整（PRD D24 / D26）: 帯域ごとの励振ゲイン。 */
+  getResponse(): { bass: number; mid: number; treble: number };
+  setResponse(gains: Partial<{ bass: number; mid: number; treble: number }>): void;
+
+  /** 画角（PRD D26）。切り取りではなく、描画される板そのものの比率。 */
+  getAspectId(): string;
+  getAspectRatio(): number;
+  setAspect(id: string, ratio: number): void;
+
+  /** 開発用の可視化切り替え（?debug=1）。表現ごとに意味は異なってよい。 */
+  setDebugView(view: number): void;
+
+  /**
+   * 開発用の内部状態。モード励起はサイマティクス固有の機構なので、
+   * それを持たない表現は null を返す。読む側は null を前提に書くこと。
+   */
+  getDebugState(): ModeExciterState | null;
+
+  /** 奥行き（D6）。サイマティクスは UI に出していないが機能は温存している。 */
+  getDepth(): number;
+  setDepth(amount: number): void;
+
+  /** 開発用: 表現が周期や段階を持つ場合の現在フェーズ名。持たない表現は実装しない。 */
+  getPhase?(): string;
+
+  /** 開発用: 周期を最初からやり直す。周期を持たない表現は実装しない。 */
+  restartCycle?(): void;
+}
