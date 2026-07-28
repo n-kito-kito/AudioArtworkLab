@@ -16,6 +16,28 @@ import type { StudioShell } from './StudioShell';
 const HIDDEN_COMMON_PARAMS = new Set(['dryWet', 'effectOpacity', 'blendMode']);
 
 /**
+ * 表現ごとの調整つまみ（PRD D25 / `getExpressionParams`）を UI に出すか。
+ *
+ * 今は「既定値だけで一番良い見え方」を作る段階なので、表現ごとのつまみは
+ * 一旦すべて隠す。触れる余地があると既定値の詰めが甘いまま逃げられてしまう。
+ * `HIDDEN_COMMON_PARAMS` と同じ扱いで、**機能・状態・コードは温存**する
+ * （`getExpressionParams` / `setExpressionParam` の実装は一切変えていない）。
+ *
+ * 戻し方: この定数を `true` にするだけでよい。
+ * 個別に出す段階になったら、キー単位の許可リストに置き換える。
+ */
+const SHOW_EXPRESSION_PARAMS = false;
+
+/**
+ * Theme を無視する表現の暫定リスト。
+ *
+ * 本来は各表現が `usesTheme()` で宣言する（`Expression.ts`）。ただし Light Traces は
+ * 別作業で編集中のため今は触れない。`usesTheme?.()` の戻り値が優先されるので、
+ * LightTraces 側に `usesTheme(): false` が入ったらこの Set ごと消してよい。
+ */
+const THEME_UNAWARE_EXPRESSIONS = new Set<string>(['light-traces-v1']);
+
+/**
  * Field × Renderer 構成の操作パネル。
  *
  * 左: Field / Renderer の選択（DESIGN.md §2 の ① と ②）
@@ -194,6 +216,10 @@ export class LabControls {
       versionRow.append(versionName, versionButtons);
     }
 
+    // 色のテーマ。使わない表現（黒背景固定など）では効かないセレクトになるので出さない。
+    // 未宣言の表現は従来どおり出す（既存の挙動を変えない）。
+    const usesTheme =
+      this.composition.usesTheme?.() ?? !THEME_UNAWARE_EXPRESSIONS.has(this.composition.id);
     const theme = document.createElement('label');
     theme.className = 'control-row control-row--inline';
     const themeName = document.createElement('span');
@@ -246,11 +272,21 @@ export class LabControls {
 
     // 持つ調整機能は表現ごとに宣言する（PRD D25）。サイマティクスは色のテーマのみで、
     // 奥行きは持たない。ズームは開発用（PRD D17）。
-    this.compositionBody.append(field, versionRow, theme, aspect, responseTitle, ...responseRows);
+    this.compositionBody.append(
+      field,
+      versionRow,
+      ...(usesTheme ? [theme] : []),
+      aspect,
+      responseTitle,
+      ...responseRows,
+    );
 
     // 表現ごとの調整つまみ（PRD D25）。宣言した表現だけがこの節を出す。
     // 既存表現は getExpressionParams を持たないので UI は変わらない。
-    const expressionParams = this.composition.getExpressionParams?.() ?? [];
+    // 現在は SHOW_EXPRESSION_PARAMS で全体を伏せている（理由は同定数のコメント）。
+    const expressionParams = SHOW_EXPRESSION_PARAMS
+      ? (this.composition.getExpressionParams?.() ?? [])
+      : [];
     if (expressionParams.length > 0) {
       const paramsTitle = document.createElement('h3');
       paramsTitle.className = 'control-subheading';

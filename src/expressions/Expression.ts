@@ -74,6 +74,15 @@ export interface LabExpression extends Composition {
   getTheme(): Theme;
   setTheme(theme: Theme): void;
 
+  /**
+   * テーマ色を実際に使うか（PRD D25: 持つ調整機能は表現ごとに宣言する）。
+   *
+   * 黒背景固定などでテーマを無視する表現は false を返す。UI は効かないセレクトを
+   * 並べないためだけにこれを見る。**未実装は true 扱い**なので、既存表現の
+   * 挙動は変わらない。テーマの保持そのもの（get/setTheme）は全表現が持ち続ける。
+   */
+  usesTheme?(): boolean;
+
   /** ズームは開発用（PRD D17）。本番 UI には出さず、プリセットにも効かせない。 */
   getZoom(): number;
   setZoom(zoom: number): void;
