@@ -28,7 +28,7 @@ export type LightRole = 'main' | 'sub';
  * 光の形。**波形をそのまま光の形にはしない**（波を光で描くことになるため）。
  * うねりは「自然界にまっすぐは無い」ぶんの微妙な変形としてだけ使う。
  */
-export type LightShapeKind = 'spark' | 'needle' | 'arc' | 'plane';
+export type LightShapeKind = 'spark' | 'needle' | 'arc' | 'plane' | 'ray';
 
 /** 形の指定。描画側はこれを見て板の張り方と減衰を変える。 */
 export interface LightShape {
@@ -44,6 +44,11 @@ export interface LightShape {
    * X/Y/Z 軸平面を基本に、seed で少し傾ける。他の形では null。
    */
   readonly normal: { readonly x: number; readonly y: number; readonly z: number } | null;
+  /**
+   * `plane` のときだけ使う図形の選択（0..1）。
+   * **枚数そのものは描画側が持つ**ので、ここは割合だけを渡して結び付きを断ってある。
+   */
+  readonly pattern: number;
 }
 
 /**
@@ -322,6 +327,30 @@ export const LIGHT_MAPPING = {
   /** 平面の寿命（メインに対する倍率）。瞬間的に開いて消える。 */
   planeLifetimeMinimum: 0.5,
   planeLifetimeMaximum: 1.1,
+
+  // ---- 画面を貫く針（ray）----
+  /**
+   * **中心から上下左右へ、一瞬で画面外まで伸びる極細の針。**
+   * 有限長の光条（needle）とは別物で、画面端を越える長さを持つ。
+   * 強い打撃のときだけ出したいので、onset に敷居を設ける。
+   */
+  rayOnsetThreshold: 0.6,
+  /** 敷居を超えたときの本数（下限・上限）。onset の強さで増える。 */
+  rayCountMinimum: 1,
+  rayCountMaximum: 3,
+  /**
+   * 垂直・水平からの傾き（ラジアン）。
+   * 完全な十字だと図形的すぎるので、seed でわずかにだけ逸らす。
+   */
+  rayTiltRadians: 0.055,
+  /** 明るさ（メインに対する倍率）。細いので強くても白く潰れない。 */
+  rayIntensityMinimum: 0.75,
+  rayIntensityMaximum: 1.2,
+  /** 寿命（メインに対する倍率）。**消えは短い減衰**。 */
+  rayLifetimeMinimum: 0.35,
+  rayLifetimeMaximum: 0.7,
+  /** 生まれる遅れの上限（秒）。打撃とほぼ同時に走らせる。 */
+  rayDelayMaximum: 0.02,
 } as const;
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -403,6 +432,7 @@ export class LightSpatialMapping {
           angle: 0,
           waviness: 0,
           normal: null,
+          pattern: 0,
         },
         expansion: { from: 1, to: 1 },
       },
@@ -473,7 +503,7 @@ export class LightSpatialMapping {
           trail,
           // 遠くへ飛ぶものは細かいスパークに寄せる。
           shape: outer
-            ? { kind: 'spark', elongation: 1, angle: 0, waviness: 0, normal: null }
+            ? { kind: 'spark', elongation: 1, angle: 0, waviness: 0, normal: null, pattern: 0 }
             : this.shape(snapshot, h),
           expansion: { from: 1, to: 1 },
         },
@@ -528,8 +558,76 @@ export class LightSpatialMapping {
             decaySeconds: settings.decaySeconds * lifeScale,
           },
           trail: 0,
-          shape: { kind: 'plane', elongation: 1, angle: 0, waviness: 0, normal },
+          // 図形は 8 種類以上の不均一な多角形から seed が 1 つ選ぶ。
+          shape: { kind: 'plane', elongation: 1, angle: 0, waviness: 0, normal, pattern: h(18) },
           expansion: { from: LIGHT_MAPPING.planeScaleFrom, to: LIGHT_MAPPING.planeScaleTo },
+        },
+      });
+    }
+
+    // 画面を貫く針。**強い打撃のときだけ** 1〜数本、垂直・水平に走る。
+    for (const ray of this.rays(snapshot, settings, origin, mainIntensity)) lights.push(ray);
+    return lights;
+  }
+
+  /**
+   * **画面を貫く針。**
+   *
+   * 有限長の光条（needle）とは別で、板の長さを画面の対角より長く取り、
+   * 数フレームで全長へ伸びてすぐ消える。伸び方は描画側が `expansion` から作る。
+   * 敷居を超えない打撃では 1 本も出さないので、弱い音では現れない。
+   */
+  private rays(
+    snapshot: AudioEventSnapshot,
+    settings: LightMappingSettings,
+    origin: SpatialPosition,
+    mainIntensity: number,
+  ): PlannedLight[] {
+    const strength = clamp01(snapshot.onsetStrength);
+    if (strength < LIGHT_MAPPING.rayOnsetThreshold) return [];
+    const above = clamp01(
+      (strength - LIGHT_MAPPING.rayOnsetThreshold) /
+        Math.max(1 - LIGHT_MAPPING.rayOnsetThreshold, 0.01),
+    );
+    const count = Math.round(
+      mix(LIGHT_MAPPING.rayCountMinimum, LIGHT_MAPPING.rayCountMaximum, above),
+    );
+
+    const seed = [snapshot.audioSeed, snapshot.eventIndex, BAND_INDEX[snapshot.winningBand]];
+    const lights: PlannedLight[] = [];
+    for (let i = 0; i < count; i++) {
+      const h = (salt: number): number => hash01(...seed, 700 + i, salt);
+      // 垂直か水平を基本にして、seed でわずかにだけ傾ける。
+      const vertical = h(3) < 0.5;
+      const angle = (vertical ? Math.PI / 2 : 0) + (h(5) * 2 - 1) * LIGHT_MAPPING.rayTiltRadians;
+      const hueOffset = (h(7) * 2 - 1) * LIGHT_MAPPING.colorHueSpreadInBurst;
+      const lifeScale = mix(
+        LIGHT_MAPPING.rayLifetimeMinimum,
+        LIGHT_MAPPING.rayLifetimeMaximum,
+        h(9),
+      );
+      lights.push({
+        delaySeconds: mix(0, LIGHT_MAPPING.rayDelayMaximum, h(11)),
+        traits: {
+          role: 'sub',
+          position: origin,
+          intensity:
+            mainIntensity *
+            mix(LIGHT_MAPPING.rayIntensityMinimum, LIGHT_MAPPING.rayIntensityMaximum, h(13)),
+          size: 1,
+          color: this.color(snapshot, settings, hueOffset),
+          gradient: this.gradient(snapshot, settings, hueOffset, 700 + i),
+          // 針は動かない。伸びることそのものが動き。
+          velocity: { x: 0, y: 0, z: 0 },
+          lifetime: {
+            attackSeconds: 0,
+            holdSeconds: settings.holdSeconds * lifeScale * 0.3,
+            decaySeconds: settings.decaySeconds * lifeScale,
+          },
+          trail: 0,
+          shape: { kind: 'ray', elongation: 1, angle, waviness: 0, normal: null, pattern: 0 },
+          // 長さの割合。描画側が数フレームで 1 まで伸ばす。
+          expansion: { from: 0, to: 1 },
         },
       });
     }
@@ -615,7 +713,7 @@ export class LightSpatialMapping {
       (vertical ? Math.PI / 2 : 0) +
       (h(37) * 2 - 1) * LIGHT_MAPPING.needleAxisDeviation * Math.PI;
 
-    return { kind, elongation, angle, waviness, normal: null };
+    return { kind, elongation, angle, waviness, normal: null, pattern: 0 };
   }
 
   /**
