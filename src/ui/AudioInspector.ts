@@ -51,12 +51,18 @@ const INSPECTOR = {
     ['treble', 'Flux Treble'],
     ['combined', 'Onset (flux)'],
   ],
-  /** 帯域別 Onset（観察モード）の並びと表示名。 */
+  /** 帯域別 Onset の並びと表示名。 */
   bands: [
     ['bass', 'Bass'],
     ['mid', 'Mid'],
     ['treble', 'Treble'],
   ],
+  /**
+   * 帯域イベント検証用の音源（`scripts/generate-band-demo-audio.mjs` が生成）。
+   * 区間ごとに鳴る帯域を設計してあるので、どの帯域がどう光るかを目で追える。
+   */
+  bandDemoUrl: '/audio/band-demo.wav',
+  bandDemoName: 'band-demo.wav',
 } as const;
 
 type MeterKey = (typeof INSPECTOR.meters)[number][0];
@@ -131,10 +137,10 @@ export class AudioInspector {
     fluxTitle.textContent = 'Spectral flux (new)';
     this.coreBlock.append(fluxTitle, this.fluxRows, this.fluxLampRow);
 
-    // 帯域別 Onset は観察だけ。Core を生む合成 Gate と混同しないよう見出しで断る。
+    // Core を生むのはこちら。合成 Gate（上）は比較用に残っているだけ。
     const bandTitle = document.createElement('h3');
     bandTitle.className = 'control-subheading';
-    bandTitle.textContent = 'Band onsets (observe only)';
+    bandTitle.textContent = 'Band onsets (drives cores)';
     this.coreBlock.append(bandTitle, this.bandBlock);
 
     const title = document.createElement('h3');
@@ -160,7 +166,39 @@ export class AudioInspector {
       );
     }
     this.coreReadout.textContent = 'last core —';
-    this.coreBlock.append(this.coreReadout);
+    this.coreBlock.append(this.coreReadout, this.buildDemoButton());
+  }
+
+  /**
+   * 帯域イベント検証用の音源をその場で読み込む開発ボタン。
+   * 起動時の reference.wav 読み込み（main.ts）はそのままで、押したときだけ差し替える。
+   */
+  private buildDemoButton(): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'control-row control-row--inline';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ui-button';
+    button.setAttribute('aria-label', 'Load band demo audio');
+    const icon = document.createElement('i');
+    icon.className = 'ph ph-music-notes';
+    const text = document.createElement('span');
+    text.textContent = 'Load band demo';
+    button.append(icon, text);
+    button.addEventListener('click', () => {
+      text.textContent = 'Loading…';
+      void this.engine
+        .loadUrl(INSPECTOR.bandDemoUrl)
+        .then(() => {
+          text.textContent = INSPECTOR.bandDemoName;
+          return this.engine.play();
+        })
+        .catch(() => {
+          text.textContent = 'Load failed';
+        });
+    });
+    row.append(button);
+    return row;
   }
 
   dispose(): void {
@@ -261,7 +299,8 @@ export class AudioInspector {
     this.fluxLampRow.className = 'audio-inspector__lamp';
     this.fluxLamp.className = 'audio-inspector__lamp-dot';
     const label = document.createElement('span');
-    label.textContent = 'Core fired (flux, new)';
+    // 合成 Gate は観察専用になった（Core を生むのは帯域側）。ラベルでそう断る。
+    label.textContent = 'Combined onset (observe only)';
     this.fluxLampRow.append(this.fluxLamp, label);
     this.buildBandBlock();
   }
@@ -442,8 +481,9 @@ export class AudioInspector {
             : 'adaptive'
           : 'fixed';
         this.coreReadout.textContent =
-          `cores ${state.count}  fired ${state.fireCount}\n` +
-          `flux threshold ${state.onsetThreshold.toFixed(3)} (${mode})\n` +
+          `cores ${state.count}  combined onsets ${state.fireCount}\n` +
+          `last core band ${state.lastBand ?? '—'}  (${state.lastEventCores} per event)\n` +
+          `combined threshold ${state.onsetThreshold.toFixed(3)} (${mode})\n` +
           `strength reference ${state.adaptiveStrength ? state.strengthReference.toFixed(3) : 'off'}\n` +
           `spectral centroid ${state.lastSpectralCentroid.toFixed(2)}\n` +
           `x position ${state.lastX.toFixed(2)}\n` +

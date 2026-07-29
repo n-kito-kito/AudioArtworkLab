@@ -154,6 +154,15 @@ const CORE_STUDY = {
    * 0.15 なら X は板の 15%〜85% に収まり、両端に半径 2 個ぶんの余白が残る。
    */
   horizontalMargin: 0.15,
+  /**
+   * 帯域の発火をひとつの打撃としてまとめる窓（ミリ秒）。
+   *
+   * 同じ 1 打でも、帯域ごとにフラックスの山が来るフレームは 1〜2 枚ずれる
+   * （実測: reference.wav の 3.01 秒 Bass / 3.02 秒 Mid）。窓を開いて拾い集めないと
+   * 1 打が 2 イベントに割れ、Core が二重に出る。30ms ≒ 2 フレームの遅れは
+   * 音と光のずれとして知覚できない範囲。時間基準なのでフレームレートに依存しない。
+   */
+  eventCoalesceMs: 30,
   /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
   maximumDelta: 0.05,
   /** Decay の曲がり。大きいほど頭で速く落ちる。0 に近づくほど直線に近い。 */
@@ -174,6 +183,17 @@ const CORE_STUDY = {
     fluxGain: 2.5,
     /** 発火後のクールダウン。1 つの立ち上がりで何度も撃たないための最短間隔。 */
     cooldownMs: 60,
+    /**
+     * 1 つの打撃から何本の帯域を光らせるか。最強帯域の strength に対する比で、
+     * これを**超えた**帯域だけを追加で光らせる。
+     *
+     * 既定 1.0 は「最強帯域のみ」（比が 1 を超えることはないので追加は起きない）。
+     * reference.wav の実測では帯域イベントの 81% が複数帯域だったが、その多くは
+     * 打撃の漏れ込み（キック 8.02 秒は 3 帯域が立つのに treble の strength は 0.16）で、
+     * 全部光らせると Core が 60 → 152 個へ 2.5 倍に増えてしまう。
+     * 下げると同時 Core が増える（0.6 で 1 打あたり平均 1.94 個）。
+     */
+    relativeStrengthFloor: 1,
   },
   /** 同パラメータの可動域（Inspector のスライダーがそのまま使う）。 */
   ranges: {
@@ -185,6 +205,7 @@ const CORE_STUDY = {
     onsetSensitivity: { min: 0, max: 1, step: 0.01 },
     fluxGain: { min: 1, max: 40, step: 0.5 },
     cooldownMs: { min: 0, max: 400, step: 5 },
+    relativeStrengthFloor: { min: 0.4, max: 1, step: 0.05 },
   },
 } as const;
 
@@ -198,6 +219,11 @@ interface Core {
   age: number;
   /** トリガした瞬間の onset 値（0..1）。 */
   readonly onsetStrength: number;
+  /**
+   * この Core を生んだ帯域。**描画には使わない**（白・サイズ固定は変えない）。
+   * どの帯域が光を出したのかを Inspector で追うためだけに持つ。
+   */
+  readonly band: BandName;
   /** トリガした瞬間の centroid（0..1。engine が対数で正規化済み）。 */
   readonly spectralCentroid: number;
   /**
@@ -222,6 +248,7 @@ interface Core {
 export interface CoreStudySnapshot {
   readonly age: number;
   readonly onsetStrength: number;
+  readonly band: BandName;
   readonly spectralCentroid: number;
   /** 板の幅に対する割合（0..1）。 */
   readonly x: number;
@@ -289,12 +316,15 @@ export interface CoreStudyState {
   readonly adaptiveStrength: boolean;
   /** 発火した回数（単調増加）。Inspector のランプはこれの増分で点く。 */
   readonly fireCount: number;
-  /**
-   * 帯域別 Onset の観察結果（Bass / Mid / Treble を独立に判定したもの）。
-   * **Core の発生には接続していない。** 複数発光へ進むかどうかを決めるための計測。
-   */
+  /** 帯域別 Onset（Bass / Mid / Treble を独立に判定したもの）。ここから Core が生まれる。 */
   readonly bands: Readonly<Record<BandName, BandGateState>>;
   readonly coincidence: BandCoincidence;
+  /** 直近に Core を生んだ帯域。まだ無ければ null。 */
+  readonly lastBand: BandName | null;
+  /** 直近のイベントで同時に出した Core の数。 */
+  readonly lastEventCores: number;
+  /** 結合窓が開いている（次の Core を待っている）か。 */
+  readonly eventPending: boolean;
   readonly cores: readonly CoreStudySnapshot[];
 }
 
@@ -674,13 +704,15 @@ export class LightCoreStudy implements LabExpression {
 
   /** 測る側と決める側。適応（方式 A）は決める側だけが持つ。 */
   private readonly flux = new BandFluxAnalyzer();
+  /**
+   * 合成フラックスの Gate。**役割が反転して観察専用になった。**
+   * Core を生むのは帯域 Gate 側で、こちらは新旧を Inspector で見比べるために残す。
+   */
   private readonly gate = new OnsetGate();
   /**
-   * 帯域ごとの Onset を独立に判定する Gate（**観察用**）。
+   * 帯域ごとの Onset を独立に判定する Gate。**ここが Core の発生源。**
    *
-   * 合成 Gate（`gate`）が Core の発生を決める仕組みは一切変えていない。こちらは
-   * 「同じ打撃で Bass と Treble が両方立つのか、片方だけなのか」を数えるためだけに
-   * 並走させている。統計窓・山の履歴・閾値・クールダウン・累計はそれぞれが独立に持ち、
+   * 統計窓・山の履歴・閾値・クールダウン・累計はそれぞれが独立に持ち、
    * 設定（窓・下限・感度・クールダウン）は 3 帯域とも合成 Gate と同じものを使う。
    */
   private readonly bandGates: Record<BandName, OnsetGate> = {
@@ -691,6 +723,27 @@ export class LightCoreStudy implements LabExpression {
   private readonly bandFireCounts: Record<BandName, number> = { bass: 0, mid: 0, treble: 0 };
   private readonly bandLastStrength: Record<BandName, number> = { bass: 0, mid: 0, treble: 0 };
   private coincidence = { ...EMPTY_COINCIDENCE };
+  /**
+   * 結合窓の中身。最初の帯域が立った瞬間に開き、`eventCoalesceMs` が経つと閉じて
+   * Core を出す。閉じるまで Core は出ないので、1 打が複数フレームに割れても 1 回で済む。
+   */
+  private pendingEvent: {
+    openedAt: number;
+    /**
+     * 帯域ごとの「素のフラックス」と「局所正規化した strength」。
+     *
+     * **どの帯域が主役かは素のフラックスで決める。** strength は帯域ごとに
+     * 別々の参照値（その帯域の窓の最大値）で割った値なので、帯域をまたいで
+     * 比べると意味を成さない（静かな帯域ほど小さな増分が 1.0 に化ける）。
+     * 明るさには従来どおり strength を使う。
+     * 同じ帯域が窓内で 2 度立ったら、フラックスの大きいほうを採る。
+     */
+    entries: Partial<Record<BandName, { flux: number; strength: number }>>;
+    /** 窓を開いた瞬間の centroid。X はこの値だけで決まる。 */
+    centroid: number;
+  } | null = null;
+  private lastBand: BandName | null = null;
+  private lastEventCores = 0;
   /** 閾値の局所適応。切ると固定閾値（方式 B）に戻る。 */
   private adaptiveThreshold = true;
   /** strength の局所正規化。閾値の適応とは独立に切れる。 */
@@ -795,10 +848,12 @@ export class LightCoreStudy implements LabExpression {
   }
 
   /**
-   * 測る → 決める → 生む。
+   * 測る → 決める → まとめる → 生む。
    *
    * スペクトルは engine の生 FFT をそのまま読むだけで、engine 側は何も変えない。
    * 発火の強さも横位置も「その瞬間に測れた値」だけで決まり、後から追従させない。
+   *
+   * Core を生むのは**帯域 Gate → 結合窓**の経路だけ。合成 Gate は観察用に並走する。
    */
   private detectOnset(audio: AudioParameters, elapsed: number, delta: number): void {
     const spectrum = this.context?.audioEngine.getSpectrum?.() ?? null;
@@ -820,21 +875,29 @@ export class LightCoreStudy implements LabExpression {
       adaptiveThreshold: this.adaptiveThreshold,
       adaptiveStrength: this.adaptiveStrength,
     };
-    // 観察用の帯域 Gate。合成 Gate とは別の状態で動き、Core の発生には触らない。
-    this.observeBands(settings);
 
-    const strength = this.gate.update({ value: this.flux.value.combined, ...settings });
-    if (strength === null) return;
-    this.fireCount += 1;
+    // 先に期限の切れた窓を閉じる。閉じてから新しい発火を受けるので、
+    // 窓の境目にきた発火は次のイベントとして扱われる。
+    this.closeEventIfDue(elapsed);
+
+    // 観察用の合成 Gate。数えるだけで Core は生まない。
+    if (this.gate.update({ value: this.flux.value.combined, ...settings }) !== null) {
+      this.fireCount += 1;
+    }
+
     // centroid は engine が対数で 0..1 に正規化済み。Hz の生値は使わない。
-    this.spawn(strength, clamp01(audio.centroid ?? 0));
+    this.collectBands(settings, elapsed, clamp01(audio.centroid ?? 0));
   }
 
   /**
-   * 帯域ごとの Onset を独立に判定して数えるだけ（**観察モード**）。
-   * ここから Core は生まれない。同じ計測フレームで何本立ったかを集計する。
+   * 帯域ごとの Onset を判定し、立った帯域を結合窓へ集める。
+   * ここでは Core を出さない（窓が閉じるときに出す）。
    */
-  private observeBands(settings: Omit<OnsetGateInput, 'value'>): void {
+  private collectBands(
+    settings: Omit<OnsetGateInput, 'value'>,
+    elapsed: number,
+    centroid: number,
+  ): void {
     const fired: BandName[] = [];
     for (const band of BAND_NAMES) {
       const strength = this.bandGates[band].update({
@@ -845,6 +908,17 @@ export class LightCoreStudy implements LabExpression {
       this.bandFireCounts[band] += 1;
       this.bandLastStrength[band] = strength;
       fired.push(band);
+
+      if (!this.pendingEvent) {
+        // 最初の帯域が立った瞬間に窓を開く。X はこの瞬間の centroid で確定する。
+        this.pendingEvent = { openedAt: elapsed, entries: {}, centroid };
+      }
+      const flux = this.flux.value[band];
+      const previous = this.pendingEvent.entries[band];
+      // 同じ帯域が窓内で 2 度立ったら、フラックスの大きいほうを代表にする。
+      if (previous === undefined || flux > previous.flux) {
+        this.pendingEvent.entries[band] = { flux, strength };
+      }
     }
     if (fired.length === 0) return;
 
@@ -862,6 +936,39 @@ export class LightCoreStudy implements LabExpression {
       lastEvent: fired.map((band) => BAND_LABELS[band]).join(' + '),
       events: this.coincidence.events + 1,
     };
+  }
+
+  /**
+   * 結合窓が満了していたら閉じて、選ばれた帯域ぶんの Core を生む。
+   *
+   * 帯域の選び方: **素のフラックス**が最大の 1 本は必ず出し、それ以外は
+   * 「フラックスが最大 × `relativeStrengthFloor` を**超えている**」ものだけ足す。
+   * 既定の 1.0 では比が 1 を超えることはないので、必ず 1 打 = 1 個になる
+   * （同値の帯域も切り捨てる）。同点の並びは `BAND_NAMES` の順で決まるので決定論。
+   *
+   * 明るさに使うのは局所正規化した strength のまま。役割は
+   * 「フラックスの大小 = どの帯域の出来事か」「strength = その光の明るさ」で分けてある。
+   */
+  private closeEventIfDue(elapsed: number): void {
+    const event = this.pendingEvent;
+    if (!event) return;
+    if ((elapsed - event.openedAt) * 1000 < CORE_STUDY.eventCoalesceMs) return;
+    this.pendingEvent = null;
+
+    const entries = BAND_NAMES.filter((band) => event.entries[band] !== undefined).map(
+      (band) => ({ band, ...event.entries[band]! }),
+    );
+    if (entries.length === 0) return;
+
+    let top = entries[0]!;
+    for (const entry of entries) if (entry.flux > top.flux) top = entry;
+    const floor = clamp(this.params.relativeStrengthFloor, 0, 1);
+    const chosen = entries.filter(
+      (entry) => entry === top || entry.flux > top.flux * floor,
+    );
+
+    this.lastEventCores = chosen.length;
+    for (const entry of chosen) this.spawn(entry.strength, event.centroid, entry.band);
   }
 
   /**
@@ -884,6 +991,10 @@ export class LightCoreStudy implements LabExpression {
       this.bandLastStrength[band] = 0;
     }
     this.coincidence = { ...EMPTY_COINCIDENCE };
+    // 開きかけの窓も捨てる。無音をまたいで Core が漏れ出さないようにする。
+    this.pendingEvent = null;
+    this.lastBand = null;
+    this.lastEventCores = 0;
   }
 
   /**
@@ -900,7 +1011,7 @@ export class LightCoreStudy implements LabExpression {
    * 「発生するか」（フラックスの立ち上がり）・「その Core 自身の明るさ」
    * （フラックスの大きさ）・「横位置」（centroid）の 3 つだけ。互いに混ぜない。
    */
-  private spawn(strength: number, centroid: number): void {
+  private spawn(strength: number, centroid: number, band: BandName): void {
     if (this.cores.length >= CORE_STUDY.maximumCores) this.cores.shift();
     const minimum = clamp01(this.params.minimumIntensity);
     const maximum = Math.max(clamp01(this.params.maximumIntensity), minimum);
@@ -909,6 +1020,7 @@ export class LightCoreStudy implements LabExpression {
     this.cores.push({
       age: 0,
       onsetStrength: strength,
+      band,
       spectralCentroid: centroid,
       x,
       peakIntensity,
@@ -923,6 +1035,7 @@ export class LightCoreStudy implements LabExpression {
     this.lastSpectralCentroid = centroid;
     this.lastX = x;
     this.lastPeakIntensity = peakIntensity;
+    this.lastBand = band;
   }
 
   // ---------------------------------------------------------------- 一生
@@ -1112,9 +1225,9 @@ export class LightCoreStudy implements LabExpression {
   getPhase(): string {
     const f = this.flux.value;
     return (
-      `cores ${this.cores.length} / last strength ${this.lastOnsetStrength.toFixed(2)} / ` +
-      `flux ${f.combined.toFixed(2)} (b${f.bass.toFixed(2)} m${f.mid.toFixed(2)} t${f.treble.toFixed(2)}) / ` +
-      `th ${this.gate.threshold.toFixed(2)}${this.gate.warmingUp ? ' (warmup)' : ''}`
+      `cores ${this.cores.length} / last ${this.lastBand ?? '-'} ${this.lastOnsetStrength.toFixed(2)} / ` +
+      `flux b${f.bass.toFixed(2)} m${f.mid.toFixed(2)} t${f.treble.toFixed(2)} / ` +
+      `th ${this.bandGates.bass.threshold.toFixed(2)}/${this.bandGates.mid.threshold.toFixed(2)}/${this.bandGates.treble.threshold.toFixed(2)}`
     );
   }
 
@@ -1150,9 +1263,13 @@ export class LightCoreStudy implements LabExpression {
         treble: this.bandState('treble'),
       },
       coincidence: { ...this.coincidence },
+      lastBand: this.lastBand,
+      lastEventCores: this.lastEventCores,
+      eventPending: this.pendingEvent !== null,
       cores: this.cores.map((core) => ({
         age: core.age,
         onsetStrength: core.onsetStrength,
+        band: core.band,
         spectralCentroid: core.spectralCentroid,
         x: core.x,
         peakIntensity: core.peakIntensity,
@@ -1190,6 +1307,7 @@ export class LightCoreStudy implements LabExpression {
       row('onsetSensitivity', 'Onset sensitivity'),
       row('fluxGain', 'Flux gain'),
       row('cooldownMs', 'Cooldown (ms)'),
+      row('relativeStrengthFloor', 'Band floor'),
       // 適応は 2 つを独立に切れるようにしておく。切り分けができないと、
       // 見え方が変わったときにどちらが効いたのか分からなくなる。
       onOff('adaptiveThreshold', 'Adaptive threshold', this.adaptiveThreshold),
