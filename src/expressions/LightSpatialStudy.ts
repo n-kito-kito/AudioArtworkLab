@@ -95,7 +95,7 @@ const SPATIAL_STUDY = {
     /** 大きさ・色・動き・軌跡の効き。Phase を進めるごとに既定値を上げていく。 */
     sizeAmount: 0.85,
     colorAmount: 0.8,
-    motionAmount: 0,
+    motionAmount: 0.7,
     trailAmount: 0,
   },
   ranges: {
@@ -119,9 +119,17 @@ type SpatialParamKey = keyof typeof SPATIAL_STUDY.defaults;
 
 export type SpatialCorePhase = 'attack' | 'hold' | 'decay' | 'done';
 
-/** 3D 空間の Core 1 個。見え方は発生時に決まり、寿命の間ずっと変えない。 */
+/**
+ * 3D 空間の Core 1 個。
+ * 大きさ・色・速度は発生時に確定して変えない。位置だけが速度ぶん進む。
+ */
 interface SpatialCore {
-  readonly position: { readonly x: number; readonly y: number; readonly z: number };
+  /** 現在位置。速度がゼロなら発生時のまま動かない。 */
+  position: { x: number; y: number; z: number };
+  /** 発生時の位置。軌跡や検証で「どこから出たか」を見るために残す。 */
+  readonly origin: { readonly x: number; readonly y: number; readonly z: number };
+  /** 速度（ワールド単位 / 秒）。発生時に音から決まり、以後変わらない。 */
+  readonly velocity: { readonly x: number; readonly y: number; readonly z: number };
   readonly band: BandName;
   readonly onsetStrength: number;
   readonly peakIntensity: number;
@@ -143,6 +151,7 @@ export interface SpatialCoreSnapshot {
   readonly x: number;
   readonly y: number;
   readonly z: number;
+  readonly speed: number;
   readonly band: BandName;
   readonly size: number;
   readonly color: { readonly r: number; readonly g: number; readonly b: number };
@@ -398,7 +407,9 @@ export class LightSpatialStudy implements LabExpression {
     );
 
     this.cores.push({
-      position: traits.position,
+      position: { ...traits.position },
+      origin: { ...traits.position },
+      velocity: traits.velocity,
       band: event.band,
       onsetStrength: event.strength,
       peakIntensity: traits.intensity,
@@ -437,9 +448,15 @@ export class LightSpatialStudy implements LabExpression {
 
   // ---------------------------------------------------------------- 一生
 
-  /** 経過秒だけ進める。明るさは age の純粋な関数で、位置は一切動かさない。 */
+  /**
+   * 経過秒だけ進める。明るさは age の純粋な関数。
+   * 位置は速度ぶんだけ進む（速度は発生時に確定しているので、経路も決定論）。
+   */
   private advance(core: SpatialCore, delta: number): void {
     core.age += delta;
+    core.position.x += core.velocity.x * delta;
+    core.position.y += core.velocity.y * delta;
+    core.position.z += core.velocity.z * delta;
     const { attackSeconds: attack, holdSeconds: hold, decaySeconds: decay } = core;
 
     if (core.age < attack) {
@@ -665,6 +682,7 @@ export class LightSpatialStudy implements LabExpression {
         x: core.position.x,
         y: core.position.y,
         z: core.position.z,
+        speed: Math.hypot(core.velocity.x, core.velocity.y, core.velocity.z),
         band: core.band,
         size: core.size,
         color: { ...core.color },
