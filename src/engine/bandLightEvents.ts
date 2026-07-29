@@ -488,6 +488,36 @@ function trimWindow(times: number[], values: number[], now: number): void {
   }
 }
 
+/**
+ * 発光の瞬間に凍らせた音の姿。**見え方の解釈はここに入れない。**
+ *
+ * RGB や大きさをここから作るので、**帯域どうしを同じ基準で比べられる値**だけを
+ * 帯域比率に使うこと。適応後の strength は帯域ごとに別の参照値で割った値なので、
+ * 帯域間の比較には使えない（静かな帯域ほど小さな増分が 1.0 に化ける）。
+ * 比率用には素の `bandFlux` を持たせてある。
+ */
+export interface AudioEventSnapshot {
+  /** engine の RMS 音量（0..1、ピーク追従で正規化済み）。 */
+  readonly volume: number;
+  readonly bass: number;
+  readonly mid: number;
+  readonly treble: number;
+  /**
+   * 素の帯域フラックス（結合窓のあいだの最大値）。3 本とも同じ作り方・同じ
+   * ゲインなので、**帯域比率を出せるのはこの値だけ**。
+   */
+  readonly bandFlux: Readonly<Record<BandName, number>>;
+  /** その打撃の主役になった帯域。 */
+  readonly winningBand: BandName;
+  readonly spectralCentroid: number;
+  /** この Core の強さ（局所正規化後）。明るさに使う。帯域間の比較には使わない。 */
+  readonly onsetStrength: number;
+  readonly spectralFlatness: number;
+  readonly audioSeed: number;
+  /** イベント通し番号（＝ sequence）。決定論のシードに使える。 */
+  readonly eventIndex: number;
+}
+
 /** 検出された光イベント 1 個。**描画の都合は一切含まない。** */
 export interface BandLightEvent {
   /** イベントが確定した時刻（表現へ渡された elapsed。秒）。 */
@@ -507,6 +537,8 @@ export interface BandLightEvent {
   readonly eventIndex: number;
   /** 同じ音響イベントの中での並び（0 始まり）。同時発生を散らすのに使える。 */
   readonly siblingIndex: number;
+  /** 発光の瞬間の音の姿。Mapping 層はこれだけを読む。 */
+  readonly snapshot: AudioEventSnapshot;
 }
 
 /** 呼び出し側（表現）が毎フレーム渡す設定。すべて開発用パラメータから来る。 */
@@ -522,7 +554,12 @@ export interface BandDetectionSettings {
 
 /** 音のうち検出が読む部分だけ。engine への依存をここで断つ。 */
 export interface BandDetectionAudio {
+  readonly volume: number;
+  readonly bass: number;
+  readonly mid: number;
+  readonly treble: number;
   readonly spectralCentroid: number;
+  readonly spectralFlatness: number;
   readonly audioSeed: number;
 }
 
@@ -553,8 +590,9 @@ export class BandLightEventDetector {
   private pending: {
     openedAt: number;
     entries: Partial<Record<BandName, { flux: number; strength: number }>>;
-    centroid: number;
-    seed: number;
+    /** 窓のあいだに見えた帯域フラックスの最大値。**発火しなかった帯域も含める。** */
+    peakFlux: Record<BandName, number>;
+    audio: BandDetectionAudio;
   } | null = null;
 
   // ---- 観察用の読み出し ----
@@ -663,6 +701,15 @@ export class BandLightEventDetector {
     elapsed: number,
     audio: BandDetectionAudio,
   ): void {
+    // 窓が開いているあいだは、発火していない帯域のフラックスも記録しておく。
+    // RGB の比率は「3 帯域が同時にどれだけ出たか」で決まるので、主役以外も要る。
+    if (this.pending && gateInput.measured) {
+      for (const band of BAND_NAMES) {
+        const value = this.flux.value[band];
+        if (value > this.pending.peakFlux[band]) this.pending.peakFlux[band] = value;
+      }
+    }
+
     const fired: BandName[] = [];
     for (const band of BAND_NAMES) {
       const strength = this.bandGates[band].update({
@@ -675,15 +722,16 @@ export class BandLightEventDetector {
       fired.push(band);
 
       if (!this.pending) {
-        // 最初の帯域が立った瞬間に窓を開く。centroid と seed はこの瞬間の値で確定する。
+        // 最初の帯域が立った瞬間に窓を開く。音の姿はこの瞬間の値で確定する。
         this.pending = {
           openedAt: elapsed,
           entries: {},
-          centroid: audio.spectralCentroid,
-          seed: audio.audioSeed,
+          peakFlux: { bass: 0, mid: 0, treble: 0 },
+          audio,
         };
       }
       const flux = this.flux.value[band];
+      if (flux > this.pending.peakFlux[band]) this.pending.peakFlux[band] = flux;
       const previous = this.pending.entries[band];
       // 同じ帯域が窓内で 2 度立ったら、フラックスの大きいほうを代表にする。
       if (previous === undefined || flux > previous.flux) {
@@ -736,16 +784,30 @@ export class BandLightEventDetector {
 
     const index = this.eventCounter;
     this.eventCounter += 1;
+    const bandFlux = { ...event.peakFlux };
     return chosen.map((entry, siblingIndex) => ({
       time: elapsed,
       band: entry.band,
       strength: entry.strength,
       rawFlux: entry.flux,
-      spectralCentroid: event.centroid,
-      audioSeed: event.seed,
+      spectralCentroid: event.audio.spectralCentroid,
+      audioSeed: event.audio.audioSeed,
       eventCores: chosen.length,
       eventIndex: index,
       siblingIndex,
+      snapshot: {
+        volume: event.audio.volume,
+        bass: event.audio.bass,
+        mid: event.audio.mid,
+        treble: event.audio.treble,
+        bandFlux,
+        winningBand: top.band,
+        spectralCentroid: event.audio.spectralCentroid,
+        onsetStrength: entry.strength,
+        spectralFlatness: event.audio.spectralFlatness,
+        audioSeed: event.audio.audioSeed,
+        eventIndex: index,
+      },
     }));
   }
 }

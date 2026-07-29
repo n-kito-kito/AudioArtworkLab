@@ -358,8 +358,13 @@ export class LightCoreStudy implements LabExpression {
     const events = this.detector.update(
       spectrum,
       {
+        volume: clamp01(audio.volume ?? 0),
+        bass: clamp01(audio.bass ?? 0),
+        mid: clamp01(audio.mid ?? 0),
+        treble: clamp01(audio.treble ?? 0),
         // centroid は engine が対数で 0..1 に正規化済み。Hz の生値は使わない。
         spectralCentroid: clamp01(audio.centroid ?? 0),
+        spectralFlatness: clamp01(audio.flatness ?? 0),
         audioSeed: clamp01(audio.seed ?? 0),
       },
       elapsed,

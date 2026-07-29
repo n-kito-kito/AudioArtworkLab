@@ -15,7 +15,7 @@ import {
 import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
-import { SpatialPositionResolver } from './spatialPositions';
+import { LightSpatialMapping, type LightMappingSettings } from './spatialMapping';
 
 /**
  * Light Traces — Spatial Study。**3D 空間の検証表現**であり、完成版ではない。
@@ -92,6 +92,11 @@ const SPATIAL_STUDY = {
     fluxGain: 2.5,
     cooldownMs: 60,
     relativeStrengthFloor: 1,
+    /** 大きさ・色・動き・軌跡の効き。Phase を進めるごとに既定値を上げていく。 */
+    sizeAmount: 0,
+    colorAmount: 0,
+    motionAmount: 0,
+    trailAmount: 0,
   },
   ranges: {
     attackMs: { min: 1, max: 200, step: 1 },
@@ -103,6 +108,10 @@ const SPATIAL_STUDY = {
     fluxGain: { min: 1, max: 40, step: 0.5 },
     cooldownMs: { min: 0, max: 400, step: 5 },
     relativeStrengthFloor: { min: 0.4, max: 1, step: 0.05 },
+    sizeAmount: { min: 0, max: 1, step: 0.05 },
+    colorAmount: { min: 0, max: 1, step: 0.05 },
+    motionAmount: { min: 0, max: 1, step: 0.05 },
+    trailAmount: { min: 0, max: 1, step: 0.05 },
   },
 } as const;
 
@@ -110,12 +119,16 @@ type SpatialParamKey = keyof typeof SPATIAL_STUDY.defaults;
 
 export type SpatialCorePhase = 'attack' | 'hold' | 'decay' | 'done';
 
-/** 3D 空間の Core 1 個。位置は発生時に決まり、寿命の間ずっと動かない。 */
+/** 3D 空間の Core 1 個。見え方は発生時に決まり、寿命の間ずっと変えない。 */
 interface SpatialCore {
   readonly position: { readonly x: number; readonly y: number; readonly z: number };
   readonly band: BandName;
   readonly onsetStrength: number;
   readonly peakIntensity: number;
+  /** 基準サイズに対する倍率。発生時に確定してちらつかせない。 */
+  readonly size: number;
+  /** 色の比率（明るさは含まない）。発生時に確定する。 */
+  readonly color: { readonly r: number; readonly g: number; readonly b: number };
   currentIntensity: number;
   readonly attackSeconds: number;
   readonly holdSeconds: number;
@@ -145,6 +158,8 @@ export interface SpatialStudyState {
   readonly lastOnsetStrength: number;
   readonly lastPeakIntensity: number;
   readonly lastPosition: { x: number; y: number; z: number } | null;
+  readonly lastColor: { r: number; g: number; b: number };
+  readonly lastSize: number;
   readonly lastPhase: SpatialCorePhase | null;
   readonly lastEventCores: number;
   readonly flux: BandFlux;
@@ -194,8 +209,12 @@ export class LightSpatialStudy implements LabExpression {
 
   /** 音イベントの検出。2D Core Study とまったく同じ検出器を使う。 */
   private readonly detector = new BandLightEventDetector();
-  /** 音から位置を決める側。描画とは分けてある。 */
-  private readonly positions = new SpatialPositionResolver(
+  /**
+   * 音 → 見え方の対応を決める唯一の層（`spatialMapping.ts`）。
+   * 位置・明るさ・大きさ・色・速度・寿命・軌跡はすべてここが決め、
+   * この表現は受け取った値をそのまま描くだけにする。
+   */
+  private readonly mapping = new LightSpatialMapping(
     SPATIAL_STUDY.position,
     SPATIAL_STUDY.maximumCores,
   );
@@ -206,6 +225,8 @@ export class LightSpatialStudy implements LabExpression {
   private lastOnsetStrength = 0;
   private lastPeakIntensity = 0;
   private lastPosition: { x: number; y: number; z: number } | null = null;
+  private lastColor: { r: number; g: number; b: number } = { r: 1, g: 1, b: 1 };
+  private lastSize = 1;
   private lastEventCores = 0;
   private adaptiveThreshold = true;
   private adaptiveStrength = true;
@@ -318,7 +339,13 @@ export class LightSpatialStudy implements LabExpression {
     const events = this.detector.update(
       spectrum,
       {
+        volume: clamp01(audio.volume ?? 0),
+        bass: clamp01(audio.bass ?? 0),
+        mid: clamp01(audio.mid ?? 0),
+        treble: clamp01(audio.treble ?? 0),
+        // centroid は engine が対数で 0..1 に正規化済み。Hz の生値は使わない。
         spectralCentroid: clamp01(audio.centroid ?? 0),
+        spectralFlatness: clamp01(audio.flatness ?? 0),
         audioSeed: clamp01(audio.seed ?? 0),
       },
       elapsed,
@@ -345,28 +372,48 @@ export class LightSpatialStudy implements LabExpression {
    */
   private spawn(event: BandLightEvent): void {
     if (this.cores.length >= SPATIAL_STUDY.maximumCores) this.cores.shift();
-    const minimum = clamp01(this.params.minimumIntensity);
-    const maximum = Math.max(clamp01(this.params.maximumIntensity), minimum);
-    const peakIntensity = minimum + event.strength * (maximum - minimum);
-    const position = this.positions.resolve(event, (depth) => this.visibleHalfExtent(depth));
+    const traits = this.mapping.resolve(
+      event,
+      (depth) => this.visibleHalfExtent(depth),
+      this.mappingSettings(),
+    );
 
     this.cores.push({
-      position,
+      position: traits.position,
       band: event.band,
       onsetStrength: event.strength,
-      peakIntensity,
+      peakIntensity: traits.intensity,
+      size: traits.size,
+      color: traits.color,
       currentIntensity: 0,
-      attackSeconds: this.params.attackMs / 1000,
-      holdSeconds: this.params.holdMs / 1000,
-      decaySeconds: this.params.decayMs / 1000,
+      attackSeconds: traits.lifetime.attackSeconds,
+      holdSeconds: traits.lifetime.holdSeconds,
+      decaySeconds: traits.lifetime.decaySeconds,
       age: 0,
       phase: 'attack',
       completed: false,
     });
     this.lastBand = event.band;
     this.lastOnsetStrength = event.strength;
-    this.lastPeakIntensity = peakIntensity;
-    this.lastPosition = { ...position };
+    this.lastPeakIntensity = traits.intensity;
+    this.lastPosition = { ...traits.position };
+    this.lastColor = { ...traits.color };
+    this.lastSize = traits.size;
+  }
+
+  /** Mapping 層へ渡す運転設定。開発用パラメータをそのまま束ねるだけ。 */
+  private mappingSettings(): LightMappingSettings {
+    return {
+      minimumIntensity: this.params.minimumIntensity,
+      maximumIntensity: this.params.maximumIntensity,
+      attackSeconds: this.params.attackMs / 1000,
+      holdSeconds: this.params.holdMs / 1000,
+      decaySeconds: this.params.decayMs / 1000,
+      sizeAmount: this.params.sizeAmount,
+      colorAmount: this.params.colorAmount,
+      motionAmount: this.params.motionAmount,
+      trailAmount: this.params.trailAmount,
+    };
   }
 
   // ---------------------------------------------------------------- 一生
@@ -458,7 +505,7 @@ export class LightSpatialStudy implements LabExpression {
     this.lastBand = null;
     this.lastEventCores = 0;
     this.lastPosition = null;
-    this.positions.reset();
+    this.mapping.reset();
   }
 
   render(): void {
@@ -577,6 +624,8 @@ export class LightSpatialStudy implements LabExpression {
       lastOnsetStrength: this.lastOnsetStrength,
       lastPeakIntensity: this.lastPeakIntensity,
       lastPosition: this.lastPosition ? { ...this.lastPosition } : null,
+      lastColor: { ...this.lastColor },
+      lastSize: this.lastSize,
       lastPhase: this.cores.length > 0 ? this.cores[this.cores.length - 1]!.phase : null,
       lastEventCores: this.lastEventCores,
       flux: this.detector.bandFlux,
@@ -628,6 +677,10 @@ export class LightSpatialStudy implements LabExpression {
       row('fluxGain', 'Flux gain'),
       row('cooldownMs', 'Cooldown (ms)'),
       row('relativeStrengthFloor', 'Band floor'),
+      row('sizeAmount', 'Size amount'),
+      row('colorAmount', 'Color amount'),
+      row('motionAmount', 'Motion amount'),
+      row('trailAmount', 'Trail'),
       onOff('adaptiveThreshold', 'Adaptive threshold', this.adaptiveThreshold),
       onOff('adaptiveStrength', 'Adaptive strength', this.adaptiveStrength),
     ];
