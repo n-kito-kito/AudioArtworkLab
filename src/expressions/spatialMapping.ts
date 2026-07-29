@@ -40,6 +40,16 @@ export interface LightShape {
   /** 軸のうねり（0 でまっすぐ、大きいほど曲がる）。**振幅は小さく保つ。** */
   readonly waviness: number;
   /**
+   * **軸と直交する方向の太さ**（1 が基準）。長さとは独立した軸で、
+   * `ray` では芯の画素幅への倍率になる。
+   *
+   * ここを持たないと「細い斜線が大量に飛ぶ斬撃」にしかならない。
+   * 低い centroid・Bass 優勢・大音量では太い光条と幅のある膜になり、
+   * 高い centroid では細い回折線に戻る。描画側は板を実際に横へ広げる
+   * （長さを縮めるのではなく、幅が増える）。
+   */
+  readonly thickness: number;
+  /**
    * `plane` のときだけ使う面の法線（ワールド空間）。
    * X/Y/Z 軸平面を基本に、seed で少し傾ける。他の形では null。
    */
@@ -132,9 +142,22 @@ export interface MacroLayerTraits {
   readonly tile: number;
   /** 明るさの倍率（0..1）。 */
   readonly intensity: number;
-  /** 板の半幅・半高（ワールド単位）。**縦横比も seed で変える。** */
+  /**
+   * 板の半幅・半高（**ワールド単位**）。奥行きで割らないので、
+   * 同じ大きさの板でも手前は大きく・奥は小さく写る（遠近が成立する）。
+   */
   readonly halfWidth: number;
   readonly halfHeight: number;
+  /**
+   * 面の法線（ワールド空間）。**カメラ正面固定にしない。**
+   * ビルボードの集合は必ず平面に見えるので、seed で決まる向きに倒して
+   * 実際の 3D 平面として置く。
+   */
+  readonly normal: { readonly x: number; readonly y: number; readonly z: number };
+  /** 面内の回転（ラジアン）。素材の役割で寄り方が変わる。 */
+  readonly spin: number;
+  /** ごくゆっくりした奥行き方向のドリフト（ワールド単位 / 秒）。 */
+  readonly drift: number;
   /**
    * UV のクロップ。素材のどこを・どれだけ切り出すか。
    * 中心 (u, v) と半径 (su, sv) で、全体は必ず 0..1 に収まる。
@@ -193,6 +216,14 @@ export interface LightMappingSettings {
   readonly trailAmount: number;
   /** サブの光の個数の倍率（0〜2）。ユーザーが増減を調整する。 */
   readonly burstDensity: number;
+  /** 太さの効き（0 で音に依らず基準の細さ、1 で範囲いっぱいまで太る）。 */
+  readonly thicknessAmount: number;
+  /** 質感レイヤーが画面周辺まで広がる度合い（0 で中心、1 で最大まで）。 */
+  readonly macroSpreadAmount: number;
+  /** 奥行きの散らばり（0 で中間の段だけ、1 で手前・奥まで使う）。 */
+  readonly depthAmount: number;
+  /** 横へ走る針の出やすさ（0 で縦だけ、1 で横に強く寄る）。 */
+  readonly horizontalRayAmount: number;
   /**
    * 発光の瞬間の sustain（0..1）。Macro layer の余韻の長さに使う。
    *
@@ -337,8 +368,8 @@ export const LIGHT_MAPPING = {
   shapeWeightsWhenMidLeads: { spark: 0.34, needle: 0.36, arc: 0.3 },
   shapeWeightsWhenTrebleLeads: { spark: 0.42, needle: 0.46, arc: 0.12 },
   /** 光条の伸び。centroid が高いほど細く長くなる。 */
-  needleElongationAtLowCentroid: 3.4,
-  needleElongationAtHighCentroid: 9.5,
+  needleElongationAtLowCentroid: 2.6,
+  needleElongationAtHighCentroid: 7,
   /** 弧の伸び。光条より短くて太い。 */
   arcElongationAtLowCentroid: 2.2,
   arcElongationAtHighCentroid: 4.2,
@@ -407,10 +438,10 @@ export const LIGHT_MAPPING = {
    * 帯域に合わない素材が選ばれる余地。
    * 0 にすると帯域ごとに同じ数枚しか出なくなり、素材の切り替えに見えてしまう。
    */
-  macroOffBandWeight: 0.28,
-  /** 1 バーストの枚数（下限・上限）。**Burst 全体で 1〜3 枚まで。** */
+  macroOffBandWeight: 0.12,
+  /** 1 バーストの枚数（下限・上限）。**Burst 全体で 1〜4 枚まで。** */
   macroCountMinimum: 1,
-  macroCountMaximum: 3,
+  macroCountMaximum: 4,
   /** 遅れて開くまでの時間（秒）。Transient のあとに膜が追いつく。 */
   macroDelayMinimum: 0.02,
   macroDelayMaximum: 0.16,
@@ -424,19 +455,33 @@ export const LIGHT_MAPPING = {
   macroHoldMsLong: 250,
   macroDecayMsShort: 350,
   macroDecayMsLong: 1800,
-  /** 大きさ（可視範囲の半分に対する割合）。**Volume が広さと密度を決める。** */
-  macroSizeAtSilence: 0.42,
-  macroSizeAtFullVolume: 1.15,
+  /**
+   * 大きさ（**ワールド単位**の基準に対する倍率）。Volume が広さと密度を決める。
+   * 可視範囲から逆算しない — それをやると奥ほど板も大きくなって遠近が相殺され、
+   * 板の集合が平面に見えてしまう（2D 感の元凶）。
+   */
+  macroSizeAtSilence: 0.55,
+  macroSizeAtFullVolume: 1.25,
   /** 縦横比のばらつき（seed）。1 で正方形、外れるほど引き伸ばされる。 */
   macroAspectMinimum: 0.68,
   macroAspectMaximum: 1.45,
   /** 明るさ（onsetStrength に対する倍率）。**膜なので Transient より淡い。** */
-  macroIntensityMinimum: 0.3,
-  macroIntensityMaximum: 0.72,
-  /** 中心からのずれ（可視範囲の半分に対する割合）。 */
-  macroOffsetSpread: 0.3,
-  /** 奥行きのばらつき（ワールド単位）。層が前後に散って奥行きが出る。 */
-  macroDepthSpread: 3.4,
+  macroIntensityMinimum: 0.42,
+  macroIntensityMaximum: 0.85,
+  /**
+   * 中心からのずれ（可視範囲の半分に対する割合）。**固定値にしない。**
+   * `Volume + Sustain + Novelty` で動かし、強い音・持続音では画面周辺まで
+   * 膜が広がり、静かな音では中心へ戻る。
+   */
+  macroSpreadMinimum: 0.25,
+  macroSpreadMaximum: 0.8,
+  /**
+   * **Hybrid 配置。** 中心に主役を残しつつ、この割合の層だけ周辺へ大きく飛ばす。
+   * center / scatter の二択にはしない。
+   */
+  macroOuterFraction: 0.38,
+  /** 周辺へ飛ばす層の追加倍率（上の spread に掛かる）。 */
+  macroOuterSpreadScale: 1.35,
   /** UV クロップの大きさ（半径。0.5 で素材の半分を使う）。 */
   macroCropMinimum: 0.3,
   macroCropMaximum: 0.62,
@@ -464,10 +509,77 @@ export const LIGHT_MAPPING = {
    */
   macroSaturationFloor: 0.42,
   /** 多角形マスクの効き（板の四角い輪郭を隠し、形を不揃いにする）。 */
-  macroMaskAmountMinimum: 0.45,
-  macroMaskAmountMaximum: 0.95,
+  macroMaskAmountMinimum: 0.32,
+  macroMaskAmountMaximum: 0.7,
   /** Macro layer の分光の広がり（Transient より広く取り、虹寄りにする）。 */
   macroHueSpread: 0.62,
+  /**
+   * **必ず 1 枚は広い膜系にする。** 細線素材（fine-filaments / segmented-rays）
+   * だけで Macro 全体が構成されると、質感ではなく斬撃の束にしか見えない。
+   */
+  macroWideRoles: [
+    'wide-haze',
+    'wide-caustic',
+    'parallel-curtains',
+    'layered-sheets',
+    'curved-volume',
+  ] as readonly string[],
+  /**
+   * **奥行きの 3 段。** 手前 / 中間 / 奥へ散らす（ワールド単位のカメラ距離）。
+   * 板のワールドサイズは深度に比例させないので、手前ほど大きく・奥ほど小さく写る。
+   */
+  macroDepthBands: [
+    // 手前は少し大きく明るい。ワールドサイズはむしろ抑えてある —
+    // 遠近だけで既に 2 倍以上に写るので、そのままだと画面から溢れる。
+    { near: 3, far: 6, size: 0.85, intensity: 1.15 },
+    { near: 7, far: 12, size: 1, intensity: 1 },
+    // 奥は遠近で小さくなりすぎるので、ワールドサイズだけ少し戻す。
+    { near: 13, far: 22, size: 1.2, intensity: 0.72 },
+  ],
+  /** 段の選ばれ方（手前・中間・奥の相対的な出やすさ）。中間をいちばん厚くする。 */
+  macroDepthWeights: [0.28, 0.44, 0.28],
+  /**
+   * 面の傾き（0 でカメラ正面のビルボード、1 で自由な向き）。
+   * **ビルボードのままだと板の集合が平面に見える**ので、seed で必ず倒す。
+   */
+  macroTiltMinimum: 0.25,
+  macroTiltMaximum: 0.85,
+  /** 役割ごとの面内回転の寄り方（0 で自由、1 でその向きに固定）。 */
+  macroRotationBias: {
+    // 縦膜は縦のまま立たせる。
+    'parallel-curtains': { angle: 0, strength: 0.8 },
+    'filament-and-curtain': { angle: 0, strength: 0.7 },
+    'vertical-veil': { angle: 0, strength: 0.7 },
+    // 途切れた斜光は水平・垂直を中心に。
+    'segmented-rays': { angle: Math.PI / 2, strength: 0.62 },
+    // 広い霧は自由。
+    'wide-haze': { angle: 0, strength: 0 },
+    'wide-caustic': { angle: 0, strength: 0.12 },
+  } as Readonly<Record<string, { angle: number; strength: number }>>,
+  /** 3D の傾きを強めに取る役割（曲がるボリューム）。 */
+  macroStrongTiltRoles: ['curved-volume', 'curved-wavefront', 'layered-sheets'] as readonly string[],
+  /** 板の基準の半サイズ（ワールド単位）。中間の段で画面をほぼ埋める大きさ。 */
+  macroWorldHalfSize: 3.4,
+  /** Z 方向のごくゆっくりしたドリフト（ワールド単位 / 秒）。Bass と Sustain で増える。 */
+  macroDriftAtQuiet: 0.05,
+  macroDriftAtLoud: 0.55,
+
+  // ---- 太さ（thickness）----
+  /**
+   * **太さは 3 つの音の量から作る。** 低い centroid が主役で、
+   * Bass 比率と Volume が足す（README の「低音・低 centroid・大音量 = 太い光条」）。
+   */
+  thicknessFromLowCentroid: 0.55,
+  thicknessFromBassShare: 0.3,
+  thicknessFromVolume: 0.15,
+  /** 形ごとの太さの範囲（基準サイズに対する倍率）。 */
+  thicknessNeedleMinimum: 0.55,
+  thicknessNeedleMaximum: 2.4,
+  thicknessArcMinimum: 0.9,
+  thicknessArcMaximum: 3,
+  /** 針（ray）は芯の画素幅への倍率。基準 1.1px に対して 0.7〜3.2px になる。 */
+  thicknessRayMinimum: 0.64,
+  thicknessRayMaximum: 2.9,
 
   // ---- 画面を貫く針（ray）----
   /**
@@ -475,10 +587,15 @@ export const LIGHT_MAPPING = {
    * 有限長の光条（needle）とは別物で、画面端を越える長さを持つ。
    * 強い打撃のときだけ出したいので、onset に敷居を設ける。
    */
-  rayOnsetThreshold: 0.6,
+  rayOnsetThreshold: 0.45,
   /** 敷居を超えたときの本数（下限・上限）。onset の強さで増える。 */
   rayCountMinimum: 1,
-  rayCountMaximum: 3,
+  rayCountMaximum: 4,
+  /**
+   * **横に走る確率。** 縦の斬撃が並ぶより、画面外まで抜ける横の一閃のほうが
+   * 空間の広さを作る。0.5 で縦横同数、1.0 で全部横。
+   */
+  rayHorizontalProbability: 0.68,
   /**
    * 垂直・水平からの傾き（ラジアン）。
    * 完全な十字だと図形的すぎるので、seed でわずかにだけ逸らす。
@@ -579,17 +696,34 @@ export class LightSpatialMapping {
       0.5 + 0.55 * (bass / total - treble / total) + 0.3 * (clamp01(settings.sustain) - 0.5),
     );
 
+    // 画面周辺までの広がり。**固定値にしない** — 強い音・持続音・新奇な打撃ほど
+    // 膜が外へ届き、静かな音では中心へ戻る。
+    const reach = clamp01(
+      volume * 0.45 + clamp01(settings.sustain) * 0.35 + clamp01(snapshot.novelty) * 0.2,
+    );
+    const spreadBase =
+      mix(LIGHT_MAPPING.macroSpreadMinimum, LIGHT_MAPPING.macroSpreadMaximum, reach) *
+      clamp01(settings.macroSpreadAmount);
+    // 太さの素は膜の幅にも効く（低音・低い centroid では幅のある膜になる）。
+    const width = this.thickness(snapshot, settings, 'arc');
+
     const layers: PlannedMacroLayer[] = [];
     for (let i = 0; i < count; i++) {
       const h = (salt: number): number => hash01(...seed, 500 + i, salt);
-      const depth = Math.max(-origin.z + (h(3) * 2 - 1) * LIGHT_MAPPING.macroDepthSpread, 2);
+      // **最低 1 枚は広い膜系。** 細線素材だけで構成されると斬撃の束に見える。
+      const tile = i === 0 ? this.pickWideTile(snapshot, h) : this.pickTile(snapshot, h);
+      const role = this.tiles[tile]?.role ?? '';
+
+      // 奥行きは 3 段（手前 / 中間 / 奥）。段ごとに大きさと明るさが違う。
+      const band = this.pickDepthBand(h(41), clamp01(settings.depthAmount));
+      const depth = mix(band.near, band.far, h(3));
       const extent = visible(depth);
-      const spread = LIGHT_MAPPING.macroOffsetSpread;
-      const size = mix(
-        LIGHT_MAPPING.macroSizeAtSilence,
-        LIGHT_MAPPING.macroSizeAtFullVolume,
-        volume,
-      );
+      // 中心に主役を残しつつ、一部だけ周辺へ大きく飛ばす（Hybrid 配置）。
+      const outer = h(43) < LIGHT_MAPPING.macroOuterFraction;
+      const spread = spreadBase * (outer ? LIGHT_MAPPING.macroOuterSpreadScale : 1);
+      const size =
+        mix(LIGHT_MAPPING.macroSizeAtSilence, LIGHT_MAPPING.macroSizeAtFullVolume, volume) *
+        band.size;
       const aspect = mix(LIGHT_MAPPING.macroAspectMinimum, LIGHT_MAPPING.macroAspectMaximum, h(5));
       // 素材のどこを切り出すか。中心も大きさも毎回変わるので、
       // 同じ素材でも別の絵に見える。全体は必ず 0..1 に収まるよう寄せる。
@@ -597,6 +731,9 @@ export class LightSpatialMapping {
       const cropCenter = (value: number): number =>
         halfCrop + value * Math.max(1 - halfCrop * 2, 0);
       const hueOffset = (h(9) * 2 - 1) * LIGHT_MAPPING.macroHueSpread;
+      // 板のワールド半径。**可視範囲では割らない** — 割ると奥ほど板も大きくなって
+      // 遠近が相殺され、板の集合が 1 枚の平面に見えてしまう。
+      const half = LIGHT_MAPPING.macroWorldHalfSize * size;
 
       layers.push({
         delaySeconds: mix(LIGHT_MAPPING.macroDelayMinimum, LIGHT_MAPPING.macroDelayMaximum, h(11)),
@@ -606,12 +743,23 @@ export class LightSpatialMapping {
             y: origin.y + (h(15) * 2 - 1) * spread * extent.halfHeight,
             z: -depth,
           },
-          tile: this.pickTile(snapshot, h),
+          tile,
           intensity:
             mix(LIGHT_MAPPING.macroIntensityMinimum, LIGHT_MAPPING.macroIntensityMaximum, strength) *
-            mix(0.7, 1, h(17)),
-          halfWidth: extent.halfWidth * size * aspect,
-          halfHeight: extent.halfHeight * size / aspect,
+            mix(0.7, 1, h(17)) *
+            band.intensity,
+          halfWidth: half * aspect * mix(1, width, 0.35),
+          halfHeight: (half / aspect) * mix(1, width, 0.35),
+          // 面はカメラ正面に固定しない。seed の向きへ倒して実 3D 平面として置く。
+          normal: this.macroNormal(role, h, clamp01(settings.depthAmount)),
+          spin: this.macroSpin(role, h),
+          // Bass と Sustain でごくゆっくり奥行き方向へ流れる。
+          drift:
+            mix(
+              LIGHT_MAPPING.macroDriftAtQuiet,
+              LIGHT_MAPPING.macroDriftAtLoud,
+              clamp01((bass / total) * 0.6 + clamp01(settings.sustain) * 0.4),
+            ) * (h(45) < 0.5 ? -1 : 1),
           crop: { u: cropCenter(h(19)), v: cropCenter(h(21)), su: halfCrop, sv: halfCrop },
           rotation: h(23) * Math.PI * 2,
           flipX: h(25) < 0.5 ? -1 : 1,
@@ -662,6 +810,91 @@ export class LightSpatialMapping {
       });
     }
     return layers;
+  }
+
+  /**
+   * **必ず 1 枚は広い膜系から選ぶ。**
+   * 細線素材（fine-filaments / segmented-rays）だけで Macro が構成されると、
+   * 質感ではなく「細い斬撃の束」にしか見えない。強いイベントでも最低 1 枚は
+   * Haze / Sheet 系を確保する。該当が無ければ通常の選び方へ落ちる。
+   */
+  private pickWideTile(snapshot: AudioEventSnapshot, h: (salt: number) => number): number {
+    const wide = LIGHT_MAPPING.macroWideRoles;
+    let total = 0;
+    const weights = this.tiles.map((tile) => {
+      const weight = wide.includes(tile.role) ? tile.weight : 0;
+      total += weight;
+      return weight;
+    });
+    if (total <= 0) return this.pickTile(snapshot, h);
+    let pick = h(47) * total;
+    for (let i = 0; i < weights.length; i++) {
+      pick -= weights[i]!;
+      if (pick <= 0) return i;
+    }
+    return weights.length - 1;
+  }
+
+  /**
+   * 奥行きの段（手前 / 中間 / 奥）。
+   * `amount` が 0 なら中間だけ、1 で手前と奥まで使う。
+   */
+  private pickDepthBand(
+    value: number,
+    amount: number,
+  ): { near: number; far: number; size: number; intensity: number } {
+    const bands = LIGHT_MAPPING.macroDepthBands;
+    const middle = bands[1]!;
+    const weights = LIGHT_MAPPING.macroDepthWeights.map((weight, index) =>
+      index === 1 ? weight + (1 - amount) * (1 - weight) : weight * amount,
+    );
+    const total = weights.reduce((sum, weight) => sum + weight, 0);
+    let pick = value * total;
+    for (let i = 0; i < weights.length; i++) {
+      pick -= weights[i]!;
+      if (pick <= 0) return bands[i] ?? middle;
+    }
+    return middle;
+  }
+
+  /**
+   * 面の法線。**カメラ正面（0,0,1）に固定しない。**
+   * ビルボードの集合はどれだけ数を増やしても平面にしか見えないので、
+   * seed で決まる向きへ倒す。役割によって倒し方の強さを変える
+   * （曲がるボリューム系は強く、縦膜はカメラ寄りのまま立たせる）。
+   */
+  private macroNormal(
+    role: string,
+    h: (salt: number) => number,
+    amount: number,
+  ): { x: number; y: number; z: number } {
+    const strong = LIGHT_MAPPING.macroStrongTiltRoles.includes(role);
+    const tilt =
+      mix(LIGHT_MAPPING.macroTiltMinimum, LIGHT_MAPPING.macroTiltMaximum, h(51)) *
+      (strong ? 1 : 0.7) *
+      Math.max(amount, 0.15);
+    // カメラ方向（+Z）から tilt ぶんだけ倒す。方位は seed で自由。
+    const azimuth = h(53) * Math.PI * 2;
+    const lean = tilt * (Math.PI / 2) * 0.85;
+    const sine = Math.sin(lean);
+    return normalise({
+      x: Math.cos(azimuth) * sine,
+      y: Math.sin(azimuth) * sine,
+      z: Math.cos(lean),
+    });
+  }
+
+  /**
+   * 面内の回転。役割ごとに寄せる向きが違う
+   * （縦膜は縦のまま / 途切れた斜光は水平垂直中心 / 広い霧は自由）。
+   */
+  private macroSpin(role: string, h: (salt: number) => number): number {
+    const bias = LIGHT_MAPPING.macroRotationBias[role];
+    const free = h(55) * Math.PI * 2;
+    if (!bias || bias.strength <= 0) return free;
+    // 目標の向き（180° 対称なので π で畳む）へ、strength ぶんだけ引き寄せる。
+    const target = bias.angle + (h(57) < 0.5 ? 0 : Math.PI);
+    return free + (target - free) * clamp01(bias.strength);
   }
 
   /** 分光に彩度の下限を入れる。色相の並びはそのまま。 */
@@ -738,6 +971,7 @@ export class LightSpatialMapping {
           elongation: LIGHT_MAPPING.mainElongation,
           angle: 0,
           waviness: 0,
+          thickness: 1,
           normal: null,
           pattern: 0,
         },
@@ -810,8 +1044,8 @@ export class LightSpatialMapping {
           trail,
           // 遠くへ飛ぶものは細かいスパークに寄せる。
           shape: outer
-            ? { kind: 'spark', elongation: 1, angle: 0, waviness: 0, normal: null, pattern: 0 }
-            : this.shape(snapshot, h),
+            ? { kind: 'spark', elongation: 1, angle: 0, waviness: 0, thickness: 1, normal: null, pattern: 0 }
+            : this.shape(snapshot, settings, h),
           expansion: { from: 1, to: 1 },
         },
       });
@@ -866,7 +1100,7 @@ export class LightSpatialMapping {
           },
           trail: 0,
           // 図形は 8 種類以上の不均一な多角形から seed が 1 つ選ぶ。
-          shape: { kind: 'plane', elongation: 1, angle: 0, waviness: 0, normal, pattern: h(18) },
+          shape: { kind: 'plane', elongation: 1, angle: 0, waviness: 0, thickness: 1, normal, pattern: h(18) },
           expansion: { from: LIGHT_MAPPING.planeScaleFrom, to: LIGHT_MAPPING.planeScaleTo },
         },
       });
@@ -904,8 +1138,14 @@ export class LightSpatialMapping {
     const lights: PlannedLight[] = [];
     for (let i = 0; i < count; i++) {
       const h = (salt: number): number => hash01(...seed, 700 + i, salt);
-      // 垂直か水平を基本にして、seed でわずかにだけ傾ける。
-      const vertical = h(3) < 0.5;
+      // **横に走るほうを主にする。** 画面外まで抜ける横の一閃が空間の広さを作る。
+      // 縦の斬撃が並ぶ状態にしないためのバイアスで、確率はつまみで動かせる。
+      const horizontalChance = mix(
+        0.5,
+        LIGHT_MAPPING.rayHorizontalProbability,
+        clamp01(settings.horizontalRayAmount),
+      );
+      const vertical = h(3) >= horizontalChance;
       const angle = (vertical ? Math.PI / 2 : 0) + (h(5) * 2 - 1) * LIGHT_MAPPING.rayTiltRadians;
       const hueOffset = (h(7) * 2 - 1) * LIGHT_MAPPING.colorHueSpreadInBurst;
       const lifeScale = mix(
@@ -932,7 +1172,16 @@ export class LightSpatialMapping {
             decaySeconds: settings.decaySeconds * lifeScale,
           },
           trail: 0,
-          shape: { kind: 'ray', elongation: 1, angle, waviness: 0, normal: null, pattern: 0 },
+          shape: {
+            kind: 'ray',
+            elongation: 1,
+            angle,
+            waviness: 0,
+            // Bass 寄り = 淡く太い / 高 centroid・Treble = 細く鋭い。
+            thickness: this.thickness(snapshot, settings, 'ray'),
+            normal: null,
+            pattern: 0,
+          },
           // 長さの割合。描画側が数フレームで 1 まで伸ばす。
           expansion: { from: 0, to: 1 },
         },
@@ -967,7 +1216,11 @@ export class LightSpatialMapping {
    * **波形をそのまま形にはしない。** うねりは「まっすぐな光条は不自然だから
    * わずかに曲げる」ためだけの微小な変形で、波を描くものではない。
    */
-  private shape(snapshot: AudioEventSnapshot, h: (salt: number) => number): LightShape {
+  private shape(
+    snapshot: AudioEventSnapshot,
+    settings: LightMappingSettings,
+    h: (salt: number) => number,
+  ): LightShape {
     const { bass, mid, treble } = snapshot.bandFlux;
     const total = Math.max(bass + mid + treble, 1e-6);
     const weights = {
@@ -1020,7 +1273,45 @@ export class LightSpatialMapping {
       (vertical ? Math.PI / 2 : 0) +
       (h(37) * 2 - 1) * LIGHT_MAPPING.needleAxisDeviation * Math.PI;
 
-    return { kind, elongation, angle, waviness, normal: null, pattern: 0 };
+    return {
+      kind,
+      elongation,
+      angle,
+      waviness,
+      // 太さは長さと独立。低い centroid・Bass 優勢・大音量で実際に幅が増える。
+      thickness: this.thickness(snapshot, settings, kind),
+      normal: null,
+      pattern: 0,
+    };
+  }
+
+  /**
+   * **軸と直交する方向の太さ。**
+   *
+   * 「細い斜線が中心から大量に飛ぶ」状態を抜けるための軸で、長さとは独立させる。
+   *   太さの素 = 低い centroid 55% + Bass 比率 30% + Volume 15%
+   * 低音・低い centroid・大音量では太い光条に、高い centroid では細い回折線に戻る。
+   * `thicknessAmount` が 0 なら音に依らずぴたりと 1.0（基準の細さ）へ戻る。
+   */
+  private thickness(
+    snapshot: AudioEventSnapshot,
+    settings: LightMappingSettings,
+    kind: LightShapeKind,
+  ): number {
+    const { bass, mid, treble } = snapshot.bandFlux;
+    const total = Math.max(bass + mid + treble, 1e-6);
+    const raw = clamp01(
+      LIGHT_MAPPING.thicknessFromLowCentroid * (1 - clamp01(snapshot.spectralCentroid)) +
+        LIGHT_MAPPING.thicknessFromBassShare * (bass / total) +
+        LIGHT_MAPPING.thicknessFromVolume * clamp01(snapshot.volume),
+    );
+    const scaled =
+      kind === 'arc'
+        ? mix(LIGHT_MAPPING.thicknessArcMinimum, LIGHT_MAPPING.thicknessArcMaximum, raw)
+        : kind === 'ray'
+          ? mix(LIGHT_MAPPING.thicknessRayMinimum, LIGHT_MAPPING.thicknessRayMaximum, raw)
+          : mix(LIGHT_MAPPING.thicknessNeedleMinimum, LIGHT_MAPPING.thicknessNeedleMaximum, raw);
+    return mix(1, scaled, clamp01(settings.thicknessAmount));
   }
 
   /**

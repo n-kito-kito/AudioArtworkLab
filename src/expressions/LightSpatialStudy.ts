@@ -105,13 +105,13 @@ const SPATIAL_STUDY = {
      * **板の大きさ＝塗る面積**なので、ここを詰めると描画コストが二乗で効く。
      * バーストで光の数が増えたぶん、以前より小さくして塗り面積を抑えてある。
      */
-    scatterRadius: 3.8,
+    scatterRadius: 5,
     /**
      * 同・強さ。0 で散乱なし。**霧ではなく、光の周りにだけ出る。**
      * 内部 Bloom が滲みを担うようになったので、散乱は控えめでよい。
      * ここを強くすると画面全体が薄く光り、Bloom で一気に白飛びする。
      */
-    scatterStrength: 0.028,
+    scatterStrength: 0.05,
     /**
      * 板を張る余裕（散乱半径の何倍まで確保するか）。
      *
@@ -149,9 +149,9 @@ const SPATIAL_STUDY = {
      * 画なのでそのままで成立するが、こちらは散乱が画面を薄く覆うため、
      * threshold を上げて**明るい核だけを滲ませる**。実測で色が残る範囲に詰めてある。
      */
-    bloomThreshold: 0.3,
-    bloomStrength: 1.15,
-    bloomRadius: 0.28,
+    bloomThreshold: 0.22,
+    bloomStrength: 0.92,
+    bloomRadius: 0.48,
     /**
      * 画面全体の露出。核・滲み・散乱・Bloom をすべて通したあと、最後に掛ける。
      * トーンマップは `1 - exp(-x·exposure)` なので、**黒は必ず黒のまま**。
@@ -174,16 +174,16 @@ const SPATIAL_STUDY = {
    */
   layering: {
     /** 点のスパーク。芯があるので、他より少しだけ濃くてよい。 */
-    spark: 0.17,
+    spark: 0.15,
     /** 針状の光条。細長いぶん塗る面積が出るので薄く。 */
-    needle: 0.125,
+    needle: 0.4,
     /** 波打つ弧。いちばん重なりやすいのでさらに薄く。 */
-    arc: 0.11,
+    arc: 0.34,
     /**
      * 画面を貫く針。芯が 1〜2px しかなく塗る面積が小さいので、
      * 濃度は残す（細く強く鋭い印象がここで決まる）。
      */
-    ray: 0.5,
+    ray: 0.8,
     /**
      * 軸平面のフラッシュ。**膜として透ける**のが役目。
      * 多角形になって塗る面積が画面の 2〜3% まで小さくなったぶん、
@@ -203,7 +203,7 @@ const SPATIAL_STUDY = {
      * メインの光だけに掛ける追加ゲイン。
      * 「強い打撃の中心は強くてよい」ぶんをここで戻す。
      */
-    mainScale: 1.2,
+    mainScale: 0.9,
     /** 軌跡の節に掛ける追加の薄さ。残像はさらに引っ込める。 */
     trailScale: 0.55,
   },
@@ -271,7 +271,7 @@ const SPATIAL_STUDY = {
     /** グローの強さ（芯を 1 としたとき）。 */
     glowStrength: 0.3,
     /** 長さ（画面対角の何倍まで伸ばすか）。1 を超えれば必ず画面外へ出る。 */
-    reachScale: 1.15,
+    reachScale: 1.3,
     /** 全長に達するまでの時間（秒）。数フレーム以内。 */
     growSeconds: 0.045,
     /** 生まれた瞬間の長さの割合。0 だと 1 フレーム目が見えない。 */
@@ -292,7 +292,7 @@ const SPATIAL_STUDY = {
    */
   macro: {
     /** 同時に生かす枚数。Decay が長いので Transient より長く残る。 */
-    maximumLayers: 24,
+    maximumLayers: 14,
     /** アトラスの組み立て。元は 1024px だが、大きく引き伸ばすので落として持つ。 */
     atlas: {
       // Vite の base に追従させる（既定は '/'）。ページの階層に依らず解決できる。
@@ -304,12 +304,12 @@ const SPATIAL_STUDY = {
      * 1 枚あたりの濃度。**膜として透ける**のが役目なので、
      * Transient の芯より薄い。重なったところだけが濃くなる。
      */
-    opacity: 1.25,
+    opacity: 0.8,
     /**
      * 板の四角い輪郭を消す円窓。この半径から外へ向けて 0 になる。
      * **ここを 1.0 に近づけると素材の正方形が見えてしまう。**
      */
-    edgeFadeStart: 0.3,
+    edgeFadeStart: 0.55,
     /**
      * 黒浮きを落とす敷居と幅。素材の暗部を加算の前に切る。
      * これが無いと、薄い Haze が画面全体を灰色に持ち上げる。
@@ -318,19 +318,19 @@ const SPATIAL_STUDY = {
      * 見せたい膜そのものが 0.05〜0.3 に居る。敷居を 0.05 に置くと膜まで
      * 一緒に消えてしまったので、ノイズ側（0.01 以下）だけを切る幅にしてある。
      */
-    blackFloor: 0.024,
-    blackFloorWidth: 0.05,
+    blackFloor: 0.017,
+    blackFloorWidth: 0.042,
     /**
      * 素材の輝度の曲げ。1 で素通し。
      * **1 未満で暗部を持ち上げる。** 素材の膜は元が暗いので、
      * 締める（>1）と芯の細い線しか残らず「膜が漂う」感じが出ない。
      */
-    luminanceGamma: 0.8,
+    luminanceGamma: 0.7,
     /**
      * 多角形マスクの柔らかさ。**硬い面には見せない**ので広くぼかす。
      * 0.5 の前後この幅で切り替わるので、0.2 なら輪郭は完全になだらか。
      */
-    maskSoftness: 0.21,
+    maskSoftness: 0.3,
     /** UV をマスの内側へ寄せる余白。隣の素材へ絶対に滲ませない。 */
     cellInset: 0.004,
   },
@@ -380,11 +380,22 @@ const SPATIAL_STUDY = {
     trailAmount: 0.35,
     /** サブの光の個数の倍率。0 でメインだけ、2 で計算値の倍。 */
     burstDensity: 1,
+    /**
+     * 太さの効き。0 で音に依らず基準の細さ、1 で低音・低 centroid・大音量が
+     * そのまま幅になる。**細い斬撃の束にしないための主要つまみ。**
+     */
+    thicknessAmount: 1,
+    /** 質感レイヤーが画面周辺まで広がる度合い。 */
+    macroSpreadAmount: 1,
+    /** 奥行きの散らばり。0 で中間の段だけ、1 で手前・奥まで使う。 */
+    depthAmount: 1,
+    /** 横へ走る針の出やすさ。0 で縦横同数、1 で横に強く寄る。 */
+    horizontalRayAmount: 1,
     /** 光源そのものの強さ（滲み・露出とは別の役割）。 */
     /** 内部 Bloom。参照デモと同じ操作感で並べる。 */
-    bloomThreshold: 0.3,
-    bloomStrength: 1.15,
-    bloomRadius: 0.28,
+    bloomThreshold: 0.22,
+    bloomStrength: 0.92,
+    bloomRadius: 0.48,
     /** 画面全体の露出。 */
     exposure: 0.95,
     /**
@@ -414,6 +425,10 @@ const SPATIAL_STUDY = {
     motionAmount: { min: 0, max: 1, step: 0.05 },
     trailAmount: { min: 0, max: 1, step: 0.05 },
     burstDensity: { min: 0, max: 2, step: 0.05 },
+    thicknessAmount: { min: 0, max: 1, step: 0.05 },
+    macroSpreadAmount: { min: 0, max: 1.5, step: 0.05 },
+    depthAmount: { min: 0, max: 1, step: 0.05 },
+    horizontalRayAmount: { min: 0, max: 1, step: 0.05 },
     bloomThreshold: { min: 0, max: 1, step: 0.01 },
     bloomStrength: { min: 0, max: 3, step: 0.05 },
     bloomRadius: { min: 0, max: 1.5, step: 0.01 },
@@ -481,6 +496,8 @@ interface MacroLayer {
   currentIntensity: number;
   age: number;
   completed: boolean;
+  /** 発生時からの奥行き方向のドリフト量（ワールド単位）。 */
+  driftZ: number;
 }
 
 /** 開発・検証用に外へ見せる Core 1 個ぶんの状態。 */
@@ -684,6 +701,11 @@ export class LightSpatialStudy implements LabExpression {
   private readonly forms = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
   /** 軸平面が使う多角形の番号（アトラスのセル）。他の形では 0。 */
   private readonly patterns = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
+  /**
+   * 軸と直交する方向の太さ（1 が基準）。
+   * **板を実際に横へ広げる**ので、長さを縮めるのとは別物。
+   */
+  private readonly thicknesses = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
 
   /**
    * Macro layer のインスタンス属性。**素材ごとに Material を作らないための束。**
@@ -701,6 +723,11 @@ export class LightSpatialStudy implements LabExpression {
   private readonly macroWarps = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
   /** 多角形マスクの番号 / 効き / 素材の色を残す割合。 */
   private readonly macroStyles = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 3);
+  /**
+   * 面の法線（xyz）と面内回転（w）。
+   * **ビルボードにしないための向き。** これが無いと板の集合が 1 枚の平面に見える。
+   */
+  private readonly macroNormals = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
   private readonly macroHues = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
   private readonly macroSaturations = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
   private readonly macroAttributes: Record<string, THREE.InstancedBufferAttribute> = {};
@@ -715,6 +742,7 @@ export class LightSpatialStudy implements LabExpression {
   private saturationAttribute: THREE.InstancedBufferAttribute | null = null;
   private formAttribute: THREE.InstancedBufferAttribute | null = null;
   private patternAttribute: THREE.InstancedBufferAttribute | null = null;
+  private thicknessAttribute: THREE.InstancedBufferAttribute | null = null;
   private shapeAttribute: THREE.InstancedBufferAttribute | null = null;
   private normalAttribute: THREE.InstancedBufferAttribute | null = null;
 
@@ -771,6 +799,10 @@ export class LightSpatialStudy implements LabExpression {
 
   setup(context: CompositionContext): void {
     this.context = context;
+    // 同じインスタンスが setup をやり直すことがある（App.setComposition / 表現の再適用）。
+    // dispose の印を残したままだと、素材の読み込みが「もう捨てられた」と判断して
+    // アトラスを結び直さず、Macro layer が黙って真っ黒になる。
+    this.disposed = false;
     // 多角形の帳面は起動時に一度だけ焼く（決定論。毎フレームの費用はゼロ）。
     this.atlas = createPolygonAtlas(SPATIAL_STUDY.planeAtlas);
     this.camera = new THREE.PerspectiveCamera(
@@ -814,6 +846,9 @@ export class LightSpatialStudy implements LabExpression {
     this.patternAttribute = new THREE.InstancedBufferAttribute(this.patterns, 1);
     this.patternAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aPattern', this.patternAttribute);
+    this.thicknessAttribute = new THREE.InstancedBufferAttribute(this.thicknesses, 1);
+    this.thicknessAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('aThickness', this.thicknessAttribute);
     this.normalAttribute = new THREE.InstancedBufferAttribute(this.normals, 3);
     this.normalAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aShape', this.shapeAttribute);
@@ -884,6 +919,7 @@ export class LightSpatialStudy implements LabExpression {
         attribute vec4 aSaturations;
         attribute float aForm;
         attribute float aPattern;
+        attribute float aThickness;
         attribute vec4 aShape;
         attribute vec3 aNormal;
         uniform float uSize;
@@ -900,13 +936,17 @@ export class LightSpatialStudy implements LabExpression {
         varying float vPattern;
         varying float vDistanceFade;
         varying vec3 vShape;
+        varying float vThickness;
 
         void main() {
           // 板は「核 + 滲み + 散乱」を全部含む大きさで張る。
           // vLocal は核の半径を 1 とした座標なので、散乱の広がりぶん外側まで伸びる。
           // 光条は軸方向にだけ引き伸ばすので、その伸びぶんも板に含める。
           float elongation = max(aShape.x, 1.0);
-          vec2 stretched = position.xy * vec2(elongation, 1.0);
+          float thickness = max(aThickness, 0.05);
+          // **軸と直交する方向へ実際に広げる。** 長さを縮めるのではなく幅が増えるので、
+          // 低音・低い centroid では太い光条、高い centroid では細い回折線になる。
+          vec2 stretched = position.xy * vec2(elongation, thickness);
           vLocal = stretched * 2.0 * uSpan;
           vIntensity = aIntensity;
           vHues = aHues;
@@ -914,6 +954,7 @@ export class LightSpatialStudy implements LabExpression {
           vForm = aForm;
           vPattern = aPattern;
           vShape = vec3(elongation, aShape.z, aShape.w);
+          vThickness = thickness;
           // ビュー空間で板を広げるので、板は常にカメラを向く（ビルボード）。
           // 大きさはワールド単位のまま置くだけで、遠近は投影行列が付ける。
           // 軸方向へ伸ばしてから、向きのぶんだけ回す。
@@ -938,7 +979,8 @@ export class LightSpatialStudy implements LabExpression {
             float reach = length(vec2(halfWidth, halfHeight)) * uRay.z * aSize;
             // 芯の太さは画素で決める。ワールド単位だと奥行きで太さが変わってしまう。
             float pixel = 2.0 * halfHeight / max(uView.z, 1.0);
-            float halfThickness = uRay.x * pixel * uRay.y;
+            // 芯の画素幅も太さに連動する（Bass 寄り = 淡く太い / Treble = 細く鋭い）。
+            float halfThickness = uRay.x * thickness * pixel * uRay.y;
             vec2 local = vec2(position.x * 2.0 * reach, position.y * 2.0 * halfThickness);
             float rc = cos(aShape.y);
             float rs = sin(aShape.y);
@@ -990,6 +1032,7 @@ export class LightSpatialStudy implements LabExpression {
         varying float vPattern;
         varying float vDistanceFade;
         varying vec3 vShape;
+        varying float vThickness;
 
         // 半径 r のガウス。radius を変えるだけで核・滲み・散乱を作り分ける。
         float glow(float d2, float radius) {
@@ -1035,7 +1078,8 @@ export class LightSpatialStudy implements LabExpression {
           float elongation = max(vShape.x, 1.0);
           // うねりを距離にも効かせる。芯がわずかに蛇行して見える。
           float bend = sin(vLocal.x * 1.7) * vShape.y * 0.22;
-          vec2 axis = vec2(vLocal.x / elongation, vLocal.y + bend);
+          // 伸びと太さを戻して等方に測る。太いほどガウスが横へ広がる。
+          vec2 axis = vec2(vLocal.x / elongation, (vLocal.y + bend) / max(vThickness, 0.05));
           float d2 = dot(axis, axis);
 
           // 画面を貫く針。芯は画素で太さが決まっているので、ここでは
@@ -1114,7 +1158,7 @@ export class LightSpatialStudy implements LabExpression {
           // 露出は最後の表示パスで 1 回だけ掛ける。ここでは光源の強さだけ。
           level *= max(vIntensity, 0.0) * vDistanceFade * uIntensity;
           // 板の縁で必ず 0 にする窓。これがないと散乱が四角く切れて継ぎ目が見える。
-          vec2 window = vec2(vLocal.x / elongation, vLocal.y) / uSpan;
+          vec2 window = vec2(vLocal.x / elongation, vLocal.y / max(vThickness, 0.05)) / uSpan;
           float edge = clamp(1.0 - dot(window, window), 0.0, 1.0);
           gl_FragColor = vec4(max(level * edge * edge, 0.0), 1.0);
         }
@@ -1242,6 +1286,7 @@ export class LightSpatialStudy implements LabExpression {
     add('aOrient', this.macroOrients, 4);
     add('aWarp', this.macroWarps, 4);
     add('aStyle', this.macroStyles, 3);
+    add('aNormal', this.macroNormals, 4);
     add('aHues', this.macroHues, 4);
     add('aSaturations', this.macroSaturations, 4);
     geometry.instanceCount = 0;
@@ -1282,6 +1327,7 @@ export class LightSpatialStudy implements LabExpression {
         attribute vec4 aOrient;
         attribute vec4 aWarp;
         attribute vec3 aStyle;
+        attribute vec4 aNormal;
         attribute vec4 aHues;
         attribute vec4 aSaturations;
         varying vec2 vLocal;
@@ -1305,10 +1351,21 @@ export class LightSpatialStudy implements LabExpression {
           vStyle = aStyle;
           vHues = aHues;
           vSaturations = aSaturations;
-          // ビュー空間で広げるビルボード。膜は常にカメラを向く。
-          vec4 viewPosition = modelViewMatrix * vec4(aOffset, 1.0);
-          viewPosition.xy += vLocal * vec2(aSize.x, aSize.y);
-          gl_Position = projectionMatrix * viewPosition;
+          // **ビルボードにしない。** 法線から接線・従法線を組み、ワールド空間で
+          // 傾いた平面として広げる。カメラ正面固定だと、板を何枚重ねても
+          // 集合が 1 枚の平面にしか見えず奥行きが出ない。
+          vec3 n = normalize(aNormal.xyz);
+          vec3 helper = abs(n.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+          vec3 tangent = normalize(cross(helper, n));
+          vec3 bitangent = cross(n, tangent);
+          // 面内回転。素材の役割で寄せる向きが違う（縦膜は縦のまま等）。
+          float cs = cos(aNormal.w);
+          float sn = sin(aNormal.w);
+          vec3 axisU = tangent * cs + bitangent * sn;
+          vec3 axisV = bitangent * cs - tangent * sn;
+          // 大きさはワールド単位のまま。遠近は投影行列だけが付ける。
+          vec3 world = aOffset + axisU * (vLocal.x * aSize.x) + axisV * (vLocal.y * aSize.y);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
         }
       `,
       fragmentShader: /* glsl */ `
@@ -1555,7 +1612,7 @@ export class LightSpatialStudy implements LabExpression {
   /** 質感レイヤーを 1 枚開く。上限に達したら最も古いものから捨てる。 */
   private spawnMacro(traits: MacroLayerTraits): void {
     if (this.macros.length >= SPATIAL_STUDY.macro.maximumLayers) this.macros.shift();
-    this.macros.push({ traits, currentIntensity: 0, age: 0, completed: false });
+    this.macros.push({ traits, currentIntensity: 0, age: 0, completed: false, driftZ: 0 });
   }
 
   /** 予定 1 つから光を 1 つ生む。見え方はすでに Mapping 層が決めている。 */
@@ -1608,6 +1665,10 @@ export class LightSpatialStudy implements LabExpression {
       motionAmount: this.params.motionAmount,
       trailAmount: this.params.trailAmount,
       burstDensity: this.params.burstDensity,
+      thicknessAmount: this.params.thicknessAmount,
+      macroSpreadAmount: this.params.macroSpreadAmount,
+      depthAmount: this.params.depthAmount,
+      horizontalRayAmount: this.params.horizontalRayAmount,
       sustain: this.lastSustain,
       placementMode: this.placementMode,
     };
@@ -1688,6 +1749,7 @@ export class LightSpatialStudy implements LabExpression {
     for (let read = 0; read < this.macros.length; read++) {
       const layer = this.macros[read]!;
       layer.age += delta;
+      layer.driftZ += layer.traits.drift * delta;
       const { attackSeconds: attack, holdSeconds: hold, decaySeconds: decay } = layer.traits.lifetime;
       const peak = layer.traits.intensity;
       if (layer.age < attack) {
@@ -1720,7 +1782,8 @@ export class LightSpatialStudy implements LabExpression {
       const t = layer.traits;
       this.macroOffsets[slot * 3] = t.position.x;
       this.macroOffsets[slot * 3 + 1] = t.position.y;
-      this.macroOffsets[slot * 3 + 2] = t.position.z;
+      // Bass と Sustain でごくゆっくり前後へ流れる（発生時に決まった速度）。
+      this.macroOffsets[slot * 3 + 2] = t.position.z + layer.driftZ;
       this.macroSizes[slot * 3] = t.halfWidth;
       this.macroSizes[slot * 3 + 1] = t.halfHeight;
       this.macroSizes[slot * 3 + 2] = t.tile;
@@ -1741,6 +1804,10 @@ export class LightSpatialStudy implements LabExpression {
       this.macroStyles[slot * 3] = Math.min(Math.floor(t.maskPattern * maskCount), maskCount - 1);
       this.macroStyles[slot * 3 + 1] = t.maskAmount;
       this.macroStyles[slot * 3 + 2] = t.sourceTint;
+      this.macroNormals[slot * 4] = t.normal.x;
+      this.macroNormals[slot * 4 + 1] = t.normal.y;
+      this.macroNormals[slot * 4 + 2] = t.normal.z;
+      this.macroNormals[slot * 4 + 3] = t.spin;
       for (let c = 0; c < 4; c++) {
         this.macroHues[slot * 4 + c] = t.gradient.hues[c]!;
         this.macroSaturations[slot * 4 + c] = t.gradient.saturations[c]!;
@@ -1769,6 +1836,7 @@ export class LightSpatialStudy implements LabExpression {
     if (!this.geometry || !this.offsetAttribute || !this.intensityAttribute) return;
     if (!this.sizeAttribute || !this.hueAttribute || !this.shapeAttribute) return;
     if (!this.saturationAttribute || !this.formAttribute || !this.patternAttribute) return;
+    if (!this.thicknessAttribute) return;
     const patternCount = Math.max(this.atlas?.patterns ?? 1, 1);
     let slot = 0;
     const write = (
@@ -1792,6 +1860,7 @@ export class LightSpatialStudy implements LabExpression {
       this.forms[slot] = gradient.form;
       // 0..1 の割合を帳面のセル番号へ。枚数は描画側だけが知っている。
       this.patterns[slot] = Math.min(Math.floor(shape.pattern * patternCount), patternCount - 1);
+      this.thicknesses[slot] = Math.max(shape.thickness, 0.05);
       this.shapes[slot * 4] = shape.elongation;
       this.shapes[slot * 4 + 1] = shape.angle;
       this.shapes[slot * 4 + 2] = shape.waviness;
@@ -1835,6 +1904,7 @@ export class LightSpatialStudy implements LabExpression {
     this.saturationAttribute.needsUpdate = true;
     this.formAttribute.needsUpdate = true;
     this.patternAttribute.needsUpdate = true;
+    this.thicknessAttribute!.needsUpdate = true;
     this.shapeAttribute.needsUpdate = true;
     this.normalAttribute!.needsUpdate = true;
   }
@@ -2100,6 +2170,10 @@ export class LightSpatialStudy implements LabExpression {
       row('motionAmount', 'Motion amount'),
       row('trailAmount', 'Trail'),
       row('burstDensity', 'Burst density'),
+      row('thicknessAmount', 'Thickness'),
+      row('macroSpreadAmount', 'Macro spread'),
+      row('depthAmount', 'Depth'),
+      row('horizontalRayAmount', 'Horizontal rays'),
       row('thresholdScale', 'Onset reach'),
       row('bloomThreshold', 'Bloom threshold'),
       row('bloomStrength', 'Bloom strength'),
@@ -2194,6 +2268,7 @@ export class LightSpatialStudy implements LabExpression {
     this.saturationAttribute = null;
     this.formAttribute = null;
     this.patternAttribute = null;
+    this.thicknessAttribute = null;
     this.shapeAttribute = null;
     this.normalAttribute = null;
     this.camera = null;
