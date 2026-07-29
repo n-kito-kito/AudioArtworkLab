@@ -5,6 +5,7 @@ import { Cymatics } from '../fields/Cymatics';
 import { CymaticsV2 } from '../fields/CymaticsV2';
 import { CymaticsPlate } from './CymaticsPlate';
 import { LightCoreStudy } from './LightCoreStudy';
+import { LightSpatialStudy } from './LightSpatialStudy';
 import { LightTraces } from './LightTraces';
 import { ModularPatternField } from './ModularPatternField';
 import { ReactiveGeometry } from './ReactiveGeometry';
@@ -23,6 +24,7 @@ export type ExpressionId =
   | 'modular-v1'
   | 'light-traces-v1'
   | 'light-core-study-v1'
+  | 'light-spatial-study-v1'
   | 'reactive-geometry-v1';
 
 export interface ExpressionVersion {
@@ -91,6 +93,13 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
     label: 'Light Traces — Core Study',
     versions: [{ id: 'light-core-study-v1', label: 'V1' }],
   },
+  // 3D 空間の検証表現。音の検出は 2D Core Study と同じ検出器を共有し、
+  // 「固定カメラの奥行きで前後関係が読めるか」だけを見る。2D は温存する。
+  {
+    id: 'light-spatial-study',
+    label: 'Light Traces — Spatial Study',
+    versions: [{ id: 'light-spatial-study-v1', label: 'V1' }],
+  },
   {
     id: 'reactive-geometry',
     label: 'Reactive Geometry',
@@ -126,6 +135,7 @@ export function createExpression(
   if (id === 'modular-v1') return new ModularPatternField(effects, theme);
   if (id === 'light-traces-v1') return new LightTraces(effects, theme);
   if (id === 'light-core-study-v1') return new LightCoreStudy(effects, theme);
+  if (id === 'light-spatial-study-v1') return new LightSpatialStudy(effects, theme);
   if (id === 'reactive-geometry-v1') return new ReactiveGeometry(effects, theme);
   applyTuning(id);
   const field = id === 'cymatics-v2' ? new CymaticsV2() : new Cymatics();
