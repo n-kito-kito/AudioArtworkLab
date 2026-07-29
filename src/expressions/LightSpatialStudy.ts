@@ -69,6 +69,46 @@ const SPATIAL_STUDY = {
   trailIntensityAtTail: 0,
   /** 軌跡の節の大きさ（先端に対する末尾の倍率）。細くなるほど「光跡」に見える。 */
   trailSizeAtTail: 0.35,
+
+  /**
+   * 光学的な質感。**1 つずつ切って比べられるように、効きを別々の定数にしてある。**
+   * どれも「光がある場所でだけ見える」ものに限る。画面全体へ白をかぶせない。
+   */
+  optics: {
+    /** 中心核の締まり具合。大きいほど芯が小さく硬くなる。 */
+    coreSharpness: 3.4,
+    /** 中距離の滲み（Bloom 相当）の広がり。核の何倍まで届くか。 */
+    haloRadius: 3.2,
+    /** 同・強さ。0 で滲みなし。 */
+    haloStrength: 0.3,
+    /** 広く弱い散乱光の広がり。 */
+    scatterRadius: 6.5,
+    /** 同・強さ。0 で散乱なし。**霧ではなく、光の周りにだけ出る。** */
+    scatterStrength: 0.05,
+    /**
+     * 板を張る余裕（散乱半径の何倍まで確保するか）。
+     *
+     * ここを詰めすぎると、散乱がまだ十分明るいところで板の縁に達し、
+     * **四角い継ぎ目**として見えてしまう（2D Light Traces の fog で踏んだのと同じ罠）。
+     * 余裕を持たせたうえで、縁で必ず 0 になる窓関数も掛けて二重に防ぐ。
+     */
+    scatterSpanMargin: 1.7,
+    /**
+     * RGB の微小な空間分離。色収差のように、色ごとに滲みの半径をわずかに変える。
+     * 0 で分離なし。大きくすると輪郭に色が付く。
+     */
+    chromaticSeparation: 0.09,
+    /**
+     * 距離によるごく弱いコントラスト差。奥ほどわずかに沈む。
+     * 0 で完全に無効（遠近法だけで見る状態に戻る）。
+     */
+    distanceContrast: 0.22,
+    /** 同・効き始める距離と効ききる距離。 */
+    contrastNearDepth: 5,
+    contrastFarDepth: 17,
+    /** 画面全体の露出。核・滲み・散乱をすべて通したあとに最後に掛ける。 */
+    exposure: 1,
+  },
   /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
   maximumDelta: 0.05,
   /** Decay の曲がり。大きいほど頭で速く落ちる。 */
@@ -321,6 +361,25 @@ export class LightSpatialStudy implements LabExpression {
       uniforms: {
         uSize: { value: SPATIAL_STUDY.coreWorldSize },
         uFalloff: { value: SPATIAL_STUDY.coreFalloff },
+        uCoreSharpness: { value: SPATIAL_STUDY.optics.coreSharpness },
+        uHalo: { value: new THREE.Vector2(SPATIAL_STUDY.optics.haloRadius, SPATIAL_STUDY.optics.haloStrength) },
+        uScatter: { value: new THREE.Vector2(SPATIAL_STUDY.optics.scatterRadius, SPATIAL_STUDY.optics.scatterStrength) },
+        uChromatic: { value: SPATIAL_STUDY.optics.chromaticSeparation },
+        uExposure: { value: SPATIAL_STUDY.optics.exposure },
+        // 板を張る倍率。散乱がいちばん外まで届くので、その半径 × 余裕で決める。
+        uSpan: {
+          value: Math.max(
+            SPATIAL_STUDY.optics.scatterRadius * SPATIAL_STUDY.optics.scatterSpanMargin,
+            1,
+          ),
+        },
+        uContrast: {
+          value: new THREE.Vector3(
+            SPATIAL_STUDY.optics.distanceContrast,
+            SPATIAL_STUDY.optics.contrastNearDepth,
+            SPATIAL_STUDY.optics.contrastFarDepth,
+          ),
+        },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -333,34 +392,75 @@ export class LightSpatialStudy implements LabExpression {
         attribute float aSize;
         attribute vec3 aColor;
         uniform float uSize;
+        uniform float uSpan;
+        uniform vec3 uContrast;
         varying vec2 vLocal;
         varying float vIntensity;
         varying vec3 vColor;
+        varying float vDistanceFade;
 
         void main() {
-          vLocal = position.xy * 2.0;
+          // 板は「核 + 滲み + 散乱」を全部含む大きさで張る。
+          // vLocal は核の半径を 1 とした座標なので、散乱の広がりぶん外側まで伸びる。
+          vLocal = position.xy * 2.0 * uSpan;
           vIntensity = aIntensity;
           vColor = aColor;
           // ビュー空間で板を広げるので、板は常にカメラを向く（ビルボード）。
           // 大きさはワールド単位のまま置くだけで、遠近は投影行列が付ける。
           vec4 viewPosition = modelViewMatrix * vec4(aOffset, 1.0);
-          viewPosition.xy += position.xy * uSize * aSize;
+          viewPosition.xy += position.xy * uSize * aSize * uSpan;
+          // 奥ほどわずかに沈ませる（距離のコントラスト差）。強くはしない。
+          float depth = -viewPosition.z;
+          float t = clamp((depth - uContrast.y) / max(uContrast.z - uContrast.y, 0.001), 0.0, 1.0);
+          vDistanceFade = 1.0 - uContrast.x * t;
           gl_Position = projectionMatrix * viewPosition;
         }
       `,
       fragmentShader: /* glsl */ `
         precision highp float;
         uniform float uFalloff;
+        uniform float uSpan;
+        uniform float uCoreSharpness;
+        uniform vec2 uHalo;
+        uniform vec2 uScatter;
+        uniform float uChromatic;
+        uniform float uExposure;
         varying vec2 vLocal;
         varying float vIntensity;
         varying vec3 vColor;
+        varying float vDistanceFade;
+
+        // 半径 r のガウス。radius を変えるだけで核・滲み・散乱を作り分ける。
+        float glow(float d2, float radius) {
+          return exp(-d2 / max(radius * radius, 0.0001));
+        }
 
         void main() {
-          float d = dot(vLocal, vLocal);
+          float d2 = dot(vLocal, vLocal);
+
+          // ① 明るい中心核。締まった芯。
+          float core = glow(d2 * uCoreSharpness, 1.0 / max(uFalloff, 0.0001));
+          // ② 中距離の滲み。核の周りにだけ出る（画面全体には広げない）。
+          float halo = glow(d2, uHalo.x) * uHalo.y;
+          // ③ 広く弱い散乱光。**光がある場所でだけ**見えるので、
+          //    白いオーバーレイのように画面へかぶせることはない。
+          float scatter = glow(d2, uScatter.x) * uScatter.y;
+
+          // ④ RGB の微小な空間分離。色ごとに滲みの半径をわずかにずらす。
+          vec3 spread = vec3(1.0 + uChromatic, 1.0, 1.0 - uChromatic);
+          vec3 chroma = vec3(
+            glow(d2, uHalo.x * spread.r),
+            glow(d2, uHalo.x * spread.g),
+            glow(d2, uHalo.x * spread.b)
+          ) * uHalo.y * uChromatic;
+
           // 明るさ（vIntensity）と色の比率（vColor）は最後まで別々に持つ。
           // 音量が大きいだけで色が白へ飽和しないようにするための分離。
-          float level = vIntensity * exp(-d * uFalloff);
-          gl_FragColor = vec4(vColor * max(level, 0.0), 1.0);
+          vec3 level = vColor * (core + halo + scatter) + chroma * vColor;
+          level *= max(vIntensity, 0.0) * vDistanceFade * uExposure;
+          // 板の縁で必ず 0 にする窓。これがないと散乱が四角く切れて継ぎ目が見える。
+          float edge = clamp(1.0 - d2 / (uSpan * uSpan), 0.0, 1.0);
+          gl_FragColor = vec4(max(level * edge * edge, 0.0), 1.0);
         }
       `,
     });
