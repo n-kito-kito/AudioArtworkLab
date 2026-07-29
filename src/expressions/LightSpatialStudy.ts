@@ -25,6 +25,7 @@ import {
   type LightMappingSettings,
   type LightRole,
   type LightShape,
+  type LightShapeKind,
   type LightVisualTraits,
 } from './spatialMapping';
 
@@ -144,6 +145,44 @@ const SPATIAL_STUDY = {
      */
     exposure: 0.95,
   },
+  /**
+   * **層の濃度設計。** 狙いは「発光体」ではなく
+   * **プリズムを通った光が空間に現れた**状態で、1 枚あたりの寄与を薄くし、
+   * 加算で重なったところだけが濃くなるようにする。
+   *
+   * 値は「その形 1 枚が単独で出せる濃さの倍率」で、Intensity スライダー
+   * （既定 2.2）に掛かる。単層で白へ張り付かず、2 枚・3 枚と重なった段が
+   * 目で数えられるところに置いてある。
+   *
+   * 実測（サブのスパーク 1 枚を同じ位置に重ねたときの最大輝度 / 255）:
+   *   1 枚 60 → 2 枚 134 → 3 枚 184 → 4 枚 235。
+   * この 1 枚ぶんを 2 倍以上に上げると 2 枚目で 246 まで飛び、段が読めなくなる
+   * （内部 Bloom の閾値 0.3 より上が超線形に効くため、単純な加算より速く飽和する）。
+   */
+  layering: {
+    /** 点のスパーク。芯があるので、他より少しだけ濃くてよい。 */
+    spark: 0.17,
+    /** 針状の光条。細長いぶん塗る面積が出るので薄く。 */
+    needle: 0.125,
+    /** 波打つ弧。いちばん重なりやすいのでさらに薄く。 */
+    arc: 0.11,
+    /**
+     * 軸平面のフラッシュ。**膜として透ける**のが役目。
+     * もともと `1 - r` の緩い減衰しか持たず単独では暗いので、点や光条ほどは落とさない。
+     * ただし 1 バーストで最大 6 枚が最大 16 倍まで開くので、
+     * **重なると画面全体を覆う veil になる**のがこの形の危険。
+     * 0.55 では強い打撃で画面が白い霧に沈んだので、そこからさらに落としてある。
+     */
+    plane: 0.32,
+    /**
+     * メインの光だけに掛ける追加ゲイン。
+     * 「強い打撃の中心は強くてよい」ぶんをここで戻す。
+     */
+    mainScale: 1.45,
+    /** 軌跡の節に掛ける追加の薄さ。残像はさらに引っ込める。 */
+    trailScale: 0.55,
+  },
+
   /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
   maximumDelta: 0.05,
   /** Decay の曲がり。大きいほど頭で速く落ちる。 */
@@ -340,6 +379,23 @@ const expansionAt = (core: {
   const t = clamp01(core.age / life);
   // 頭が速く、あとは緩やかに広がる。
   return from + (to - from) * (1 - (1 - t) * (1 - t));
+};
+
+/**
+ * 1 枚あたりの濃度。形と役割だけで決まり、時間では変わらない。
+ * ここを通した明るさが加算されるので、**重なった段が層として読める**。
+ */
+const layerOpacity = (kind: LightShapeKind, role: LightRole): number => {
+  const layering = SPATIAL_STUDY.layering;
+  const base =
+    kind === 'needle'
+      ? layering.needle
+      : kind === 'arc'
+        ? layering.arc
+        : kind === 'plane'
+          ? layering.plane
+          : layering.spark;
+  return base * (role === 'main' ? layering.mainScale : 1);
 };
 
 /** t = 0 で 1、t = 1 でちょうど 0 になる指数曲線（2D と同じ形）。 */
@@ -979,17 +1035,20 @@ export class LightSpatialStudy implements LabExpression {
 
     for (const core of this.cores) {
       // 大きさと色は発生時に確定した値。毎フレーム作り直さないのでちらつかない。
-      write(core.position.x, core.position.y, core.position.z, core.currentIntensity,
+      write(core.position.x, core.position.y, core.position.z,
+        core.currentIntensity * layerOpacity(core.shape.kind, core.role),
         core.size * expansionAt(core), core.color, core.shape);
     }
     // 軌跡は 3D の位置履歴そのもの（2D の残像合成ではない）。
     // 先端ほど明るく太く、末尾へ向かって細く暗くなる。
     for (const core of this.cores) {
       if (core.trail <= 0) continue;
+      const opacity = layerOpacity(core.shape.kind, core.role) * SPATIAL_STUDY.layering.trailScale;
       for (let k = 0; k < core.historyCount; k++) {
         const fade = (k + 1) / SPATIAL_STUDY.trailSegments;
         const intensity =
-          core.currentIntensity * (1 - fade) * (1 - fade) * (1 - SPATIAL_STUDY.trailIntensityAtTail);
+          core.currentIntensity * opacity * (1 - fade) * (1 - fade) *
+          (1 - SPATIAL_STUDY.trailIntensityAtTail);
         if (intensity <= 0.002) continue;
         const size = core.size * (1 - fade * (1 - SPATIAL_STUDY.trailSizeAtTail));
         write(core.history[k * 3]!, core.history[k * 3 + 1]!, core.history[k * 3 + 2]!, intensity, size, core.color, core.shape);
