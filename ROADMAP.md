@@ -252,7 +252,18 @@ RecordingController・QualityMonitor は再接続済み。
         明るさには従来どおり正規化後の strength を使う）。`relativeStrengthFloor`
         （既定 1.0 = 最強のみ）を下げると同時 Core が増える。合成 Gate は観察専用に反転。
         reference.wav は Core 60 個（結合前の帯域イベント 63 → 60）で、区間分布も従来どおり
-  - [ ] 同時発光時の位置設計 — floor を下げると複数 Core が同じ centroid に重なる（未決）
+  - [x] 検出処理を描画から分離（`src/engine/bandLightEvents.ts` の `BandLightEventDetector`）。
+        帯域別フラックス → 帯域別 Gate → 結合窓 → 帯域選択までを 2D と 3D で共有する。
+        抽出前後で 2D のイベント列は完全一致（合成シナリオのハッシュが一致）
+  - [x] 試作: Light Traces — Spatial Study（`light-spatial-study-v1`）— 固定 PerspectiveCamera の
+        3D 空間へ光を置く検証表現。**2D Core Study は回帰確認用に完全温存**。
+        Core はカメラを向く板を InstancedMesh 1 ドローで描き、PointLight は使わない。
+        位置は `SpatialPositionResolver` が音（シード・帯域・通し番号・重心）から
+        決定論的に決め、カメラのフラスタムから逆算するのでどの画角でも画面外へ出ない。
+        同時発光は最低距離を満たすまで引き直す。距離減衰は入れず遠近法だけで奥行きを見る
+  - [ ] Spatial Study の次段階 — 帯域ごとの色・大きさ / 空間の手掛かり（グリッドや霧）/
+        カメラのゆっくりした動き / 距離に応じた明るさの検討
+  - [ ] 同時発光時の位置設計（2D 側）— floor を下げると複数 Core が同じ centroid に重なる（未決）
   - [ ] band-demo.wav のハイハットを帯域制限する — 現状 `hatAt()` が無フィルタの白色雑音で、
         6〜12 秒の「Treble 単独」区間でも 3 帯域のフラックスがほぼ同値（0.325/0.307/0.309）。
         帯域の切り分け検証には高域だけに絞った音が要る

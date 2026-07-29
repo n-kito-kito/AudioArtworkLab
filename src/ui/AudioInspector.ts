@@ -1,6 +1,7 @@
 import type { FileAudioEngine } from '../audio/FileAudioEngine';
 import type { LabExpression } from '../expressions/Expression';
 import { LightCoreStudy } from '../expressions/LightCoreStudy';
+import { LightSpatialStudy } from '../expressions/LightSpatialStudy';
 
 /**
  * Audio Feature Inspector（開発・検証用）。
@@ -125,27 +126,30 @@ export class AudioInspector {
     this.animationId = requestAnimationFrame(this.update);
   }
 
-  /** 表現が差し替わったときに Core Study 用のブロックを組み直す。 */
+  /** 表現が差し替わったときに、その表現用のブロックを組み直す。 */
   refresh(): void {
     this.coreBlock.replaceChildren();
     const composition = this.getComposition();
-    if (!(composition instanceof LightCoreStudy)) return;
+    const spatial = composition instanceof LightSpatialStudy;
+    if (!(composition instanceof LightCoreStudy) && !spatial) return;
 
-    // 新方式のフラックスは、上に並んだ engine の onset とすぐ見比べられる位置に置く。
-    const fluxTitle = document.createElement('h3');
-    fluxTitle.className = 'control-subheading';
-    fluxTitle.textContent = 'Spectral flux (new)';
-    this.coreBlock.append(fluxTitle, this.fluxRows, this.fluxLampRow);
+    if (!spatial) {
+      // 新方式のフラックスは、上に並んだ engine の onset とすぐ見比べられる位置に置く。
+      const fluxTitle = document.createElement('h3');
+      fluxTitle.className = 'control-subheading';
+      fluxTitle.textContent = 'Spectral flux (new)';
+      this.coreBlock.append(fluxTitle, this.fluxRows, this.fluxLampRow);
 
-    // Core を生むのはこちら。合成 Gate（上）は比較用に残っているだけ。
-    const bandTitle = document.createElement('h3');
-    bandTitle.className = 'control-subheading';
-    bandTitle.textContent = 'Band onsets (drives cores)';
-    this.coreBlock.append(bandTitle, this.bandBlock);
+      // Core を生むのはこちら。合成 Gate（上）は比較用に残っているだけ。
+      const bandTitle = document.createElement('h3');
+      bandTitle.className = 'control-subheading';
+      bandTitle.textContent = 'Band onsets (drives cores)';
+      this.coreBlock.append(bandTitle, this.bandBlock);
+    }
 
     const title = document.createElement('h3');
     title.className = 'control-subheading';
-    title.textContent = 'Core Study (dev)';
+    title.textContent = spatial ? 'Spatial Study (dev)' : 'Core Study (dev)';
     this.coreBlock.append(title);
 
     for (const parameter of composition.getExpressionParams()) {
@@ -489,6 +493,19 @@ export class AudioInspector {
           `x position ${state.lastX.toFixed(2)}\n` +
           `onset strength ${state.lastOnsetStrength.toFixed(2)}\n` +
           `peak intensity ${state.lastPeakIntensity.toFixed(2)}`;
+      }
+
+      // 3D の Spatial Study。直近 Core の帯域・強さ・XYZ・段階と、同時存在数を出す。
+      if (composition instanceof LightSpatialStudy) {
+        const spatial = composition.getSpatialStudyState();
+        const p = spatial.lastPosition;
+        this.coreReadout.textContent =
+          `cores ${spatial.count} / 32  (${spatial.lastEventCores} per event)\n` +
+          `last band ${spatial.lastBand ?? '—'}  phase ${spatial.lastPhase ?? '—'}\n` +
+          `onset strength ${spatial.lastOnsetStrength.toFixed(2)}\n` +
+          `peak intensity ${spatial.lastPeakIntensity.toFixed(2)}\n` +
+          `x ${p ? p.x.toFixed(2) : '—'}  y ${p ? p.y.toFixed(2) : '—'}  z ${p ? p.z.toFixed(2) : '—'}\n` +
+          `flux b${spatial.flux.bass.toFixed(2)} m${spatial.flux.mid.toFixed(2)} t${spatial.flux.treble.toFixed(2)}`;
       }
     }
 

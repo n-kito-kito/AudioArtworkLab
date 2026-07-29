@@ -15,6 +15,7 @@ import {
 import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
+import { SpatialPositionResolver } from './spatialPositions';
 
 /**
  * Light Traces — Spatial Study。**3D 空間の検証表現**であり、完成版ではない。
@@ -193,6 +194,11 @@ export class LightSpatialStudy implements LabExpression {
 
   /** 音イベントの検出。2D Core Study とまったく同じ検出器を使う。 */
   private readonly detector = new BandLightEventDetector();
+  /** 音から位置を決める側。描画とは分けてある。 */
+  private readonly positions = new SpatialPositionResolver(
+    SPATIAL_STUDY.position,
+    SPATIAL_STUDY.maximumCores,
+  );
   private readonly cores: SpatialCore[] = [];
 
   private previousElapsed = -1;
@@ -203,8 +209,6 @@ export class LightSpatialStudy implements LabExpression {
   private lastEventCores = 0;
   private adaptiveThreshold = true;
   private adaptiveStrength = true;
-  /** イベントの通し番号。Phase 2 の暫定配置に使う（Phase 3 で位置生成へ渡す）。 */
-  private placementCounter = 0;
 
   constructor(effects: Effect[] = [], theme?: Theme) {
     this.effects = effects;
@@ -336,27 +340,15 @@ export class LightSpatialStudy implements LabExpression {
   /**
    * イベント 1 個から Core を 1 個作る。
    *
-   * Phase 2 の暫定配置: 奥行きだけをイベントごとに散らし、XY は中央に置く。
-   * 音由来の XYZ は Phase 3 で `SpatialPositionResolver` に置き換える。
+   * 位置は `SpatialPositionResolver` が音だけから決める（`Math.random()` は使わない）。
+   * 決めた位置は寿命の間ずっと動かさない。
    */
   private spawn(event: BandLightEvent): void {
     if (this.cores.length >= SPATIAL_STUDY.maximumCores) this.cores.shift();
     const minimum = clamp01(this.params.minimumIntensity);
     const maximum = Math.max(clamp01(this.params.maximumIntensity), minimum);
     const peakIntensity = minimum + event.strength * (maximum - minimum);
-
-    const steps = 5;
-    const t = (this.placementCounter % steps) / (steps - 1);
-    this.placementCounter += 1;
-    const { minimumDepth, maximumDepth } = SPATIAL_STUDY.position;
-    const depth = minimumDepth + t * (maximumDepth - minimumDepth);
-    const extent = this.visibleHalfExtent(depth);
-    const spread = 1 - SPATIAL_STUDY.position.edgeMargin;
-    const position = {
-      x: (event.siblingIndex - (event.eventCores - 1) / 2) * extent.halfWidth * 0.5 * spread,
-      y: 0,
-      z: -depth,
-    };
+    const position = this.positions.resolve(event, (depth) => this.visibleHalfExtent(depth));
 
     this.cores.push({
       position,
@@ -466,7 +458,7 @@ export class LightSpatialStudy implements LabExpression {
     this.lastBand = null;
     this.lastEventCores = 0;
     this.lastPosition = null;
-    this.placementCounter = 0;
+    this.positions.reset();
   }
 
   render(): void {
