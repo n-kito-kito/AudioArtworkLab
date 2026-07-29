@@ -2207,6 +2207,32 @@ textarea:focus-visible {
   text-align: right;
 }
 
+/* マーカーはバーより少し高くして見つけやすくするので、この行だけはみ出しを許す。 */
+.audio-inspector__row i.has-threshold {
+  overflow: visible;
+}
+
+/* 合成フラックスのメーター上に立てる閾値マーカー。--at が 0..1 の位置。 */
+.audio-inspector__threshold {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: calc(var(--at, 0) * 100%);
+  width: 2px;
+  margin-left: -1px;
+  background: #e8e8e8;
+}
+
+/* ウォームアップ中と、適応を切っているときは固定閾値だと分かる見た目にする。 */
+.audio-inspector__threshold.is-warming,
+.audio-inspector__threshold.is-fixed {
+  background: repeating-linear-gradient(
+    to bottom,
+    #898592 0 2px,
+    transparent 2px 4px
+  );
+}
+
 .audio-inspector__lamp {
   display: flex;
   gap: 8px;

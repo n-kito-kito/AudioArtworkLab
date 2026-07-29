@@ -70,6 +70,8 @@ export class AudioInspector {
   private readonly fluxLamp = document.createElement('i');
   private readonly fluxRows = document.createElement('div');
   private readonly fluxLampRow = document.createElement('div');
+  /** 合成フラックスのメーター上に立てる、いま効いている閾値の縦線。 */
+  private readonly thresholdMarker = document.createElement('b');
   private readonly coreBlock = document.createElement('div');
   private readonly coreReadout = document.createElement('p');
   private animationId: number | null = null;
@@ -120,7 +122,16 @@ export class AudioInspector {
     this.coreBlock.append(title);
 
     for (const parameter of composition.getExpressionParams()) {
-      if (parameter.type === 'select' || parameter.type === 'action') continue;
+      if (parameter.type === 'action') continue;
+      if (parameter.type === 'select') {
+        // 適応の on/off のような排他の切り替え。切り分け検証のために出す。
+        this.coreBlock.append(
+          this.select(parameter.label, parameter.options, parameter.value, (next) =>
+            composition.setExpressionParam(parameter.key, next),
+          ),
+        );
+        continue;
+      }
       this.coreBlock.append(
         this.range(parameter.label, parameter.value, parameter.min, parameter.max, parameter.step, (next) =>
           composition.setExpressionParam(parameter.key, next),
@@ -211,12 +222,44 @@ export class AudioInspector {
       this.fluxRows.append(row);
       this.fluxBars.set(key, bar);
       this.fluxValues.set(key, value);
+      // 閾値マーカーは合成フラックスの行だけに立てる。値と閾値の位置関係が
+      // ひと目で分かるので、適応がどう動いているかを目で追える。
+      if (key === 'combined') {
+        this.thresholdMarker.className = 'audio-inspector__threshold';
+        bar.classList.add('has-threshold');
+        bar.append(this.thresholdMarker);
+      }
     }
     this.fluxLampRow.className = 'audio-inspector__lamp';
     this.fluxLamp.className = 'audio-inspector__lamp-dot';
     const label = document.createElement('span');
     label.textContent = 'Core fired (flux, new)';
     this.fluxLampRow.append(this.fluxLamp, label);
+  }
+
+  /** 排他の選択肢 1 つ（適応の on/off など）。 */
+  private select(
+    labelText: string,
+    options: readonly { readonly value: string; readonly label: string }[],
+    current: string,
+    onChange: (value: string) => void,
+  ): HTMLElement {
+    const label = document.createElement('label');
+    label.className = 'control-row control-row--inline';
+    const name = document.createElement('span');
+    name.textContent = labelText;
+    const select = document.createElement('select');
+    select.setAttribute('aria-label', labelText);
+    for (const option of options) {
+      const node = document.createElement('option');
+      node.value = option.value;
+      node.textContent = option.label;
+      node.selected = option.value === current;
+      select.append(node);
+    }
+    select.addEventListener('change', () => onChange(select.value));
+    label.append(name, select);
+    return label;
   }
 
   /** LabControls と同じ見た目のスライダー 1 本。 */
@@ -299,10 +342,23 @@ export class AudioInspector {
           this.fluxValues.get(key)!.textContent = level.toFixed(2);
         }
         this.fluxLamp.classList.toggle('is-lit', now < this.fluxLitUntil);
-        // 直近 Core の 4 つ。どの特徴量がどの見え方を決めたかを 1 行で追えるようにする。
+        // 閾値の縦線。ウォームアップ中は固定閾値で動いていることが分かる見た目にする。
+        this.thresholdMarker.style.setProperty(
+          '--at',
+          String(Math.min(Math.max(state.onsetThreshold, 0), 1)),
+        );
+        this.thresholdMarker.classList.toggle('is-warming', state.thresholdWarmingUp);
+        this.thresholdMarker.classList.toggle('is-fixed', !state.adaptiveThreshold);
+        // 直近 Core と適応の状態。どの特徴量がどの見え方を決めたかを追えるようにする。
+        const mode = state.adaptiveThreshold
+          ? state.thresholdWarmingUp
+            ? `warming up ${state.thresholdSamples}`
+            : 'adaptive'
+          : 'fixed';
         this.coreReadout.textContent =
           `cores ${state.count}  fired ${state.fireCount}\n` +
-          `flux threshold ${state.onsetThreshold.toFixed(2)}\n` +
+          `flux threshold ${state.onsetThreshold.toFixed(3)} (${mode})\n` +
+          `strength reference ${state.adaptiveStrength ? state.strengthReference.toFixed(3) : 'off'}\n` +
           `spectral centroid ${state.lastSpectralCentroid.toFixed(2)}\n` +
           `x position ${state.lastX.toFixed(2)}\n` +
           `onset strength ${state.lastOnsetStrength.toFixed(2)}\n` +

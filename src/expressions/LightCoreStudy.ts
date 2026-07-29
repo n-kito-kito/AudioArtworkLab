@@ -67,10 +67,54 @@ const CORE_STUDY = {
   coreRadius: 0.11,
   /** ガウス減衰の鋭さ。半径の位置で exp(-3) ≈ 0.05 まで落ちる。 */
   coreFalloff: 3,
-  /** 感度 0 のときの発火閾値（合成フラックス 0..1 に対する値）。強い出来事しか採らない。 */
+  /**
+   * 固定閾値の写像（感度 0 / 感度 1）。
+   * 局所統計が溜まるまでのウォームアップと、適応を切ったときの閾値に使う。
+   */
   onsetThresholdAtZeroSensitivity: 0.55,
-  /** 感度 1 のときの発火閾値。ノイズ由来の微小なフラックスを拾わないよう 0 にはしない。 */
   onsetThresholdAtFullSensitivity: 0.08,
+
+  // ---- 局所適応（方式 A）----
+  /**
+   * 発火判定を、直近数秒のフラックスの分布に対する相対値で決める。
+   * 固定閾値は 1 曲での較正でしかなく、曲や区間で音圧・密度が変わると効きがずれる。
+   *
+   * 閾値 = max(absoluteFloor, 底 + k × (代表的な山の高さ − 底))
+   *   底             = 窓の中央値（打撃の合間の水準。実測ではほぼ 0）
+   *   代表的な山の高さ = 窓に入った**山（局所最大）の中央値**
+   *
+   * 散らばりは平均や標準偏差ではなく**順序統計**で測る。打撃そのものが外れ値なので、
+   * 平均系だと打撃が自分の閾値を押し上げて自分を埋めてしまう。
+   *
+   * 「山の中央値」を使うのは、**全フレームの分位点では打撃を捉えられない**ため。
+   * 実測ではフラックスの中央値はほぼ 0（打撃の合間は増分が出ない）で、打撃は
+   * 全フレームの 3〜7% しかない。0.5 秒に 1 発のような疎な曲だと 3% を切るので、
+   * どんな上側分位点を選んでも打撃の下に潜ってしまい、閾値が下限に張り付く。
+   * 山だけを別に集めれば、打撃の密度に関係なく「この区間の打撃の大きさ」が取れる。
+   */
+  adaptive: {
+    /** 統計窓（秒）。フレーム数ではなく秒で持つのでフレームレートに依存しない。 */
+    windowSeconds: 2.5,
+    /** この本数が溜まるまではウォームアップ扱いにして固定閾値へ落とす。 */
+    minimumSamples: 40,
+    /** 山がこの数だけ溜まるまでもウォームアップ扱いにする。 */
+    minimumPeaks: 4,
+    /**
+     * 閾値の下限。**必須**。無音や微小ノイズの統計に適応して閾値が下がりきると、
+     * ノイズで発火してしまう。実測のノイズ側（p90）が 0.02〜0.05 だったので、
+     * その 2〜5 倍の余裕を取って 0.10 に置く。D5 は `active !== 1` と二重に守る。
+     */
+    absoluteFloor: 0.1,
+    /** 感度 0 のときの k（厳しい。閾値は上側分位点そのものに近づく）。 */
+    kAtZeroSensitivity: 1,
+    /** 感度 1 のときの k（緩い。閾値は下限に近づく）。 */
+    kAtFullSensitivity: 0.1,
+    /**
+     * strength を局所正規化するときの参照値の下限。
+     * 静かな区間で微小なフラックスが 1.0 に化けるのを防ぐ。
+     */
+    strengthReferenceFloor: 0.35,
+  },
 
   // ---- 帯域別スペクトルフラックス ----
   /**
@@ -204,8 +248,16 @@ export interface CoreStudyState {
   readonly lastPeakIntensity: number;
   /** いま測れている帯域別フラックス（新方式の生の観測値）。 */
   readonly flux: BandFlux;
-  /** 現在の発火閾値。感度スライダーと合わせて見るために出す。 */
+  /** いま効いている発火閾値。局所適応の結果がそのまま入る。 */
   readonly onsetThreshold: number;
+  /** 統計が溜まりきっておらず、固定閾値で動いているか。 */
+  readonly thresholdWarmingUp: boolean;
+  /** 統計窓に入っている本数。 */
+  readonly thresholdSamples: number;
+  /** strength を割る参照値（局所正規化が切れているときは 0）。 */
+  readonly strengthReference: number;
+  readonly adaptiveThreshold: boolean;
+  readonly adaptiveStrength: boolean;
   /** 発火した回数（単調増加）。Inspector のランプはこれの増分で点く。 */
   readonly fireCount: number;
   readonly cores: readonly CoreStudySnapshot[];
@@ -350,23 +402,80 @@ export class BandFluxAnalyzer {
   }
 }
 
+/** 昇順に並んだ配列から分位点を取る。順序統計なので外れ値に引きずられない。 */
+const quantileOf = (sorted: readonly number[], p: number): number => {
+  if (sorted.length === 0) return 0;
+  const index = clamp(Math.floor(p * (sorted.length - 1)), 0, sorted.length - 1);
+  return sorted[index]!;
+};
+
+/** `OnsetGate.update` への入力。呼び出し側は「素のフラックス」と設定だけを渡す。 */
+export interface OnsetGateInput {
+  /** いま測れた合成フラックス（0..1）。 */
+  readonly value: number;
+  readonly delta: number;
+  /** このフレームでフラックスを測り直したか。false なら判定を見送る。 */
+  readonly measured: boolean;
+  /** ウォームアップ中と、適応を切ったときに使う固定閾値。 */
+  readonly fallbackThreshold: number;
+  /** 0..1。k の写像に使う（高いほど k が小さく、緩くなる）。 */
+  readonly sensitivity: number;
+  readonly cooldownSeconds: number;
+  /** 閾値の局所適応（方式 A）を使うか。 */
+  readonly adaptiveThreshold: boolean;
+  /** strength の局所正規化を使うか。閾値の適応とは独立に切れる。 */
+  readonly adaptiveStrength: boolean;
+}
+
 /**
- * 発火判定（決める側）。
+ * 発火判定（決める側）— 方式 A。
  *
- * 立ち上がりエッジ + 閾値 + クールダウンだけを見る。フラックスの作り方は知らない。
+ * 立ち上がりエッジ + 閾値 + クールダウンを見る。フラックスの作り方は知らない。
  *
- * **方式 A（局所適応閾値）はここに入る。** 呼び出し側が固定の閾値を渡す代わりに、
- * このクラスが直近数百 ms のフラックスの統計（移動中央値や平均 + 係数 × 標準偏差）を
- * 持って `threshold` を自分で決めるようにすれば、`LightCoreStudy` 側は
- * 1 行も変えずに切り替わる。エッジとクールダウンの扱いは共通のまま使える。
+ * 閾値は固定値ではなく、**直近 `windowSeconds` 秒のフラックスの分布**から毎回作る。
+ *
+ *   k    = kAtZero − 感度 × (kAtZero − kAtFull)
+ *   閾値 = max(absoluteFloor, 窓の中央値 + k × (窓の山の中央値 − 窓の中央値))
+ *
+ * これで「静かな区間の小さな打撃」も「密度の高い区間の打撃」も、その区間の文脈で
+ * 判定される。固定閾値が 1 曲での較正でしかない問題（fluxGain 2.5）を吸収する。
+ *
+ * 窓は**秒で管理**し、測り直したフレームだけを入れる。フレームレートが変わっても
+ * 窓に入る「時間の長さ」は同じなので、判定はフレームレートに依存しない。
+ * 山（局所最大）は値が上がって下がった折り返しで 1 つ記録する。
+ *
+ * strength の局所正規化は別のスイッチで、発火時のフラックスを窓の最大値
+ * （下限つき）で割る。閾値の適応と切り分けて検証できるようにしてある。
  */
 export class OnsetGate {
   private previousValue = 0;
   private cooldown = 0;
+  /** 統計窓。時刻と値を並行配列で持つ（常に時刻の昇順）。 */
+  private readonly times: number[] = [];
+  private readonly values: number[] = [];
+  /** 山（局所最大）だけを集めた窓。打撃の密度に左右されない代表値を取るため。 */
+  private readonly peakTimes: number[] = [];
+  private readonly peakValues: number[] = [];
+  /** 直前のフレームで値が上がっていたか。折り返しの検出に使う。 */
+  private wasRising = false;
+  /** 窓の中だけで進む時計（秒）。delta を積むのでフレームレートに依存しない。 */
+  private clock = 0;
+  private currentThreshold = 0;
+  private currentReference = 0;
+  private warming = true;
 
   reset(): void {
     this.previousValue = 0;
     this.cooldown = 0;
+    this.times.length = 0;
+    this.values.length = 0;
+    this.peakTimes.length = 0;
+    this.peakValues.length = 0;
+    this.wasRising = false;
+    this.clock = 0;
+    this.currentThreshold = 0;
+    this.currentReference = 0;
+    this.warming = true;
   }
 
   /** 残りクールダウン（秒）。開発用の表示に使う。 */
@@ -374,30 +483,110 @@ export class OnsetGate {
     return this.cooldown;
   }
 
+  /** いま効いている閾値。Inspector がメーター上のマーカーに使う。 */
+  get threshold(): number {
+    return this.currentThreshold;
+  }
+
+  /** 統計が溜まりきっていない（＝固定閾値で動いている）か。 */
+  get warmingUp(): boolean {
+    return this.warming;
+  }
+
+  /** strength を割る参照値。適応を切っているときは 0。 */
+  get strengthReference(): number {
+    return this.currentReference;
+  }
+
+  /** 窓に入っている本数。開発用の表示に使う。 */
+  get sampleCount(): number {
+    return this.values.length;
+  }
+
   /**
    * 発火したら strength（0..1）を返す。しなければ null。
    *
    * `measured` が false のフレームはフラックスがラッチ値のままなので、
-   * 前回値との比較をせずに見送る。こうしないと同じ値で何度もエッジが立つ。
+   * 統計にも入れず、前回値との比較もせずに見送る。こうしないと
+   * 同じ値で何度もエッジが立ち、窓が同じ値で埋まってしまう。
    */
-  update(
-    value: number,
-    delta: number,
-    threshold: number,
-    cooldownSeconds: number,
-    measured: boolean,
-  ): number | null {
-    this.cooldown = Math.max(this.cooldown - delta, 0);
-    if (!measured) return null;
+  update(input: OnsetGateInput): number | null {
+    this.cooldown = Math.max(this.cooldown - input.delta, 0);
+    this.clock += input.delta;
+    if (!input.measured) return null;
 
-    const rising = value > this.previousValue;
-    this.previousValue = value;
+    const rising = input.value > this.previousValue;
+    // 上がって下がった折り返し。直前の値がその区間の山だった。
+    if (this.wasRising && !rising) this.pushPeak(this.previousValue);
+    this.wasRising = rising;
+
+    this.push(input.value);
+    const sorted = [...this.values].sort((left, right) => left - right);
+    const sortedPeaks = [...this.peakValues].sort((left, right) => left - right);
+    this.warming =
+      sorted.length < CORE_STUDY.adaptive.minimumSamples ||
+      sortedPeaks.length < CORE_STUDY.adaptive.minimumPeaks;
+    this.currentThreshold =
+      input.adaptiveThreshold && !this.warming
+        ? this.adaptiveThreshold(sorted, sortedPeaks, input.sensitivity)
+        : input.fallbackThreshold;
+    this.currentReference =
+      input.adaptiveStrength && !this.warming
+        ? Math.max(
+            CORE_STUDY.adaptive.strengthReferenceFloor,
+            sorted[sorted.length - 1] ?? 0,
+          )
+        : 0;
+
+    this.previousValue = input.value;
     if (!rising) return null;
-    if (value < threshold) return null;
+    if (input.value < this.currentThreshold) return null;
     if (this.cooldown > 0) return null;
 
-    this.cooldown = cooldownSeconds;
-    return value;
+    this.cooldown = input.cooldownSeconds;
+    // 局所正規化を切っているときは素のフラックスがそのまま明るさになる（方式 B と同じ）。
+    return this.currentReference > 0
+      ? clamp01(input.value / this.currentReference)
+      : clamp01(input.value);
+  }
+
+  /** 窓の中央値 + k × （山の中央値 − 窓の中央値）。下限は必ず効かせる。 */
+  private adaptiveThreshold(
+    sorted: readonly number[],
+    sortedPeaks: readonly number[],
+    sensitivity: number,
+  ): number {
+    const { kAtZeroSensitivity, kAtFullSensitivity, absoluteFloor } = CORE_STUDY.adaptive;
+    const k =
+      kAtZeroSensitivity - clamp01(sensitivity) * (kAtZeroSensitivity - kAtFullSensitivity);
+    const baseline = quantileOf(sorted, 0.5);
+    const typicalPeak = quantileOf(sortedPeaks, 0.5);
+    const spread = Math.max(typicalPeak - baseline, 0);
+    return Math.max(absoluteFloor, baseline + k * spread);
+  }
+
+  /** 窓へ 1 本入れ、`windowSeconds` より古いものを落とす。 */
+  private push(value: number): void {
+    this.times.push(this.clock);
+    this.values.push(value);
+    trimWindow(this.times, this.values, this.clock);
+  }
+
+  private pushPeak(value: number): void {
+    this.peakTimes.push(this.clock);
+    this.peakValues.push(value);
+    trimWindow(this.peakTimes, this.peakValues, this.clock);
+  }
+}
+
+/** 時刻の昇順に並んだ 2 本の配列から、窓より古い先頭を落とす。 */
+function trimWindow(times: number[], values: number[], now: number): void {
+  const oldest = now - CORE_STUDY.adaptive.windowSeconds;
+  let drop = 0;
+  while (drop < times.length && times[drop]! < oldest) drop += 1;
+  if (drop > 0) {
+    times.splice(0, drop);
+    values.splice(0, drop);
   }
 }
 
@@ -428,9 +617,13 @@ export class LightCoreStudy implements LabExpression {
   /** シェーダーへ渡す (x, y, 明るさ)。縦は常に板の中央なので y は 0。 */
   private readonly coreData = new Float32Array(CORE_STUDY.maximumCores * 3);
 
-  /** 測る側と決める側（この 2 つの境界が方式 A の差し込み口）。 */
+  /** 測る側と決める側。適応（方式 A）は決める側だけが持つ。 */
   private readonly flux = new BandFluxAnalyzer();
   private readonly gate = new OnsetGate();
+  /** 閾値の局所適応。切ると固定閾値（方式 B）に戻る。 */
+  private adaptiveThreshold = true;
+  /** strength の局所正規化。閾値の適応とは独立に切れる。 */
+  private adaptiveStrength = true;
 
   private previousElapsed = -1;
   private lastOnsetStrength = 0;
@@ -546,13 +739,16 @@ export class LightCoreStudy implements LabExpression {
         this.params.fluxGain,
       );
     }
-    const strength = this.gate.update(
-      this.flux.value.combined,
+    const strength = this.gate.update({
+      value: this.flux.value.combined,
       delta,
-      this.onsetThreshold(),
-      this.params.cooldownMs / 1000,
-      spectrum !== null && this.flux.updatedThisFrame,
-    );
+      measured: spectrum !== null && this.flux.updatedThisFrame,
+      fallbackThreshold: this.onsetThreshold(),
+      sensitivity: this.params.onsetSensitivity,
+      cooldownSeconds: this.params.cooldownMs / 1000,
+      adaptiveThreshold: this.adaptiveThreshold,
+      adaptiveStrength: this.adaptiveStrength,
+    });
     if (strength === null) return;
     this.fireCount += 1;
     // centroid は engine が対数で 0..1 に正規化済み。Hz の生値は使わない。
@@ -787,7 +983,8 @@ export class LightCoreStudy implements LabExpression {
     const f = this.flux.value;
     return (
       `cores ${this.cores.length} / last strength ${this.lastOnsetStrength.toFixed(2)} / ` +
-      `flux ${f.combined.toFixed(2)} (b${f.bass.toFixed(2)} m${f.mid.toFixed(2)} t${f.treble.toFixed(2)})`
+      `flux ${f.combined.toFixed(2)} (b${f.bass.toFixed(2)} m${f.mid.toFixed(2)} t${f.treble.toFixed(2)}) / ` +
+      `th ${this.gate.threshold.toFixed(2)}${this.gate.warmingUp ? ' (warmup)' : ''}`
     );
   }
 
@@ -800,7 +997,12 @@ export class LightCoreStudy implements LabExpression {
       lastX: this.lastX,
       lastPeakIntensity: this.lastPeakIntensity,
       flux: this.flux.value,
-      onsetThreshold: this.onsetThreshold(),
+      onsetThreshold: this.gate.threshold,
+      thresholdWarmingUp: this.gate.warmingUp,
+      thresholdSamples: this.gate.sampleCount,
+      strengthReference: this.gate.strengthReference,
+      adaptiveThreshold: this.adaptiveThreshold,
+      adaptiveStrength: this.adaptiveStrength,
       fireCount: this.fireCount,
       cores: this.cores.map((core) => ({
         age: core.age,
@@ -823,6 +1025,16 @@ export class LightCoreStudy implements LabExpression {
       ...CORE_STUDY.ranges[key],
       value: this.params[key],
     });
+    const onOff = (key: string, label: string, enabled: boolean): ExpressionParam => ({
+      key,
+      label,
+      type: 'select',
+      options: [
+        { value: 'on', label: 'On' },
+        { value: 'off', label: 'Off' },
+      ],
+      value: enabled ? 'on' : 'off',
+    });
     return [
       row('attackMs', 'Attack (ms)'),
       row('holdMs', 'Hold (ms)'),
@@ -832,10 +1044,20 @@ export class LightCoreStudy implements LabExpression {
       row('onsetSensitivity', 'Onset sensitivity'),
       row('fluxGain', 'Flux gain'),
       row('cooldownMs', 'Cooldown (ms)'),
+      // 適応は 2 つを独立に切れるようにしておく。切り分けができないと、
+      // 見え方が変わったときにどちらが効いたのか分からなくなる。
+      onOff('adaptiveThreshold', 'Adaptive threshold', this.adaptiveThreshold),
+      onOff('adaptiveStrength', 'Adaptive strength', this.adaptiveStrength),
     ];
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    if (key === 'adaptiveThreshold' || key === 'adaptiveStrength') {
+      const enabled = value === 'on' || value === 1;
+      if (key === 'adaptiveThreshold') this.adaptiveThreshold = enabled;
+      else this.adaptiveStrength = enabled;
+      return;
+    }
     const numeric = typeof value === 'number' ? value : Number(value);
     if (!Number.isFinite(numeric)) return;
     if (!(key in this.params)) return;
