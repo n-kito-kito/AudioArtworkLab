@@ -9,14 +9,19 @@ import { LightCoreStudy } from '../expressions/LightCoreStudy';
  * 表現の見え方だけを見ていても因果が確かめられないので、engine の生の解析値を
  * 同じ画面に並べるためのもの。**engine には触らない（読むだけ）。**
  *
- * Onset だけは連続メーターにしない。engine の onset は瞬間値なので、
- * メーターにすると人間の目にはほとんど何も映らない。ここでは
- * 「立ち上がりエッジ + 閾値」で検出した瞬間だけランプを短く点灯させる。
+ * Onset だけは連続メーターにしない。onset は瞬間値なので、メーターにすると
+ * 人間の目にはほとんど何も映らない。検出した瞬間だけランプを短く点灯させる。
+ *
+ * **新旧 2 つの Onset を並べて出す。** 上段が engine の onset（広帯域 Volume の
+ * 差分。旧方式）で、Core Study を選んでいるときは下段に帯域別スペクトルフラックス
+ * （新方式）が並ぶ。どちらが何を拾って何を落としているかを、同じ音で見比べるための
+ * 並びなので、旧方式の表示は消さない。
  *
  * Core Study（`LightCoreStudy`）を選んでいる間だけ、同じセクションの中に
- * その表現の開発用スライダーと直近 Core の値を出す。実装は表現が宣言した
- * `getExpressionParams` / `setExpressionParam` をそのまま使うので、
- * メイン UI 側の `SHOW_EXPRESSION_PARAMS`（LabControls）とは独立に描ける。
+ * フラックスの内訳・その表現の開発用スライダー・直近 Core の値を出す。
+ * スライダーは表現が宣言した `getExpressionParams` / `setExpressionParam` を
+ * そのまま使うので、メイン UI 側の `SHOW_EXPRESSION_PARAMS`（LabControls）とは
+ * 独立に描ける。
  */
 
 /** この Inspector の定数。判定条件そのものなので 1 箇所に集める。 */
@@ -31,17 +36,25 @@ const INSPECTOR = {
   onsetThreshold: 0.3,
   /** この音量を下回るフレームは点灯させない（無音時の連続点灯を止める）。 */
   minimumVolume: 0.06,
-  /** メーターに出す特徴量と表示名。 */
+  /** engine の解析値から出すメーターと表示名。 */
   meters: [
     ['volume', 'Volume'],
     ['bass', 'Bass'],
     ['mid', 'Mid'],
     ['treble', 'Treble'],
-    ['onset', 'Onset Strength'],
+    ['onset', 'Onset (engine)'],
+  ],
+  /** 帯域別スペクトルフラックス（新方式）のメーターと表示名。 */
+  fluxMeters: [
+    ['bass', 'Flux Bass'],
+    ['mid', 'Flux Mid'],
+    ['treble', 'Flux Treble'],
+    ['combined', 'Onset (flux)'],
   ],
 } as const;
 
 type MeterKey = (typeof INSPECTOR.meters)[number][0];
+type FluxKey = (typeof INSPECTOR.fluxMeters)[number][0];
 
 export class AudioInspector {
   private readonly engine: FileAudioEngine;
@@ -52,12 +65,19 @@ export class AudioInspector {
   private readonly bars = new Map<MeterKey, HTMLElement>();
   private readonly values = new Map<MeterKey, HTMLElement>();
   private readonly onsetLamp = document.createElement('i');
+  private readonly fluxBars = new Map<FluxKey, HTMLElement>();
+  private readonly fluxValues = new Map<FluxKey, HTMLElement>();
+  private readonly fluxLamp = document.createElement('i');
+  private readonly fluxRows = document.createElement('div');
+  private readonly fluxLampRow = document.createElement('div');
   private readonly coreBlock = document.createElement('div');
   private readonly coreReadout = document.createElement('p');
   private animationId: number | null = null;
   private collapsed = true;
   private previousOnset = 0;
   private onsetLitUntil = 0;
+  private previousFireCount = 0;
+  private fluxLitUntil = 0;
 
   constructor(
     host: HTMLElement,
@@ -75,6 +95,7 @@ export class AudioInspector {
     this.body.append(this.buildMeters(), this.buildOnsetLamp(), this.coreBlock);
     this.coreBlock.className = 'audio-inspector__core';
     this.coreReadout.className = 'audio-inspector__readout';
+    this.buildFluxMeters();
 
     host.append(this.root);
     this.refresh();
@@ -86,6 +107,12 @@ export class AudioInspector {
     this.coreBlock.replaceChildren();
     const composition = this.getComposition();
     if (!(composition instanceof LightCoreStudy)) return;
+
+    // 新方式のフラックスは、上に並んだ engine の onset とすぐ見比べられる位置に置く。
+    const fluxTitle = document.createElement('h3');
+    fluxTitle.className = 'control-subheading';
+    fluxTitle.textContent = 'Spectral flux (new)';
+    this.coreBlock.append(fluxTitle, this.fluxRows, this.fluxLampRow);
 
     const title = document.createElement('h3');
     title.className = 'control-subheading';
@@ -161,9 +188,35 @@ export class AudioInspector {
     row.className = 'audio-inspector__lamp';
     this.onsetLamp.className = 'audio-inspector__lamp-dot';
     const label = document.createElement('span');
-    label.textContent = 'Onset detected';
+    label.textContent = 'Onset detected (engine, old)';
     row.append(this.onsetLamp, label);
     return row;
+  }
+
+  /**
+   * 帯域別フラックスのメーターとランプ。Core Study のときだけ表示するので、
+   * 要素は 1 度だけ作り、`refresh()` で付け外しする。
+   */
+  private buildFluxMeters(): void {
+    this.fluxRows.className = 'audio-inspector__rows';
+    for (const [key, label] of INSPECTOR.fluxMeters) {
+      const row = document.createElement('div');
+      row.className = 'audio-inspector__row';
+      const name = document.createElement('span');
+      name.textContent = label;
+      const bar = document.createElement('i');
+      const value = document.createElement('output');
+      value.textContent = '0.00';
+      row.append(name, bar, value);
+      this.fluxRows.append(row);
+      this.fluxBars.set(key, bar);
+      this.fluxValues.set(key, value);
+    }
+    this.fluxLampRow.className = 'audio-inspector__lamp';
+    this.fluxLamp.className = 'audio-inspector__lamp-dot';
+    const label = document.createElement('span');
+    label.textContent = 'Core fired (flux, new)';
+    this.fluxLampRow.append(this.fluxLamp, label);
   }
 
   /** LabControls と同じ見た目のスライダー 1 本。 */
@@ -219,6 +272,18 @@ export class AudioInspector {
       this.onsetLitUntil = now + INSPECTOR.onsetLampMs;
     }
 
+    // 新方式のランプは自前判定ではなく、表現が実際に撃った回数の増分で点ける。
+    // 見えている光と同じ出来事を指していないと、比較の意味がなくなるため。
+    const composition = this.getComposition();
+    const study = composition instanceof LightCoreStudy ? composition : null;
+    const state = study?.getCoreStudyState() ?? null;
+    if (state) {
+      if (state.fireCount > this.previousFireCount) {
+        this.fluxLitUntil = now + INSPECTOR.onsetLampMs;
+      }
+      this.previousFireCount = state.fireCount;
+    }
+
     if (!this.collapsed) {
       for (const [key, bar] of this.bars) {
         const level = Math.min(Math.max(parameters[key] ?? 0, 0), 1);
@@ -227,12 +292,17 @@ export class AudioInspector {
       }
       this.onsetLamp.classList.toggle('is-lit', now < this.onsetLitUntil);
 
-      const composition = this.getComposition();
-      if (composition instanceof LightCoreStudy) {
-        const state = composition.getCoreStudyState();
+      if (state) {
+        for (const [key, bar] of this.fluxBars) {
+          const level = Math.min(Math.max(state.flux[key], 0), 1);
+          bar.style.setProperty('--level', String(level));
+          this.fluxValues.get(key)!.textContent = level.toFixed(2);
+        }
+        this.fluxLamp.classList.toggle('is-lit', now < this.fluxLitUntil);
         // 直近 Core の 4 つ。どの特徴量がどの見え方を決めたかを 1 行で追えるようにする。
         this.coreReadout.textContent =
-          `cores ${state.count}\n` +
+          `cores ${state.count}  fired ${state.fireCount}\n` +
+          `flux threshold ${state.onsetThreshold.toFixed(2)}\n` +
           `spectral centroid ${state.lastSpectralCentroid.toFixed(2)}\n` +
           `x position ${state.lastX.toFixed(2)}\n` +
           `onset strength ${state.lastOnsetStrength.toFixed(2)}\n` +

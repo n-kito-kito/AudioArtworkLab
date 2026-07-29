@@ -225,6 +225,13 @@ RecordingController・QualityMonitor は再接続済み。
   - [x] 検証: Audio Feature Inspector（`src/ui/AudioInspector.ts`）— 左パネルの開閉セクション（既定は閉）。
         Volume / Bass / Mid / Treble / Onset Strength のメーターと、検出の瞬間だけ点く Onset ランプ。
         Core Study 選択中は開発用スライダーと直近 Core の値も出す
+  - [x] 検証: Core Study の Onset を帯域別スペクトルフラックスへ置き換え（`BandFluxAnalyzer` / `OnsetGate`）。
+        engine の onset（広帯域 Volume の差分）は、正規化 Volume が飽和する盛り上がりで発火が消え、
+        持続音の上のハイハットも拾えなかった。`getSpectrum()` の生 FFT から帯域別に
+        `Σ max(0, mag − prev)` を取り、ビン数で割って `max(bass, mid, treble)` で合成する。
+        測る側（`BandFluxAnalyzer`）と決める側（`OnsetGate`）を分けてあり、
+        局所適応閾値（方式 A）は `OnsetGate` の差し替えだけで入る。
+        reference.wav の 15〜18 秒（旧方式は発火 0）で 6 発火を確認。FileAudioEngine は無変更
 - [ ] G5 リアルタイム入力（VJ）とパフォーマンス最適化
 
 ## 共通の完了条件

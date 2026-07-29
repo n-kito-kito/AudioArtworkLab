@@ -25,10 +25,18 @@ import type { ExpressionParam, LabExpression } from './Expression';
  * 漏れないよう独立させている。
  *
  * 構造:
- *   ① Onset 検出
- *        engine の onset（広帯域音量の上昇分 × 8 を 0..1 にクランプした瞬間値）を土台に、
- *        表現側で「立ち上がりエッジ + 閾値 + 短いクールダウン」を掛ける。
- *        engine 側は読むだけで、値も副作用も変えない。
+ *   ① Onset 検出（帯域別スペクトルフラックス）
+ *        engine の onset（広帯域 Volume の差分 × 8）は使わない。実測で 3 つ壊れていた:
+ *          - 正規化 Volume が 1 に張り付く盛り上がりでは差分が出ず、発火がゼロになる
+ *          - ピーク追従の天井が 30〜40 秒降りないため、直後の静かな区間で感度が落ちる
+ *          - 持続音の上に乗るハイハットのように、音量が増えない出来事を拾えない
+ *        代わりに `getSpectrum()` の生 FFT から自前でフラックスを取る。
+ *        engine は読むだけで、値も副作用も変えない（FileAudioEngine は無変更）。
+ *
+ *        責務は 2 つに割ってある。**測る側と決める側を混ぜない。**
+ *          `BandFluxAnalyzer` … 帯域ごとに「どれだけ増えたか」を測るだけ
+ *          `OnsetGate`        … その値から「撃つかどうか」を決めるだけ
+ *        局所適応閾値（方式 A）を入れるときは `OnsetGate` だけを差し替える。
  *   ② Core の一生（Attack → Hold → Decay）
  *        すべて秒で管理し、経過時間 delta から進めるのでフレームレートに依存しない。
  *        Decay が終わった Core は配列から取り除き、参照を残さない。
@@ -40,9 +48,9 @@ import type { ExpressionParam, LabExpression } from './Expression';
  *        柔らかい円形スプラットとして加算する。Bloom なしで見える明るさにする。
  *
  * 音との対応（役割を 1 対 1 に保つ。1 つの特徴量が 2 つの見え方を動かさない）:
- *   onset          → 発生するかどうか（立ち上がりエッジのみ。鳴り続けても増えない）
- *   onset の大きさ → その Core 自身の明るさ（Exposure や Bloom には触らない）
- *   centroid       → その Core の横位置（明るさ・サイズ・寿命には触らない）
+ *   フラックスの立ち上がり → 発生するかどうか（鳴り続けても増えない）
+ *   フラックスの大きさ     → その Core 自身の明るさ（Exposure や Bloom には触らない）
+ *   centroid               → その Core の横位置（明るさ・サイズ・寿命には触らない）
  *   縦位置は常に中央。無音（active !== 1）は黒・発生ゼロ（PRD D5）。
  *
  * 乱数は使わない（Math.random() 禁止。そもそも恣意的な要素を置いていない）。
@@ -59,14 +67,43 @@ const CORE_STUDY = {
   coreRadius: 0.11,
   /** ガウス減衰の鋭さ。半径の位置で exp(-3) ≈ 0.05 まで落ちる。 */
   coreFalloff: 3,
-  /** 感度 0 のときの Onset 閾値。大きな立ち上がりしか採らない。 */
-  onsetThresholdAtZeroSensitivity: 0.6,
-  /** 感度 1 のときの Onset 閾値。無音のノイズを拾わないよう 0 にはしない。 */
-  onsetThresholdAtFullSensitivity: 0.12,
-  /** この音量を下回るフレームでは発火させない。ピーク追従で増幅された無音への保険。 */
-  minimumVolume: 0.06,
-  /** 発火後のクールダウン（秒）。1 つの立ち上がりで何度も撃たないための最短間隔。 */
-  cooldownSeconds: 0.06,
+  /** 感度 0 のときの発火閾値（合成フラックス 0..1 に対する値）。強い出来事しか採らない。 */
+  onsetThresholdAtZeroSensitivity: 0.55,
+  /** 感度 1 のときの発火閾値。ノイズ由来の微小なフラックスを拾わないよう 0 にはしない。 */
+  onsetThresholdAtFullSensitivity: 0.08,
+
+  // ---- 帯域別スペクトルフラックス ----
+  /**
+   * 帯域の境界（Hz）。engine の Bass / Mid / Treble と同じ切り方に揃えてある。
+   * 実際のビン範囲は nyquist から毎回計算するので、サンプルレートが変わっても崩れない。
+   */
+  bands: {
+    bass: [20, 250],
+    mid: [250, 4000],
+    treble: [4000, 16000],
+  },
+  /**
+   * 合成の仕方。`max` は 3 帯域の最大値で、持続音の上に乗るハイハットを
+   * Treble 帯だけで拾えるようにするための既定。`weighted` は重み付き和。
+   */
+  fluxCombine: 'max' as 'max' | 'weighted',
+  /** `weighted` を選んだときの重み。合計で割るので比だけが意味を持つ。 */
+  fluxWeights: { bass: 1, mid: 1, treble: 1 },
+  /**
+   * フラックスを測り直す最短間隔（ミリ秒）。これより短い間隔では差分がほぼ 0 になり、
+   * 高リフレッシュ環境ほど値が小さく出てしまうので、一定の窓まで待ってから測る。
+   */
+  fluxIntervalMs: 10,
+  /**
+   * 測った増分をこの間隔あたりへ換算する（ミリ秒）。窓幅が 10ms でも 33ms でも
+   * 同じ音なら同じ値になり、フレームレートに依存しなくなる。
+   */
+  fluxReferenceMs: 16.7,
+  /**
+   * 換算に使う窓幅の上限（ミリ秒）。タブ復帰などで窓が開きすぎたときに
+   * 増分を過小評価しないよう頭を止める。
+   */
+  fluxMaximumIntervalMs: 50,
   /**
    * 横位置の余白（板の幅に対する割合）。centroid の 0..1 をこの内側だけに写すので、
    * 一番低い音でも一番高い音でも Core が画面の端で切れない。
@@ -85,6 +122,14 @@ const CORE_STUDY = {
     minimumIntensity: 0.35,
     maximumIntensity: 1,
     onsetSensitivity: 0.5,
+    /**
+     * フラックスを 0..1 へ写す倍率。reference.wav の実測（拍の山は素の値で
+     * 0.15〜0.49、無音側は 0.02 以下）から、拍が 0.38〜1.0 に載るよう 2.5 にした。
+     * 天井追従のような長期状態は持たない（曲全体を見て動かすのは方式 A の領分）。
+     */
+    fluxGain: 2.5,
+    /** 発火後のクールダウン。1 つの立ち上がりで何度も撃たないための最短間隔。 */
+    cooldownMs: 60,
   },
   /** 同パラメータの可動域（Inspector のスライダーがそのまま使う）。 */
   ranges: {
@@ -94,6 +139,8 @@ const CORE_STUDY = {
     minimumIntensity: { min: 0, max: 1, step: 0.01 },
     maximumIntensity: { min: 0, max: 1, step: 0.01 },
     onsetSensitivity: { min: 0, max: 1, step: 0.01 },
+    fluxGain: { min: 1, max: 40, step: 0.5 },
+    cooldownMs: { min: 0, max: 400, step: 5 },
   },
 } as const;
 
@@ -139,6 +186,15 @@ export interface CoreStudySnapshot {
   readonly phase: CorePhase;
 }
 
+/** 帯域別スペクトルフラックス。すべて 0..1（ゲイン適用後）。 */
+export interface BandFlux {
+  readonly bass: number;
+  readonly mid: number;
+  readonly treble: number;
+  /** 発火判定に使う合成値。 */
+  readonly combined: number;
+}
+
 /** 開発・検証用の表現全体の状態。Inspector と `window.__lab` から読む。 */
 export interface CoreStudyState {
   readonly count: number;
@@ -146,6 +202,12 @@ export interface CoreStudyState {
   readonly lastSpectralCentroid: number;
   readonly lastX: number;
   readonly lastPeakIntensity: number;
+  /** いま測れている帯域別フラックス（新方式の生の観測値）。 */
+  readonly flux: BandFlux;
+  /** 現在の発火閾値。感度スライダーと合わせて見るために出す。 */
+  readonly onsetThreshold: number;
+  /** 発火した回数（単調増加）。Inspector のランプはこれの増分で点く。 */
+  readonly fireCount: number;
   readonly cores: readonly CoreStudySnapshot[];
 }
 
@@ -163,6 +225,181 @@ const decayShape = (t: number): number => {
   const floor = Math.exp(-k);
   return (Math.exp(-k * t) - floor) / (1 - floor);
 };
+
+const NO_FLUX: BandFlux = { bass: 0, mid: 0, treble: 0, combined: 0 };
+
+/**
+ * 帯域別スペクトルフラックス（測る側）。
+ *
+ *   flux = Σ max(0, mag[i] − prev[i])   … 増えたぶんだけを足す（減った音は無視する）
+ *
+ * を Bass / Mid / Treble ごとに求め、**帯域のビン数で割って規模を揃える**。
+ * 帯域幅がまるで違う（Bass は十数ビン、Treble は数百ビン）ので、割らないと
+ * 高域だけが常に大きく出てしまう。
+ *
+ * 測るのは「どれだけ増えたか」だけで、撃つかどうかは決めない（それは `OnsetGate`）。
+ * 天井追従のような長期状態も持たない（それは方式 A の領分）。
+ *
+ * フレームレート非依存: 差分はスペクトルを取り直す間隔に比例するので、
+ * `fluxIntervalMs` 以上開いたときだけ測り直し、測った値を
+ * `fluxReferenceMs` あたりの増分へ換算する。間隔が開かないフレームでは
+ * 直前の値をそのまま返す（ラッチ）。
+ */
+export class BandFluxAnalyzer {
+  private previous: Float32Array | null = null;
+  private latched: BandFlux = NO_FLUX;
+  /** 直前にフラックスを測った時刻（秒）。負なら未計測。 */
+  private lastMeasured = -1;
+  /** ラッチ中か（＝このフレームでは測り直していない）。エッジ検出の抑止に使う。 */
+  private refreshed = false;
+
+  get value(): BandFlux {
+    return this.latched;
+  }
+
+  /** このフレームで測り直したか。ラッチ中のフレームでは false。 */
+  get updatedThisFrame(): boolean {
+    return this.refreshed;
+  }
+
+  reset(): void {
+    this.previous = null;
+    this.latched = NO_FLUX;
+    this.lastMeasured = -1;
+    this.refreshed = false;
+  }
+
+  /**
+   * スペクトル 1 枚を取り込む。`magnitudes` は engine が使い回すバッファなので、
+   * 必ず自前の配列へ写してから次フレームの比較に使う。
+   */
+  update(
+    magnitudes: Uint8Array,
+    nyquist: number,
+    elapsed: number,
+    gain: number,
+  ): BandFlux {
+    this.refreshed = false;
+    const bins = magnitudes.length;
+    if (bins === 0 || !(nyquist > 0)) return this.latched;
+
+    if (!this.previous || this.previous.length !== bins) {
+      this.previous = new Float32Array(bins);
+      for (let i = 0; i < bins; i++) this.previous[i] = magnitudes[i]! / 255;
+      this.lastMeasured = elapsed;
+      this.latched = NO_FLUX;
+      return this.latched;
+    }
+
+    const elapsedMs = this.lastMeasured < 0 ? 0 : (elapsed - this.lastMeasured) * 1000;
+    if (elapsedMs < CORE_STUDY.fluxIntervalMs) return this.latched;
+
+    // 窓幅で割ってから基準間隔ぶんに直す。10ms でも 33ms でも同じ値になる。
+    const window = clamp(
+      elapsedMs,
+      CORE_STUDY.fluxIntervalMs,
+      CORE_STUDY.fluxMaximumIntervalMs,
+    );
+    const scale = (CORE_STUDY.fluxReferenceMs / window) * gain;
+
+    const bass = this.bandFlux(magnitudes, nyquist, bins, CORE_STUDY.bands.bass);
+    const mid = this.bandFlux(magnitudes, nyquist, bins, CORE_STUDY.bands.mid);
+    const treble = this.bandFlux(magnitudes, nyquist, bins, CORE_STUDY.bands.treble);
+
+    for (let i = 0; i < bins; i++) this.previous[i] = magnitudes[i]! / 255;
+    this.lastMeasured = elapsed;
+    this.refreshed = true;
+
+    const raw =
+      CORE_STUDY.fluxCombine === 'max'
+        ? Math.max(bass, mid, treble)
+        : (CORE_STUDY.fluxWeights.bass * bass +
+            CORE_STUDY.fluxWeights.mid * mid +
+            CORE_STUDY.fluxWeights.treble * treble) /
+          (CORE_STUDY.fluxWeights.bass +
+            CORE_STUDY.fluxWeights.mid +
+            CORE_STUDY.fluxWeights.treble);
+
+    this.latched = {
+      bass: clamp01(bass * scale),
+      mid: clamp01(mid * scale),
+      treble: clamp01(treble * scale),
+      combined: clamp01(raw * scale),
+    };
+    return this.latched;
+  }
+
+  /** 1 帯域ぶんの平均正増分（0..1）。ビン数で割るので帯域幅に依らない。 */
+  private bandFlux(
+    magnitudes: Uint8Array,
+    nyquist: number,
+    bins: number,
+    range: readonly [number, number] | readonly number[],
+  ): number {
+    const previous = this.previous!;
+    const start = Math.max(Math.floor((range[0]! / nyquist) * bins), 0);
+    const end = Math.min(Math.ceil((range[1]! / nyquist) * bins), bins);
+    if (end <= start) return 0;
+
+    let total = 0;
+    for (let i = start; i < end; i++) {
+      const rise = magnitudes[i]! / 255 - previous[i]!;
+      if (rise > 0) total += rise;
+    }
+    return total / (end - start);
+  }
+}
+
+/**
+ * 発火判定（決める側）。
+ *
+ * 立ち上がりエッジ + 閾値 + クールダウンだけを見る。フラックスの作り方は知らない。
+ *
+ * **方式 A（局所適応閾値）はここに入る。** 呼び出し側が固定の閾値を渡す代わりに、
+ * このクラスが直近数百 ms のフラックスの統計（移動中央値や平均 + 係数 × 標準偏差）を
+ * 持って `threshold` を自分で決めるようにすれば、`LightCoreStudy` 側は
+ * 1 行も変えずに切り替わる。エッジとクールダウンの扱いは共通のまま使える。
+ */
+export class OnsetGate {
+  private previousValue = 0;
+  private cooldown = 0;
+
+  reset(): void {
+    this.previousValue = 0;
+    this.cooldown = 0;
+  }
+
+  /** 残りクールダウン（秒）。開発用の表示に使う。 */
+  get remainingCooldown(): number {
+    return this.cooldown;
+  }
+
+  /**
+   * 発火したら strength（0..1）を返す。しなければ null。
+   *
+   * `measured` が false のフレームはフラックスがラッチ値のままなので、
+   * 前回値との比較をせずに見送る。こうしないと同じ値で何度もエッジが立つ。
+   */
+  update(
+    value: number,
+    delta: number,
+    threshold: number,
+    cooldownSeconds: number,
+    measured: boolean,
+  ): number | null {
+    this.cooldown = Math.max(this.cooldown - delta, 0);
+    if (!measured) return null;
+
+    const rising = value > this.previousValue;
+    this.previousValue = value;
+    if (!rising) return null;
+    if (value < threshold) return null;
+    if (this.cooldown > 0) return null;
+
+    this.cooldown = cooldownSeconds;
+    return value;
+  }
+}
 
 export class LightCoreStudy implements LabExpression {
   readonly animated = true;
@@ -188,16 +425,19 @@ export class LightCoreStudy implements LabExpression {
   private pipeline: EffectPipeline | null = null;
 
   private readonly cores: Core[] = [];
-  /** シェーダーへ渡す (x, y, 明るさ)。位置は常に板の中央なので xy は 0。 */
+  /** シェーダーへ渡す (x, y, 明るさ)。縦は常に板の中央なので y は 0。 */
   private readonly coreData = new Float32Array(CORE_STUDY.maximumCores * 3);
 
+  /** 測る側と決める側（この 2 つの境界が方式 A の差し込み口）。 */
+  private readonly flux = new BandFluxAnalyzer();
+  private readonly gate = new OnsetGate();
+
   private previousElapsed = -1;
-  private previousOnset = 0;
-  private cooldown = 0;
   private lastOnsetStrength = 0;
   private lastSpectralCentroid = 0;
   private lastX = 0.5;
   private lastPeakIntensity = 0;
+  private fireCount = 0;
 
   constructor(effects: Effect[] = [], theme?: Theme) {
     this.effects = effects;
@@ -278,7 +518,12 @@ export class LightCoreStudy implements LabExpression {
 
   // ---------------------------------------------------------------- Onset
 
-  /** 感度 0..1 を Onset の閾値へ写す。感度が高いほど小さな立ち上がりも採る。 */
+  /**
+   * 感度 0..1 を発火閾値へ写す。感度が高いほど小さなフラックスも採る。
+   *
+   * 方式 A へ進むときは、この固定の写像を `OnsetGate` 側の
+   * 局所統計（直近数百 ms の中央値 + 係数 × 散らばり）へ置き換える。
+   */
   private onsetThreshold(): number {
     const high = CORE_STUDY.onsetThresholdAtZeroSensitivity;
     const low = CORE_STUDY.onsetThresholdAtFullSensitivity;
@@ -286,22 +531,32 @@ export class LightCoreStudy implements LabExpression {
   }
 
   /**
-   * 立ち上がりエッジ + 閾値 + クールダウン。
-   * engine の onset は瞬間値なので、鳴り続けている間はエッジが立たず発火しない。
+   * 測る → 決める → 生む。
+   *
+   * スペクトルは engine の生 FFT をそのまま読むだけで、engine 側は何も変えない。
+   * 発火の強さも横位置も「その瞬間に測れた値」だけで決まり、後から追従させない。
    */
-  private detectOnset(audio: AudioParameters, delta: number): void {
-    this.cooldown = Math.max(this.cooldown - delta, 0);
-    const onset = clamp01(audio.onset ?? 0);
-    const volume = clamp01(audio.volume ?? 0);
-    const rising = onset > this.previousOnset;
-    this.previousOnset = onset;
-    if (!rising) return;
-    if (onset < this.onsetThreshold()) return;
-    if (volume < CORE_STUDY.minimumVolume) return;
-    if (this.cooldown > 0) return;
-    this.cooldown = CORE_STUDY.cooldownSeconds;
+  private detectOnset(audio: AudioParameters, elapsed: number, delta: number): void {
+    const spectrum = this.context?.audioEngine.getSpectrum?.() ?? null;
+    if (spectrum) {
+      this.flux.update(
+        spectrum.magnitudes,
+        spectrum.nyquist,
+        elapsed,
+        this.params.fluxGain,
+      );
+    }
+    const strength = this.gate.update(
+      this.flux.value.combined,
+      delta,
+      this.onsetThreshold(),
+      this.params.cooldownMs / 1000,
+      spectrum !== null && this.flux.updatedThisFrame,
+    );
+    if (strength === null) return;
+    this.fireCount += 1;
     // centroid は engine が対数で 0..1 に正規化済み。Hz の生値は使わない。
-    this.spawn(onset, clamp01(audio.centroid ?? 0));
+    this.spawn(strength, clamp01(audio.centroid ?? 0));
   }
 
   /**
@@ -315,8 +570,8 @@ export class LightCoreStudy implements LabExpression {
 
   /**
    * Core を 1 個生む。サイズは固定・縦位置は中央で、音が決めるのは
-   * 「発生するか」（onset）・「その Core 自身の明るさ」（onset の大きさ）・
-   * 「横位置」（centroid）の 3 つだけ。互いに混ぜない。
+   * 「発生するか」（フラックスの立ち上がり）・「その Core 自身の明るさ」
+   * （フラックスの大きさ）・「横位置」（centroid）の 3 つだけ。互いに混ぜない。
    */
   private spawn(strength: number, centroid: number): void {
     if (this.cores.length >= CORE_STUDY.maximumCores) this.cores.shift();
@@ -417,9 +672,10 @@ export class LightCoreStudy implements LabExpression {
 
     if (!active) {
       // PRD D5: 音がなければ発生も余韻もない（無音＝黒画面が正常）。
+      // フラックスの比較元も捨てる。再開時に「止まる前との差」で誤爆させないため。
       this.cores.length = 0;
-      this.previousOnset = 0;
-      this.cooldown = 0;
+      this.flux.reset();
+      this.gate.reset();
       this.syncCoreUniforms();
       this.pipeline?.update(audio, elapsed);
       return;
@@ -427,7 +683,7 @@ export class LightCoreStudy implements LabExpression {
 
     // 発生 → 進行の順。立ち上がったフレームのぶんだけ Core も進み、
     // 発生直後の 1 フレームが真っ暗になるのを避ける。
-    this.detectOnset(audio, delta);
+    this.detectOnset(audio, elapsed, delta);
     this.advanceCores(delta);
     this.syncCoreUniforms();
     this.pipeline?.update(audio, elapsed);
@@ -528,7 +784,11 @@ export class LightCoreStudy implements LabExpression {
   }
 
   getPhase(): string {
-    return `cores ${this.cores.length} / last strength ${this.lastOnsetStrength.toFixed(2)}`;
+    const f = this.flux.value;
+    return (
+      `cores ${this.cores.length} / last strength ${this.lastOnsetStrength.toFixed(2)} / ` +
+      `flux ${f.combined.toFixed(2)} (b${f.bass.toFixed(2)} m${f.mid.toFixed(2)} t${f.treble.toFixed(2)})`
+    );
   }
 
   /** 開発・検証用。Inspector と `window.__lab` から Core の内部状態を読む。 */
@@ -539,6 +799,9 @@ export class LightCoreStudy implements LabExpression {
       lastSpectralCentroid: this.lastSpectralCentroid,
       lastX: this.lastX,
       lastPeakIntensity: this.lastPeakIntensity,
+      flux: this.flux.value,
+      onsetThreshold: this.onsetThreshold(),
+      fireCount: this.fireCount,
       cores: this.cores.map((core) => ({
         age: core.age,
         onsetStrength: core.onsetStrength,
@@ -567,6 +830,8 @@ export class LightCoreStudy implements LabExpression {
       row('minimumIntensity', 'Min intensity'),
       row('maximumIntensity', 'Max intensity'),
       row('onsetSensitivity', 'Onset sensitivity'),
+      row('fluxGain', 'Flux gain'),
+      row('cooldownMs', 'Cooldown (ms)'),
     ];
   }
 
