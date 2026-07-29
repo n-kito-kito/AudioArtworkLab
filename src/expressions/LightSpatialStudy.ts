@@ -20,6 +20,7 @@ import {
   trailSeconds,
   type LightMappingSettings,
   type LightRole,
+  type LightShape,
   type LightVisualTraits,
 } from './spatialMapping';
 
@@ -209,6 +210,8 @@ interface SpatialCore {
   readonly size: number;
   /** 色の比率（明るさは含まない）。発生時に確定する。 */
   readonly color: { readonly r: number; readonly g: number; readonly b: number };
+  /** 形（種類・伸び・向き・うねり）。発生時に確定する。 */
+  readonly shape: LightShape;
   currentIntensity: number;
   readonly attackSeconds: number;
   readonly holdSeconds: number;
@@ -236,6 +239,7 @@ export interface SpatialCoreSnapshot {
   readonly z: number;
   readonly speed: number;
   readonly role: LightRole;
+  readonly shape: string;
   readonly size: number;
   readonly color: { readonly r: number; readonly g: number; readonly b: number };
   readonly onsetStrength: number;
@@ -258,6 +262,8 @@ export interface SpatialStudyState {
   readonly lastEventCores: number;
   /** 直近のバーストが持っていた光の数（メイン + サブ）。 */
   readonly lastBurstLights: number;
+  /** この曲で起きたバーストの回数。 */
+  readonly burstCount: number;
   /** 生まれるのを待っている光の数。 */
   readonly scheduledLights: number;
   readonly flux: BandFlux;
@@ -310,10 +316,13 @@ export class LightSpatialStudy implements LabExpression {
   private readonly intensities = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
   private readonly sizes = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
   private readonly colors = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 3);
+  /** 形: x = 伸び / y = 向き(rad) / z = うねり / w = 種類(0 点 / 1 針 / 2 弧)。 */
+  private readonly shapes = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 4);
   private offsetAttribute: THREE.InstancedBufferAttribute | null = null;
   private intensityAttribute: THREE.InstancedBufferAttribute | null = null;
   private sizeAttribute: THREE.InstancedBufferAttribute | null = null;
   private colorAttribute: THREE.InstancedBufferAttribute | null = null;
+  private shapeAttribute: THREE.InstancedBufferAttribute | null = null;
 
   /** 音イベントの検出。2D Core Study とまったく同じ検出器を使う。 */
   private readonly detector = new BandLightEventDetector();
@@ -331,6 +340,8 @@ export class LightSpatialStudy implements LabExpression {
   private readonly scheduled: { at: number; traits: LightVisualTraits }[] = [];
   /** 直近のバーストが持っていた光の数（メイン + サブ）。 */
   private lastBurstLights = 0;
+  /** この曲で起きたバーストの回数（単調増加。無音でリセット）。 */
+  private burstCount = 0;
 
   private previousElapsed = -1;
   private lastBand: BandName | null = null;
@@ -380,8 +391,11 @@ export class LightSpatialStudy implements LabExpression {
     this.colorAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aOffset', this.offsetAttribute);
     this.geometry.setAttribute('aIntensity', this.intensityAttribute);
+    this.shapeAttribute = new THREE.InstancedBufferAttribute(this.shapes, 4);
+    this.shapeAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aSize', this.sizeAttribute);
     this.geometry.setAttribute('aColor', this.colorAttribute);
+    this.geometry.setAttribute('aShape', this.shapeAttribute);
     this.geometry.instanceCount = 0;
 
     this.material = new THREE.ShaderMaterial({
@@ -418,6 +432,7 @@ export class LightSpatialStudy implements LabExpression {
         attribute float aIntensity;
         attribute float aSize;
         attribute vec3 aColor;
+        attribute vec4 aShape;
         uniform float uSize;
         uniform float uSpan;
         uniform vec3 uContrast;
@@ -425,17 +440,31 @@ export class LightSpatialStudy implements LabExpression {
         varying float vIntensity;
         varying vec3 vColor;
         varying float vDistanceFade;
+        varying vec3 vShape;
 
         void main() {
           // 板は「核 + 滲み + 散乱」を全部含む大きさで張る。
           // vLocal は核の半径を 1 とした座標なので、散乱の広がりぶん外側まで伸びる。
-          vLocal = position.xy * 2.0 * uSpan;
+          // 光条は軸方向にだけ引き伸ばすので、その伸びぶんも板に含める。
+          float elongation = max(aShape.x, 1.0);
+          vec2 stretched = position.xy * vec2(elongation, 1.0);
+          vLocal = stretched * 2.0 * uSpan;
           vIntensity = aIntensity;
           vColor = aColor;
+          vShape = vec3(elongation, aShape.z, aShape.w);
           // ビュー空間で板を広げるので、板は常にカメラを向く（ビルボード）。
           // 大きさはワールド単位のまま置くだけで、遠近は投影行列が付ける。
+          // 軸方向へ伸ばしてから、向きのぶんだけ回す。
+          // うねりは「まっすぐな光条は不自然」ぶんの微小な曲がりで、
+          // 波形をそのまま形にしているわけではない。
+          float sway = sin(stretched.x * 2.6) * aShape.z * 0.16;
+          vec2 shaped = vec2(stretched.x, stretched.y + sway);
+          float ca = cos(aShape.y);
+          float sa = sin(aShape.y);
+          vec2 rotated = vec2(shaped.x * ca - shaped.y * sa, shaped.x * sa + shaped.y * ca);
+
           vec4 viewPosition = modelViewMatrix * vec4(aOffset, 1.0);
-          viewPosition.xy += position.xy * uSize * aSize * uSpan;
+          viewPosition.xy += rotated * uSize * aSize * uSpan;
           // 奥ほどわずかに沈ませる（距離のコントラスト差）。強くはしない。
           float depth = -viewPosition.z;
           float t = clamp((depth - uContrast.y) / max(uContrast.z - uContrast.y, 0.001), 0.0, 1.0);
@@ -456,6 +485,7 @@ export class LightSpatialStudy implements LabExpression {
         varying float vIntensity;
         varying vec3 vColor;
         varying float vDistanceFade;
+        varying vec3 vShape;
 
         // 半径 r のガウス。radius を変えるだけで核・滲み・散乱を作り分ける。
         float glow(float d2, float radius) {
@@ -463,7 +493,13 @@ export class LightSpatialStudy implements LabExpression {
         }
 
         void main() {
-          float d2 = dot(vLocal, vLocal);
+          // 光条は軸方向に伸びた座標で来るので、軸方向を縮めて等方に戻してから測る。
+          // こうすると同じガウスのまま「細長い光」になる。
+          float elongation = max(vShape.x, 1.0);
+          // うねりを距離にも効かせる。芯がわずかに蛇行して見える。
+          float bend = sin(vLocal.x * 1.7) * vShape.y * 0.22;
+          vec2 axis = vec2(vLocal.x / elongation, vLocal.y + bend);
+          float d2 = dot(axis, axis);
 
           // ① 明るい中心核。締まった芯。
           float core = glow(d2 * uCoreSharpness, 1.0 / max(uFalloff, 0.0001));
@@ -486,7 +522,8 @@ export class LightSpatialStudy implements LabExpression {
           vec3 level = vColor * (core + halo + scatter) + chroma * vColor;
           level *= max(vIntensity, 0.0) * vDistanceFade * uExposure;
           // 板の縁で必ず 0 にする窓。これがないと散乱が四角く切れて継ぎ目が見える。
-          float edge = clamp(1.0 - d2 / (uSpan * uSpan), 0.0, 1.0);
+          vec2 window = vec2(vLocal.x / elongation, vLocal.y) / uSpan;
+          float edge = clamp(1.0 - dot(window, window), 0.0, 1.0);
           gl_FragColor = vec4(max(level * edge * edge, 0.0), 1.0);
         }
       `,
@@ -563,6 +600,7 @@ export class LightSpatialStudy implements LabExpression {
       this.mappingSettings(),
     );
     this.lastBurstLights = plan.length;
+    this.burstCount += 1;
     this.lastBand = event.band;
     for (const light of plan) {
       if (light.delaySeconds <= 0) {
@@ -602,6 +640,7 @@ export class LightSpatialStudy implements LabExpression {
       peakIntensity: traits.intensity,
       size: traits.size,
       color: traits.color,
+      shape: traits.shape,
       currentIntensity: 0,
       attackSeconds: traits.lifetime.attackSeconds,
       holdSeconds: traits.lifetime.holdSeconds,
@@ -721,7 +760,7 @@ export class LightSpatialStudy implements LabExpression {
   /** インスタンス属性へ書き戻す。確保はせず、中身と instanceCount だけ更新する。 */
   private syncInstances(): void {
     if (!this.geometry || !this.offsetAttribute || !this.intensityAttribute) return;
-    if (!this.sizeAttribute || !this.colorAttribute) return;
+    if (!this.sizeAttribute || !this.colorAttribute || !this.shapeAttribute) return;
     let slot = 0;
     const write = (
       x: number,
@@ -730,6 +769,7 @@ export class LightSpatialStudy implements LabExpression {
       intensity: number,
       size: number,
       color: { r: number; g: number; b: number },
+      shape: LightShape,
     ): void => {
       this.offsets[slot * 3] = x;
       this.offsets[slot * 3 + 1] = y;
@@ -739,12 +779,16 @@ export class LightSpatialStudy implements LabExpression {
       this.colors[slot * 3] = color.r;
       this.colors[slot * 3 + 1] = color.g;
       this.colors[slot * 3 + 2] = color.b;
+      this.shapes[slot * 4] = shape.elongation;
+      this.shapes[slot * 4 + 1] = shape.angle;
+      this.shapes[slot * 4 + 2] = shape.waviness;
+      this.shapes[slot * 4 + 3] = shape.kind === 'spark' ? 0 : shape.kind === 'needle' ? 1 : 2;
       slot += 1;
     };
 
     for (const core of this.cores) {
       // 大きさと色は発生時に確定した値。毎フレーム作り直さないのでちらつかない。
-      write(core.position.x, core.position.y, core.position.z, core.currentIntensity, core.size, core.color);
+      write(core.position.x, core.position.y, core.position.z, core.currentIntensity, core.size, core.color, core.shape);
     }
     // 軌跡は 3D の位置履歴そのもの（2D の残像合成ではない）。
     // 先端ほど明るく太く、末尾へ向かって細く暗くなる。
@@ -756,7 +800,7 @@ export class LightSpatialStudy implements LabExpression {
           core.currentIntensity * (1 - fade) * (1 - fade) * (1 - SPATIAL_STUDY.trailIntensityAtTail);
         if (intensity <= 0.002) continue;
         const size = core.size * (1 - fade * (1 - SPATIAL_STUDY.trailSizeAtTail));
-        write(core.history[k * 3]!, core.history[k * 3 + 1]!, core.history[k * 3 + 2]!, intensity, size, core.color);
+        write(core.history[k * 3]!, core.history[k * 3 + 1]!, core.history[k * 3 + 2]!, intensity, size, core.color, core.shape);
       }
     }
 
@@ -765,6 +809,7 @@ export class LightSpatialStudy implements LabExpression {
     this.intensityAttribute.needsUpdate = true;
     this.sizeAttribute.needsUpdate = true;
     this.colorAttribute.needsUpdate = true;
+    this.shapeAttribute.needsUpdate = true;
   }
 
   // ---------------------------------------------------------------- update
@@ -803,6 +848,7 @@ export class LightSpatialStudy implements LabExpression {
     this.lastEventCores = 0;
     this.lastPosition = null;
     this.lastBurstLights = 0;
+    this.burstCount = 0;
     this.mapping.reset();
   }
 
@@ -927,6 +973,7 @@ export class LightSpatialStudy implements LabExpression {
       lastPhase: this.cores.length > 0 ? this.cores[this.cores.length - 1]!.phase : null,
       lastEventCores: this.lastEventCores,
       lastBurstLights: this.lastBurstLights,
+      burstCount: this.burstCount,
       scheduledLights: this.scheduled.length,
       flux: this.detector.bandFlux,
       bands: {
@@ -940,6 +987,7 @@ export class LightSpatialStudy implements LabExpression {
         z: core.position.z,
         speed: Math.hypot(core.velocity.x, core.velocity.y, core.velocity.z),
         role: core.role,
+        shape: `${core.shape.kind}:${core.shape.elongation.toFixed(1)}`,
         size: core.size,
         color: { ...core.color },
         onsetStrength: core.onsetStrength,
@@ -1034,6 +1082,7 @@ export class LightSpatialStudy implements LabExpression {
     this.intensityAttribute = null;
     this.sizeAttribute = null;
     this.colorAttribute = null;
+    this.shapeAttribute = null;
     this.camera = null;
     this.context = null;
   }

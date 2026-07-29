@@ -24,6 +24,23 @@ import {
 /** バーストの中での役割。メインは 1 つ、サブは複数。 */
 export type LightRole = 'main' | 'sub';
 
+/**
+ * 光の形。**波形をそのまま光の形にはしない**（波を光で描くことになるため）。
+ * うねりは「自然界にまっすぐは無い」ぶんの微妙な変形としてだけ使う。
+ */
+export type LightShapeKind = 'spark' | 'needle' | 'arc';
+
+/** 形の指定。描画側はこれを見て板の張り方と減衰を変える。 */
+export interface LightShape {
+  readonly kind: LightShapeKind;
+  /** 軸方向の伸び（1 で等方の点、大きいほど細長い光条）。 */
+  readonly elongation: number;
+  /** 軸の向き（ラジアン。画面平面での角度）。 */
+  readonly angle: number;
+  /** 軸のうねり（0 でまっすぐ、大きいほど曲がる）。**振幅は小さく保つ。** */
+  readonly waviness: number;
+}
+
 /** 1 つの光が生まれるときに決まる見え方。決まったら寿命の間は変えない。 */
 export interface LightVisualTraits {
   readonly role: LightRole;
@@ -44,6 +61,7 @@ export interface LightVisualTraits {
   };
   /** 軌跡の長さ（0..1）。0 で軌跡なし。 */
   readonly trail: number;
+  readonly shape: LightShape;
 }
 
 /**
@@ -156,6 +174,30 @@ export const LIGHT_MAPPING = {
   /** サブの速さ（メインに対する倍率）。 */
   subSpeedMinimum: 0.6,
   subSpeedMaximum: 2.2,
+
+  // ---- 形（針状の光条 / 点のスパーク / 短い波打つ弧）----
+  /**
+   * 形の出やすさは**帯域比率**で決まる。
+   * 低域優勢 → 太めで遅い弧、高域優勢 → 針とスパーク。
+   * 各値は「その帯域が主役のときの重み」で、合計が 1 になるよう正規化する。
+   */
+  shapeWeightsWhenBassLeads: { spark: 0.2, needle: 0.25, arc: 0.55 },
+  shapeWeightsWhenMidLeads: { spark: 0.34, needle: 0.36, arc: 0.3 },
+  shapeWeightsWhenTrebleLeads: { spark: 0.42, needle: 0.46, arc: 0.12 },
+  /** 光条の伸び。centroid が高いほど細く長くなる。 */
+  needleElongationAtLowCentroid: 3.4,
+  needleElongationAtHighCentroid: 9.5,
+  /** 弧の伸び。光条より短くて太い。 */
+  arcElongationAtLowCentroid: 2.2,
+  arcElongationAtHighCentroid: 4.2,
+  /**
+   * うねりの量。**flatness（音の濁り）が乱れの量**を決める。
+   * まっすぐな光条は不自然なので、澄んだ音でも 0 にはしない。
+   */
+  wavinessAtPureTone: 0.18,
+  wavinessAtNoise: 0.85,
+  /** メインの光は等方の点のまま（伸ばさない）。 */
+  mainElongation: 1,
 } as const;
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -226,6 +268,8 @@ export class LightSpatialMapping {
           decaySeconds: settings.decaySeconds,
         },
         trail,
+        // メインは等方の点。形のバリエーションはサブが担う。
+        shape: { kind: 'spark', elongation: LIGHT_MAPPING.mainElongation, angle: 0, waviness: 0 },
       },
     };
 
@@ -285,10 +329,67 @@ export class LightSpatialMapping {
             decaySeconds: settings.decaySeconds * lifeScale,
           },
           trail,
+          shape: this.shape(snapshot, h),
         },
       });
     }
     return lights;
+  }
+
+  /**
+   * サブの形。種類の出やすさは帯域比率、細さと長さは centroid、
+   * うねりの乱れ量は flatness が決める。
+   *
+   * **波形をそのまま形にはしない。** うねりは「まっすぐな光条は不自然だから
+   * わずかに曲げる」ためだけの微小な変形で、波を描くものではない。
+   */
+  private shape(snapshot: AudioEventSnapshot, h: (salt: number) => number): LightShape {
+    const { bass, mid, treble } = snapshot.bandFlux;
+    const total = Math.max(bass + mid + treble, 1e-6);
+    const weights = {
+      spark:
+        (bass / total) * LIGHT_MAPPING.shapeWeightsWhenBassLeads.spark +
+        (mid / total) * LIGHT_MAPPING.shapeWeightsWhenMidLeads.spark +
+        (treble / total) * LIGHT_MAPPING.shapeWeightsWhenTrebleLeads.spark,
+      needle:
+        (bass / total) * LIGHT_MAPPING.shapeWeightsWhenBassLeads.needle +
+        (mid / total) * LIGHT_MAPPING.shapeWeightsWhenMidLeads.needle +
+        (treble / total) * LIGHT_MAPPING.shapeWeightsWhenTrebleLeads.needle,
+      arc:
+        (bass / total) * LIGHT_MAPPING.shapeWeightsWhenBassLeads.arc +
+        (mid / total) * LIGHT_MAPPING.shapeWeightsWhenMidLeads.arc +
+        (treble / total) * LIGHT_MAPPING.shapeWeightsWhenTrebleLeads.arc,
+    };
+    const sum = weights.spark + weights.needle + weights.arc;
+    const pick = h(29) * sum;
+    const kind: LightShapeKind =
+      pick < weights.spark ? 'spark' : pick < weights.spark + weights.needle ? 'needle' : 'arc';
+
+    const centroid = clamp01(snapshot.spectralCentroid);
+    const elongation =
+      kind === 'spark'
+        ? 1
+        : kind === 'needle'
+          ? mix(
+              LIGHT_MAPPING.needleElongationAtLowCentroid,
+              LIGHT_MAPPING.needleElongationAtHighCentroid,
+              centroid,
+            )
+          : mix(
+              LIGHT_MAPPING.arcElongationAtLowCentroid,
+              LIGHT_MAPPING.arcElongationAtHighCentroid,
+              centroid,
+            );
+    const waviness =
+      kind === 'spark'
+        ? 0
+        : mix(
+            LIGHT_MAPPING.wavinessAtPureTone,
+            LIGHT_MAPPING.wavinessAtNoise,
+            clamp01(snapshot.spectralFlatness),
+          ) * (kind === 'arc' ? 1.6 : 1) * (0.6 + h(31) * 0.8);
+
+    return { kind, elongation, angle: h(37) * Math.PI, waviness };
   }
 
   /**
