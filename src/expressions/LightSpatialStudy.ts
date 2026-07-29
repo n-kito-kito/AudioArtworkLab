@@ -110,6 +110,37 @@ const SPATIAL_STUDY = {
     exposure: 1,
   },
   /**
+   * 空間の手掛かり — 床のグリッド。
+   *
+   * **Core の光にだけ照らされる。** 自ら光る床を置くと無音でも絵が出てしまう
+   * （PRD D5）ので、床は発光体ではなく「光が届いたときだけ見える面」にする。
+   * 静けさでは完全な黒。光が生まれると、その足元だけ格子が浮かんで
+   * 高さと奥行きの基準面になる。
+   */
+  floor: {
+    /** 床の高さ（ワールド Y）。最近接距離での可視下端（≈ −2.1）よりやや下。 */
+    height: -2.6,
+    /** 格子の間隔（ワールド単位）。 */
+    gridSpacing: 1.4,
+    /** 線の半幅（ワールド単位）。画面上の縁は 1px ぶんなだらかにする。 */
+    lineWidth: 0.025,
+    /** Core の光が床へ届く半径。 */
+    lightRadius: 3.4,
+    /** 床全体の効き。0 で完全に消える。 */
+    strength: 0.55,
+    /** カメラからこの距離で 1/e に沈む。遠くのモアレと地平線は見せない。 */
+    fadeDistance: 24,
+    /**
+     * 床板の張り。光が届く範囲（Core の分布 + lightRadius）を覆えれば良く、
+     * 縁は必ず無灯で黒に沈むので、板の切れ目が見えることはない。
+     */
+    width: 60,
+    depthExtent: 40,
+    /** 板の手前端（ワールド Z）。カメラのわずかに後ろから奥へ張る。 */
+    forwardEdge: 2,
+  },
+
+  /**
    * カメラのゆっくりした動き。**視差**（近い Core と遠い Core で見かけの流れが違う）を
    * 足して、静止では出ない奥行きの手掛かりを作る。音へは結ばない。
    *
@@ -294,6 +325,9 @@ export class LightSpatialStudy implements LabExpression {
   private geometry: THREE.InstancedBufferGeometry | null = null;
   private material: THREE.ShaderMaterial | null = null;
   private mesh: THREE.Mesh | null = null;
+  private floorGeometry: THREE.PlaneGeometry | null = null;
+  private floorMaterial: THREE.ShaderMaterial | null = null;
+  private floorMesh: THREE.Mesh | null = null;
   private pipeline: EffectPipeline | null = null;
 
   /** インスタンス属性。毎フレーム中身だけ書き換え、確保し直さない。 */
@@ -337,6 +371,10 @@ export class LightSpatialStudy implements LabExpression {
   private adaptiveStrength = true;
   /** カメラのゆっくりした動き（視差）。切ると原点固定へ戻る。 */
   private cameraDriftEnabled = true;
+  /** 床のグリッド。切ると床なし（従来の見え方）へ戻る。 */
+  private floorGridEnabled = true;
+  /** ビューポートの高さ（px）。床のラインの AA 幅の計算に使う。 */
+  private viewportHeight = 800;
 
   constructor(effects: Effect[] = [], theme?: Theme) {
     this.effects = effects;
@@ -496,8 +534,105 @@ export class LightSpatialStudy implements LabExpression {
     // 無音は黒（PRD D5）。背景を明示しておかないと透明のまま抜ける。
     this.scene.background = new THREE.Color(0x000000);
     this.scene.add(this.mesh);
+    this.setupFloor();
 
     this.pipeline = new EffectPipeline(context.renderer, this.scene, this.camera, this.effects);
+  }
+
+  /**
+   * 床のグリッド。自発光はせず、Core の光（位置 × 色 × いまの明るさ）にだけ照らされる。
+   * 光源は最大 Core 数ぶんのユニフォーム配列で渡し、使っていない枠は色ゼロで消しておく。
+   */
+  private setupFloor(): void {
+    if (!this.scene) return;
+    const floor = SPATIAL_STUDY.floor;
+    this.floorGeometry = new THREE.PlaneGeometry(floor.width, floor.depthExtent);
+    const lightPositions: THREE.Vector3[] = [];
+    const lightColors: THREE.Vector3[] = [];
+    for (let i = 0; i < SPATIAL_STUDY.maximumCores; i++) {
+      lightPositions.push(new THREE.Vector3());
+      lightColors.push(new THREE.Vector3());
+    }
+
+    this.floorMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uLightPositions: { value: lightPositions },
+        uLightColors: { value: lightColors },
+        uGridSpacing: { value: floor.gridSpacing },
+        uLineWidth: { value: floor.lineWidth },
+        uLightRadius: { value: floor.lightRadius },
+        uStrength: { value: floor.strength },
+        uFadeDistance: { value: floor.fadeDistance },
+        uPixelScale: { value: this.pixelScale() },
+      },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      // Core と同じ加算合成。描画順に依存せず、黒い場所には何も足さない。
+      depthWrite: false,
+      depthTest: false,
+      vertexShader: /* glsl */ `
+        varying vec3 vWorld;
+
+        void main() {
+          vec4 world = modelMatrix * vec4(position, 1.0);
+          vWorld = world.xyz;
+          gl_Position = projectionMatrix * viewMatrix * world;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        #define LIGHT_COUNT ${SPATIAL_STUDY.maximumCores}
+        uniform vec3 uLightPositions[LIGHT_COUNT];
+        uniform vec3 uLightColors[LIGHT_COUNT];
+        uniform float uGridSpacing;
+        uniform float uLineWidth;
+        uniform float uLightRadius;
+        uniform float uStrength;
+        uniform float uFadeDistance;
+        uniform float uPixelScale;
+        varying vec3 vWorld;
+
+        void main() {
+          float viewDistance = length(vWorld - cameraPosition);
+          // 画面 1px が床の上で占める幅の概算。fwidth は WebGL1 で拡張が要るため使わない。
+          float pixel = max(viewDistance * uPixelScale, 0.0001);
+
+          // 最寄りの格子線までの距離（ワールド単位）。縁を 1px ぶんなだらかにする。
+          vec2 cell = vWorld.xz / max(uGridSpacing, 0.0001);
+          vec2 toLine = (0.5 - abs(fract(cell) - 0.5)) * uGridSpacing;
+          vec2 mask = 1.0 - smoothstep(vec2(uLineWidth), vec2(uLineWidth + pixel), toLine);
+          float line = max(mask.x, mask.y);
+
+          // Core の光だけが床を照らす。自発光はしない（無音＝黒画面）。
+          vec3 light = vec3(0.0);
+          for (int i = 0; i < LIGHT_COUNT; i++) {
+            vec3 offset = vWorld - uLightPositions[i];
+            float falloff = 1.0 / (1.0 + dot(offset, offset) / (uLightRadius * uLightRadius));
+            light += uLightColors[i] * (falloff * falloff);
+          }
+
+          // 遠くは指数で沈める。モアレと地平線のちらつきを画面に出さない。
+          float fade = exp(-viewDistance / uFadeDistance);
+          gl_FragColor = vec4(max(light * (line * fade * uStrength), 0.0), 1.0);
+        }
+      `,
+    });
+
+    this.floorMesh = new THREE.Mesh(this.floorGeometry, this.floorMaterial);
+    this.floorMesh.rotation.x = -Math.PI / 2;
+    this.floorMesh.position.set(
+      0,
+      floor.height,
+      floor.forwardEdge - floor.depthExtent / 2,
+    );
+    this.floorMesh.visible = this.floorGridEnabled;
+    this.scene.add(this.floorMesh);
+  }
+
+  /** 画面 1px がワールドで占める大きさ（カメラから距離 1 のとき）。 */
+  private pixelScale(): number {
+    const halfAngle = (SPATIAL_STUDY.fieldOfView * Math.PI) / 360;
+    return (2 * Math.tan(halfAngle)) / Math.max(this.viewportHeight, 1);
   }
 
   // ---------------------------------------------------------------- 可視範囲
@@ -732,6 +867,28 @@ export class LightSpatialStudy implements LabExpression {
     this.intensityAttribute.needsUpdate = true;
     this.sizeAttribute.needsUpdate = true;
     this.colorAttribute.needsUpdate = true;
+    this.syncFloorLights();
+  }
+
+  /** 床を照らす光源（= Core）の位置と色 × いまの明るさをユニフォームへ書き戻す。 */
+  private syncFloorLights(): void {
+    const uniforms = this.floorMaterial?.uniforms;
+    if (!uniforms) return;
+    const positions = uniforms.uLightPositions!.value as THREE.Vector3[];
+    const colors = uniforms.uLightColors!.value as THREE.Vector3[];
+    for (let i = 0; i < SPATIAL_STUDY.maximumCores; i++) {
+      const core = this.cores[i];
+      const color = colors[i]!;
+      if (!core) {
+        // 使っていない枠は色ゼロ。位置が古くても寄与は 0 になる。
+        color.set(0, 0, 0);
+        continue;
+      }
+      positions[i]!.set(core.position.x, core.position.y, core.position.z);
+      color
+        .set(core.color.r, core.color.g, core.color.b)
+        .multiplyScalar(core.currentIntensity);
+    }
   }
 
   // ---------------------------------------------------------------- update
@@ -799,6 +956,10 @@ export class LightSpatialStudy implements LabExpression {
       // カメラの比率もそれに揃えないと、Core が縦横に潰れて見える。
       this.camera.aspect = width / height;
       this.camera.updateProjectionMatrix();
+    }
+    if (height > 0) {
+      this.viewportHeight = height;
+      if (this.floorMaterial) this.floorMaterial.uniforms.uPixelScale!.value = this.pixelScale();
     }
     this.pipeline?.resize(width, height);
   }
@@ -967,17 +1128,27 @@ export class LightSpatialStudy implements LabExpression {
       row('trailAmount', 'Trail'),
       row('trailWidthAmount', 'Trail width'),
       onOff('cameraDrift', 'Camera drift', this.cameraDriftEnabled),
+      onOff('floorGrid', 'Floor grid', this.floorGridEnabled),
       onOff('adaptiveThreshold', 'Adaptive threshold', this.adaptiveThreshold),
       onOff('adaptiveStrength', 'Adaptive strength', this.adaptiveStrength),
     ];
   }
 
   setExpressionParam(key: string, value: number | string): void {
-    if (key === 'adaptiveThreshold' || key === 'adaptiveStrength' || key === 'cameraDrift') {
+    if (
+      key === 'adaptiveThreshold' ||
+      key === 'adaptiveStrength' ||
+      key === 'cameraDrift' ||
+      key === 'floorGrid'
+    ) {
       const enabled = value === 'on' || value === 1;
       if (key === 'adaptiveThreshold') this.adaptiveThreshold = enabled;
       else if (key === 'adaptiveStrength') this.adaptiveStrength = enabled;
-      else this.cameraDriftEnabled = enabled;
+      else if (key === 'cameraDrift') this.cameraDriftEnabled = enabled;
+      else {
+        this.floorGridEnabled = enabled;
+        if (this.floorMesh) this.floorMesh.visible = enabled;
+      }
       return;
     }
     const numeric = typeof value === 'number' ? value : Number(value);
@@ -1003,14 +1174,20 @@ export class LightSpatialStudy implements LabExpression {
     this.pipeline?.dispose();
     this.geometry?.dispose();
     this.material?.dispose();
+    this.floorGeometry?.dispose();
+    this.floorMaterial?.dispose();
     this.cores.length = 0;
     this.resetDetection();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
+    if (this.floorMesh && this.scene) this.scene.remove(this.floorMesh);
     this.pipeline = null;
     this.mesh = null;
+    this.floorMesh = null;
     this.scene = null;
     this.geometry = null;
     this.material = null;
+    this.floorGeometry = null;
+    this.floorMaterial = null;
     this.offsetAttribute = null;
     this.intensityAttribute = null;
     this.sizeAttribute = null;
