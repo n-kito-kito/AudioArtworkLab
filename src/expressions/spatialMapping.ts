@@ -116,6 +116,58 @@ export interface LightVisualTraits {
 }
 
 /**
+ * **Burst 全体を包む質感レイヤー（Macro layer）1 枚ぶんの見え方。**
+ *
+ * 中の小さな光 1 つ 1 つに画像を貼るのではなく、**1 バーストにつき 1〜3 枚だけ**、
+ * 膜・霧・回折線を担う大きな板として置く。素材は 10 枚のアトラスから選ぶが、
+ * クロップ・回転・反転・比率・歪み・色がすべて音由来の seed で変わるので、
+ * 「10 枚の完成画像を切り替えている」ようには見えない。
+ *
+ * 時間設計は Transient（Core / Spark / Needle / Ray）と分ける。
+ * 遅れて開き、Transient より長く残ってから黒へ戻る。
+ */
+export interface MacroLayerTraits {
+  readonly position: SpatialPosition;
+  /** アトラスの何番の素材か。 */
+  readonly tile: number;
+  /** 明るさの倍率（0..1）。 */
+  readonly intensity: number;
+  /** 板の半幅・半高（ワールド単位）。**縦横比も seed で変える。** */
+  readonly halfWidth: number;
+  readonly halfHeight: number;
+  /**
+   * UV のクロップ。素材のどこを・どれだけ切り出すか。
+   * 中心 (u, v) と半径 (su, sv) で、全体は必ず 0..1 に収まる。
+   */
+  readonly crop: { readonly u: number; readonly v: number; readonly su: number; readonly sv: number };
+  /** 面内の回転（ラジアン）と反転（±1）。 */
+  readonly rotation: number;
+  readonly flipX: number;
+  readonly flipY: number;
+  /** UV の歪み（量・周波数・位相）。**発光中は動かさず、seed で固定する。** */
+  readonly warp: { readonly amount: number; readonly frequency: number; readonly phase: number };
+  /** 音から作る色。既存の分光（`LightGradient`）をそのまま使う。 */
+  readonly gradient: LightGradient;
+  /** 素材そのものの色をどれだけ残すか（0 で完全に音の色へ置き換え）。 */
+  readonly sourceTint: number;
+  /** 多角形マスクの選択（0..1）と効き。板の四角い輪郭を隠し、形を不揃いにする。 */
+  readonly maskPattern: number;
+  readonly maskAmount: number;
+  /** 寿命。Transient より長い。 */
+  readonly lifetime: {
+    readonly attackSeconds: number;
+    readonly holdSeconds: number;
+    readonly decaySeconds: number;
+  };
+}
+
+/** Macro layer 1 枚ぶんの予定。Transient より遅れて開く。 */
+export interface PlannedMacroLayer {
+  readonly delaySeconds: number;
+  readonly traits: MacroLayerTraits;
+}
+
+/**
  * バーストの中の光 1 つぶんの予定。
  * `delaySeconds` だけ遅れて生まれるので、1 つの打撃が連鎖して光る。
  */
@@ -141,6 +193,14 @@ export interface LightMappingSettings {
   readonly trailAmount: number;
   /** サブの光の個数の倍率（0〜2）。ユーザーが増減を調整する。 */
   readonly burstDensity: number;
+  /**
+   * 発光の瞬間の sustain（0..1）。Macro layer の余韻の長さに使う。
+   *
+   * **`AudioEventSnapshot` へは足さない。** 検出層（`bandLightEvents.ts`）は
+   * 2D Core Study と共有していて、1 バイトも変えない約束になっているため。
+   * この値は発光の瞬間に表現側が読んで渡すので、凍結のタイミングは snapshot と同じ。
+   */
+  readonly sustain: number;
   /**
    * 配置の流儀。
    * `center` は原点付近へ集めて**光の層を重ねる**（既定）。
@@ -315,7 +375,8 @@ export const LIGHT_MAPPING = {
   // ---- 軸平面のフラッシュ ----
   /** 1 バーストで開く平面の枚数（下限・上限）。onset の強さで増える。 */
   planeCountMinimum: 1,
-  planeCountMaximum: 6,
+  // 質感レイヤーが膜を担うようになったので、硬い面は数も減らす。
+  planeCountMaximum: 3,
   /** 平面の法線を軸からどれだけ傾けるか（0 で完全な軸平面、1 で自由）。 */
   planeAxisDeviation: 0.3,
   /** 平面の開き始めと開ききりの大きさ（Core の基準サイズに対する倍率）。 */
@@ -327,6 +388,86 @@ export const LIGHT_MAPPING = {
   /** 平面の寿命（メインに対する倍率）。瞬間的に開いて消える。 */
   planeLifetimeMinimum: 0.5,
   planeLifetimeMaximum: 1.1,
+
+  // ---- Burst を包む質感レイヤー（Macro layer）----
+  /**
+   * **素材の系統は帯域が決める**（README の対応表）。
+   * ここに書くのは manifest の `role` で、ファイル名も枚数も知らない。
+   * アトラスに無い役割は単に選ばれないので、素材が増減しても壊れない。
+   */
+  macroRolesByBand: {
+    // 低域: 広い霧・広いプリズム扇・並ぶ縦膜。長い Decay。
+    bass: ['wide-haze', 'wide-caustic', 'parallel-curtains'],
+    // 中域: 曲がるボリューム・重なる膜・曲線的な回折波。
+    mid: ['curved-volume', 'layered-sheets', 'curved-wavefront', 'caustic-fan'],
+    // 高域: 細い回折線・途切れた斜光・細い縦光。短い Decay。
+    treble: ['fine-filaments', 'segmented-rays', 'filament-and-curtain'],
+  } as Readonly<Record<BandName, readonly string[]>>,
+  /**
+   * 帯域に合わない素材が選ばれる余地。
+   * 0 にすると帯域ごとに同じ数枚しか出なくなり、素材の切り替えに見えてしまう。
+   */
+  macroOffBandWeight: 0.28,
+  /** 1 バーストの枚数（下限・上限）。**Burst 全体で 1〜3 枚まで。** */
+  macroCountMinimum: 1,
+  macroCountMaximum: 3,
+  /** 遅れて開くまでの時間（秒）。Transient のあとに膜が追いつく。 */
+  macroDelayMinimum: 0.02,
+  macroDelayMaximum: 0.16,
+  /**
+   * 時間設計（ミリ秒）。**Transient とは別の時間軸。**
+   * Bass と Sustain が高いほど長く、Treble 優勢では短くする。
+   */
+  macroAttackMsShort: 10,
+  macroAttackMsLong: 80,
+  macroHoldMsShort: 40,
+  macroHoldMsLong: 250,
+  macroDecayMsShort: 350,
+  macroDecayMsLong: 1800,
+  /** 大きさ（可視範囲の半分に対する割合）。**Volume が広さと密度を決める。** */
+  macroSizeAtSilence: 0.42,
+  macroSizeAtFullVolume: 1.15,
+  /** 縦横比のばらつき（seed）。1 で正方形、外れるほど引き伸ばされる。 */
+  macroAspectMinimum: 0.68,
+  macroAspectMaximum: 1.45,
+  /** 明るさ（onsetStrength に対する倍率）。**膜なので Transient より淡い。** */
+  macroIntensityMinimum: 0.3,
+  macroIntensityMaximum: 0.72,
+  /** 中心からのずれ（可視範囲の半分に対する割合）。 */
+  macroOffsetSpread: 0.3,
+  /** 奥行きのばらつき（ワールド単位）。層が前後に散って奥行きが出る。 */
+  macroDepthSpread: 3.4,
+  /** UV クロップの大きさ（半径。0.5 で素材の半分を使う）。 */
+  macroCropMinimum: 0.3,
+  macroCropMaximum: 0.62,
+  /**
+   * UV の歪み。**flatness（音の濁り）が歪み方を決める。**
+   * 発光中は動かさず、seed で固定する（毎フレーム入れるとちらつく）。
+   */
+  macroWarpAtPureTone: 0.015,
+  macroWarpAtNoise: 0.11,
+  macroWarpFrequencyMinimum: 1.4,
+  macroWarpFrequencyMaximum: 5.2,
+  /**
+   * 素材そのものの色を残す割合。0 で完全に音の色へ置き換える。
+   * 素材の分光色を固定色として使わないための調整幅で、Color amount が
+   * 大きいほど音の色が勝つ。
+   */
+  macroSourceTintAtZeroColor: 0.85,
+  macroSourceTintAtFullColor: 0.45,
+  /**
+   * Macro layer の彩度の下限（Color amount に比例）。
+   *
+   * Transient は極端に強い打撃で白熱する設計（`colorWhiteAtExtreme`）だが、
+   * 膜まで一緒に白くなると「虹色の膜が層になる」画にならない。
+   * **白は層が重なった場所で作る**ので、1 枚ずつには色を残す。
+   */
+  macroSaturationFloor: 0.42,
+  /** 多角形マスクの効き（板の四角い輪郭を隠し、形を不揃いにする）。 */
+  macroMaskAmountMinimum: 0.45,
+  macroMaskAmountMaximum: 0.95,
+  /** Macro layer の分光の広がり（Transient より広く取り、虹寄りにする）。 */
+  macroHueSpread: 0.62,
 
   // ---- 画面を貫く針（ray）----
   /**
@@ -377,13 +518,179 @@ const BAND_INDEX: Readonly<Record<BandName, number>> = { bass: 0, mid: 1, treble
 
 export class LightSpatialMapping {
   private readonly positions: SpatialPositionResolver;
+  /**
+   * Macro layer が選べる素材の一覧（役割と重みだけ）。
+   * アトラスが読み込まれるまでは空で、そのあいだ Macro layer は 1 枚も出ない。
+   * **描画側はどれを選ぶかを決めない** — 決めるのはこの層だけ。
+   */
+  private tiles: readonly { readonly role: string; readonly weight: number }[] = [];
 
   constructor(positionConfig: SpatialPositionConfig, recentLimit: number) {
     this.positions = new SpatialPositionResolver(positionConfig, recentLimit);
   }
 
+  /** 素材が読み込めたら教えてもらう。順番が素材番号になる。 */
+  setTextures(tiles: readonly { readonly role: string; readonly weight: number }[]): void {
+    this.tiles = tiles;
+  }
+
   reset(): void {
     this.positions.reset();
+  }
+
+  /**
+   * **Burst 全体を包む質感レイヤーを 1〜3 枚だけ組み立てる。**
+   *
+   * 中の小さな光とは別の時間軸で動き、遅れて開いて長く残る。
+   * 素材の系統は勝った帯域が、大きさは音量が、歪みは flatness が、
+   * 長さは低域寄りかどうかと sustain が決める（README の対応表）。
+   */
+  resolveMacroLayers(
+    event: BandLightEvent,
+    visible: VisibleExtent,
+    settings: LightMappingSettings,
+  ): PlannedMacroLayer[] {
+    if (this.tiles.length === 0) return [];
+    const snapshot = event.snapshot;
+    const origin =
+      settings.placementMode === 'center'
+        ? this.centerOrigin(snapshot, visible)
+        : this.positions.resolve(event, visible);
+
+    const strength = clamp01(snapshot.onsetStrength);
+    const volume = clamp01(snapshot.volume);
+    const seed = [snapshot.audioSeed, snapshot.eventIndex, BAND_INDEX[snapshot.winningBand]];
+    // 枚数は onset の強さと音量から。強い打撃ほど層が厚くなる。
+    const count = Math.max(
+      Math.round(
+        mix(
+          LIGHT_MAPPING.macroCountMinimum,
+          LIGHT_MAPPING.macroCountMaximum,
+          clamp01(strength * 0.65 + volume * 0.5),
+        ),
+      ),
+      LIGHT_MAPPING.macroCountMinimum,
+    );
+
+    // 時間の長さ。低域寄り・sustain が高いほど長く、高域優勢では短い。
+    const { bass, mid, treble } = snapshot.bandFlux;
+    const total = Math.max(bass + mid + treble, 1e-6);
+    const lengthT = clamp01(
+      0.5 + 0.55 * (bass / total - treble / total) + 0.3 * (clamp01(settings.sustain) - 0.5),
+    );
+
+    const layers: PlannedMacroLayer[] = [];
+    for (let i = 0; i < count; i++) {
+      const h = (salt: number): number => hash01(...seed, 500 + i, salt);
+      const depth = Math.max(-origin.z + (h(3) * 2 - 1) * LIGHT_MAPPING.macroDepthSpread, 2);
+      const extent = visible(depth);
+      const spread = LIGHT_MAPPING.macroOffsetSpread;
+      const size = mix(
+        LIGHT_MAPPING.macroSizeAtSilence,
+        LIGHT_MAPPING.macroSizeAtFullVolume,
+        volume,
+      );
+      const aspect = mix(LIGHT_MAPPING.macroAspectMinimum, LIGHT_MAPPING.macroAspectMaximum, h(5));
+      // 素材のどこを切り出すか。中心も大きさも毎回変わるので、
+      // 同じ素材でも別の絵に見える。全体は必ず 0..1 に収まるよう寄せる。
+      const halfCrop = mix(LIGHT_MAPPING.macroCropMinimum, LIGHT_MAPPING.macroCropMaximum, h(7));
+      const cropCenter = (value: number): number =>
+        halfCrop + value * Math.max(1 - halfCrop * 2, 0);
+      const hueOffset = (h(9) * 2 - 1) * LIGHT_MAPPING.macroHueSpread;
+
+      layers.push({
+        delaySeconds: mix(LIGHT_MAPPING.macroDelayMinimum, LIGHT_MAPPING.macroDelayMaximum, h(11)),
+        traits: {
+          position: {
+            x: origin.x + (h(13) * 2 - 1) * spread * extent.halfWidth,
+            y: origin.y + (h(15) * 2 - 1) * spread * extent.halfHeight,
+            z: -depth,
+          },
+          tile: this.pickTile(snapshot, h),
+          intensity:
+            mix(LIGHT_MAPPING.macroIntensityMinimum, LIGHT_MAPPING.macroIntensityMaximum, strength) *
+            mix(0.7, 1, h(17)),
+          halfWidth: extent.halfWidth * size * aspect,
+          halfHeight: extent.halfHeight * size / aspect,
+          crop: { u: cropCenter(h(19)), v: cropCenter(h(21)), su: halfCrop, sv: halfCrop },
+          rotation: h(23) * Math.PI * 2,
+          flipX: h(25) < 0.5 ? -1 : 1,
+          flipY: h(27) < 0.5 ? -1 : 1,
+          warp: {
+            amount: mix(
+              LIGHT_MAPPING.macroWarpAtPureTone,
+              LIGHT_MAPPING.macroWarpAtNoise,
+              clamp01(snapshot.spectralFlatness),
+            ) * mix(0.6, 1.4, h(29)),
+            frequency: mix(
+              LIGHT_MAPPING.macroWarpFrequencyMinimum,
+              LIGHT_MAPPING.macroWarpFrequencyMaximum,
+              h(31),
+            ),
+            phase: h(33) * Math.PI * 2,
+          },
+          gradient: this.saturate(
+            this.gradient(snapshot, settings, hueOffset, 500 + i),
+            LIGHT_MAPPING.macroSaturationFloor * clamp01(settings.colorAmount),
+          ),
+          sourceTint: mix(
+            LIGHT_MAPPING.macroSourceTintAtZeroColor,
+            LIGHT_MAPPING.macroSourceTintAtFullColor,
+            clamp01(settings.colorAmount),
+          ),
+          maskPattern: h(35),
+          maskAmount: mix(
+            LIGHT_MAPPING.macroMaskAmountMinimum,
+            LIGHT_MAPPING.macroMaskAmountMaximum,
+            h(37),
+          ),
+          lifetime: {
+            attackSeconds:
+              mix(LIGHT_MAPPING.macroAttackMsShort, LIGHT_MAPPING.macroAttackMsLong, lengthT) / 1000,
+            holdSeconds:
+              mix(LIGHT_MAPPING.macroHoldMsShort, LIGHT_MAPPING.macroHoldMsLong, lengthT) / 1000,
+            // 同じバーストでも層ごとに残り方を変え、まとめて消えないようにする。
+            // 上限は README の 1800ms を超えないよう抑える。
+            decaySeconds:
+              Math.min(
+                mix(LIGHT_MAPPING.macroDecayMsShort, LIGHT_MAPPING.macroDecayMsLong, lengthT) *
+                  mix(0.7, 1.25, h(39)),
+                LIGHT_MAPPING.macroDecayMsLong,
+              ) / 1000,
+          },
+        },
+      });
+    }
+    return layers;
+  }
+
+  /** 分光に彩度の下限を入れる。色相の並びはそのまま。 */
+  private saturate(gradient: LightGradient, floor: number): LightGradient {
+    if (floor <= 0) return gradient;
+    const lift = (value: number): number => Math.max(value, floor);
+    const [a, b, c, d] = gradient.saturations;
+    return { ...gradient, saturations: [lift(a), lift(b), lift(c), lift(d)] };
+  }
+
+  /**
+   * 素材を 1 枚選ぶ。**勝った帯域の役割を優先し、他の役割にも余地を残す。**
+   * 完全に帯域固定にすると、同じ帯域の曲で同じ数枚しか出なくなる。
+   */
+  private pickTile(snapshot: AudioEventSnapshot, h: (salt: number) => number): number {
+    const preferred = LIGHT_MAPPING.macroRolesByBand[snapshot.winningBand];
+    let total = 0;
+    const weights = this.tiles.map((tile) => {
+      const weight =
+        tile.weight * (preferred.includes(tile.role) ? 1 : LIGHT_MAPPING.macroOffBandWeight);
+      total += weight;
+      return weight;
+    });
+    let pick = h(41) * total;
+    for (let i = 0; i < weights.length; i++) {
+      pick -= weights[i]!;
+      if (pick <= 0) return i;
+    }
+    return weights.length - 1;
   }
 
   /**

@@ -298,6 +298,29 @@ RecordingController・QualityMonitor は再接続済み。
         いずれもインスタンス属性の追加だけで済ませ、**ドローコールは 1 のまま**
         （ピーク 38 インスタンス / バーストフレームの render は p95 0.3ms）。
         2D Core Study・`LightTraces`・`FileAudioEngine`・Effect は 1 バイトも触っていない
+  - [x] Spatial Study に**プリズム質感素材（Macro layer）**を実装
+        （素材は `public/assets/light-traces/`。実装指示は同梱の README / manifest）。
+        1 バーストにつき**質感レイヤーを 1〜3 枚だけ**、Burst 全体を包む大きな板として置く
+        （中の Spark / Needle / Ray へ個別に画像を貼らない）。
+        **アトラス 1 枚（5×2 / 512px セル）+ Instancing で Draw Call は +1**。
+        素材ごとの Material は作らず、素材番号・UV クロップ・回転・反転・比率・歪み・色を
+        インスタンス属性で渡す（`src/expressions/prismAtlas.ts`）。
+        素材は完成画像ではなく**輝度マスク**として読み、音から作った分光で再着色する。
+        板の四角い輪郭は**円窓 + 多角形 SDF マスク**の二重で消し、多角形フラッシュは
+        「硬い面」から質感レイヤーの外形マスクへ役割を移した。
+        時間軸は Transient と分離 — Macro は 20〜160ms 遅れて開き、
+        Attack 10〜80ms / Hold 40〜250ms / Decay 350〜1800ms（Bass・Sustain で長く、
+        Treble 優勢で短く）。**黒へ戻る時間と細い光の芯・発光タイミングは維持。**
+        発火は既存の `BandLightEventDetector` のまま（`AudioEngine.onset` は使わない）。
+        `sustain` は検出層と共有する `AudioEventSnapshot` を汚さないよう
+        `LightMappingSettings` 経由で渡す（2D Core Study のバイト不変を守るため）。
+        実測: reference.wav 全編で 10 素材すべてが登場 / 同じ音・同じ seed で
+        Macro layer のパラメーターが完全一致 / 帯域で素材の役割が偏る
+        （Bass → parallel-curtains・wide-haze、Mid → curved-volume・caustic-fan、
+        Treble → segmented-rays・fine-filaments）/ flatness 0.2→0.8 で歪み量が約 2.7 倍 /
+        Bass+Sustain 高で Decay 1.31〜1.80s、Treble+Sustain 低で 0.25〜0.43s /
+        画面の点灯率 p50 0.20・最大 0.78、最も明るい瞬間でも 12% 以上が純黒 /
+        無音は完全な黒 / 60fps・Draw Call 16（うち質感レイヤーは 1）
   - [ ] Spatial Study の次段階 — 空間の手掛かり（グリッドや床）/ カメラのゆっくりした動き /
         軌跡の太さを音へ結ぶか / バーストの自己励起（クラスター化）を入れるか
   - [ ] 同時発光時の位置設計（2D 側）— floor を下げると複数 Core が同じ centroid に重なる（未決）

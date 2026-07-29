@@ -19,11 +19,13 @@ import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
 import { createPolygonAtlas, type PolygonAtlas } from './polygonAtlas';
+import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
 import {
   LightSpatialMapping,
   bloomDrive,
   trailSeconds,
   type LightGradient,
+  type MacroLayerTraits,
   type LightMappingSettings,
   type LightRole,
   type LightShape,
@@ -191,13 +193,17 @@ const SPATIAL_STUDY = {
      * 平らな面が敷居を越えると面ごと滲んで一気に白へ飛ぶので、
      * 1 枚では越えず、2 枚重なってちょうど越えるあたりに置く。
      * 実測（同じ向きに重ねたときの最大輝度）: 1 枚 34 → 2 枚 65 → 3 枚で白熱。
+     *
+     * プリズム質感レイヤーが入ったあとはさらに引いてある。素材の README では
+     * 多角形は**硬い面として見せず、質感レイヤーの外形マスクに使う**役割なので、
+     * 面そのものは膜の奥にうっすら残る程度でよい。
      */
-    plane: 0.55,
+    plane: 0.3,
     /**
      * メインの光だけに掛ける追加ゲイン。
      * 「強い打撃の中心は強くてよい」ぶんをここで戻す。
      */
-    mainScale: 1.45,
+    mainScale: 1.2,
     /** 軌跡の節に掛ける追加の薄さ。残像はさらに引っ込める。 */
     trailScale: 0.55,
   },
@@ -272,6 +278,61 @@ const SPATIAL_STUDY = {
     lengthAtBirth: 0.12,
     /** 端の落ち。1 に近いほど画面外ぎりぎりまで同じ濃さで届く。 */
     tipTaper: 0.22,
+  },
+
+  /**
+   * **Burst 全体を包むプリズム質感レイヤー（Macro layer）。**
+   *
+   * 10 枚の素材を 1 枚のアトラスへまとめ、素材番号・UV クロップ・回転・反転・
+   * 歪み・色をインスタンス属性で渡す。**Texture layer の Draw Call は 1**。
+   * 素材ごとの Material は作らない。
+   *
+   * 素材は「完成した絵」ではなく**輝度マスク**として読む。色は音から作った
+   * グラデーションと混ぜ、板の四角い輪郭は円窓と多角形マスクの二重で消す。
+   */
+  macro: {
+    /** 同時に生かす枚数。Decay が長いので Transient より長く残る。 */
+    maximumLayers: 24,
+    /** アトラスの組み立て。元は 1024px だが、大きく引き伸ばすので落として持つ。 */
+    atlas: {
+      // Vite の base に追従させる（既定は '/'）。ページの階層に依らず解決できる。
+      manifestUrl: `${import.meta.env.BASE_URL}assets/light-traces/manifest.json`,
+      cellPixels: 512,
+      columns: 5,
+    },
+    /**
+     * 1 枚あたりの濃度。**膜として透ける**のが役目なので、
+     * Transient の芯より薄い。重なったところだけが濃くなる。
+     */
+    opacity: 1.25,
+    /**
+     * 板の四角い輪郭を消す円窓。この半径から外へ向けて 0 になる。
+     * **ここを 1.0 に近づけると素材の正方形が見えてしまう。**
+     */
+    edgeFadeStart: 0.3,
+    /**
+     * 黒浮きを落とす敷居と幅。素材の暗部を加算の前に切る。
+     * これが無いと、薄い Haze が画面全体を灰色に持ち上げる。
+     *
+     * **素材の実測が効いている値。** 10 枚の平均輝度は 0.017〜0.066 しかなく、
+     * 見せたい膜そのものが 0.05〜0.3 に居る。敷居を 0.05 に置くと膜まで
+     * 一緒に消えてしまったので、ノイズ側（0.01 以下）だけを切る幅にしてある。
+     */
+    blackFloor: 0.024,
+    blackFloorWidth: 0.05,
+    /**
+     * 素材の輝度の曲げ。1 で素通し。
+     * **1 未満で暗部を持ち上げる。** 素材の膜は元が暗いので、
+     * 締める（>1）と芯の細い線しか残らず「膜が漂う」感じが出ない。
+     */
+    luminanceGamma: 0.8,
+    /**
+     * 多角形マスクの柔らかさ。**硬い面には見せない**ので広くぼかす。
+     * 0.5 の前後この幅で切り替わるので、0.2 なら輪郭は完全になだらか。
+     */
+    maskSoftness: 0.21,
+    /** UV をマスの内側へ寄せる余白。隣の素材へ絶対に滲ませない。 */
+    cellInset: 0.004,
   },
 
   /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
@@ -411,6 +472,17 @@ interface SpatialCore {
   readonly trail: number;
 }
 
+/**
+ * 生きている Macro layer 1 枚。
+ * 見え方は発生時に確定していて、動くのは明るさ（Envelope）だけ。
+ */
+interface MacroLayer {
+  readonly traits: MacroLayerTraits;
+  currentIntensity: number;
+  age: number;
+  completed: boolean;
+}
+
 /** 開発・検証用に外へ見せる Core 1 個ぶんの状態。 */
 export interface SpatialCoreSnapshot {
   readonly x: number;
@@ -451,6 +523,22 @@ export interface SpatialStudyState {
   readonly burstCount: number;
   /** 生まれるのを待っている光の数。 */
   readonly scheduledLights: number;
+  /** いま開いている質感レイヤーの数と、その内訳（検証用）。 */
+  readonly macroLayers: readonly {
+    readonly tile: number;
+    readonly intensity: number;
+    readonly age: number;
+    readonly halfWidth: number;
+    readonly halfHeight: number;
+    readonly rotation: number;
+    readonly crop: { readonly u: number; readonly v: number; readonly su: number };
+    readonly decaySeconds: number;
+    readonly warp: number;
+    readonly maskAmount: number;
+    readonly hues: readonly number[];
+  }[];
+  /** 素材が読み込めているか（枚数。0 なら Macro layer は出ない）。 */
+  readonly prismTiles: number;
   readonly flux: BandFlux;
   readonly bands: Readonly<Record<BandName, BandGateState>>;
   readonly cores: readonly SpatialCoreSnapshot[];
@@ -548,6 +636,16 @@ export class LightSpatialStudy implements LabExpression {
   private mesh: THREE.Mesh | null = null;
   /** 軸平面が使う多角形の帳面。起動時に一度だけ焼く。 */
   private atlas: PolygonAtlas | null = null;
+  /**
+   * プリズム質感のアトラス（10 枚）。**非同期で届く。**
+   * 届くまでは Macro layer が 1 枚も出ないだけで、既存の光はそのまま動く。
+   */
+  private prism: PrismAtlas | null = null;
+  /** 読み込み後に dispose された場合へ備える印。 */
+  private disposed = false;
+  private macroGeometry: THREE.InstancedBufferGeometry | null = null;
+  private macroMaterial: THREE.ShaderMaterial | null = null;
+  private macroMesh: THREE.Mesh | null = null;
   /** 描画バッファの高さ（画素）。針の芯を「1〜2px」に保つのに要る。 */
   private viewportHeight = 1;
   /** 上を毎フレーム測り直すための使い回しの入れ物（確保し直さない）。 */
@@ -586,6 +684,26 @@ export class LightSpatialStudy implements LabExpression {
   private readonly forms = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
   /** 軸平面が使う多角形の番号（アトラスのセル）。他の形では 0。 */
   private readonly patterns = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
+
+  /**
+   * Macro layer のインスタンス属性。**素材ごとに Material を作らないための束。**
+   * 素材番号・UV クロップ・向き・歪み・色・マスクをすべてここで渡す。
+   */
+  private readonly macroOffsets = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 3);
+  /** 半幅 / 半高 / 素材番号。 */
+  private readonly macroSizes = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 3);
+  private readonly macroIntensities = new Float32Array(SPATIAL_STUDY.macro.maximumLayers);
+  /** クロップの中心 (u, v) と半径 (su, sv)。 */
+  private readonly macroCrops = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
+  /** cos / sin / 左右反転 / 上下反転。 */
+  private readonly macroOrients = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
+  /** 歪みの量 / 周波数 / 位相 / グラデーションの形式。 */
+  private readonly macroWarps = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
+  /** 多角形マスクの番号 / 効き / 素材の色を残す割合。 */
+  private readonly macroStyles = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 3);
+  private readonly macroHues = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
+  private readonly macroSaturations = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
+  private readonly macroAttributes: Record<string, THREE.InstancedBufferAttribute> = {};
   /** 形: x = 伸び / y = 向き(rad) / z = うねり / w = 種類(0 点 / 1 針 / 2 弧 / 3 平面)。 */
   private readonly shapes = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 4);
   /** 平面の法線（ワールド空間）。他の形では使わない。 */
@@ -612,8 +730,17 @@ export class LightSpatialStudy implements LabExpression {
     SPATIAL_STUDY.maximumCores,
   );
   private readonly cores: SpatialCore[] = [];
+  /** 生きている質感レイヤー。Transient とは別の時間軸で動く。 */
+  private readonly macros: MacroLayer[] = [];
   /** 遅れて生まれる予定の光（バーストの連鎖）。 */
   private readonly scheduled: { at: number; traits: LightVisualTraits }[] = [];
+  /** 遅れて開く予定の質感レイヤー。 */
+  private readonly scheduledMacros: { at: number; traits: MacroLayerTraits }[] = [];
+  /**
+   * 発光の瞬間の sustain。検出のために音を読むついでに拾っておき、
+   * 対応づけ層へ渡す（`AudioEventSnapshot` は 2D と共有なので触らない）。
+   */
+  private lastSustain = 0;
   /** 直近のバーストが持っていた光の数（メイン + サブ）。 */
   private lastBurstLights = 0;
   /** この曲で起きたバーストの回数（単調増加。無音でリセット）。 */
@@ -1001,7 +1128,29 @@ export class LightSpatialStudy implements LabExpression {
     this.scene = new THREE.Scene();
     // 無音は黒（PRD D5）。背景を明示しておかないと透明のまま抜ける。
     this.scene.background = new THREE.Color(0x000000);
+    // 質感レイヤーは Transient の後ろ。加算なので順序は見た目に影響しないが、
+    // **同じ Scene に置く**ことで内部 Bloom が両方を拾う（Bloom は増設しない）。
+    this.createMacroMesh();
+    if (this.macroMesh) this.scene.add(this.macroMesh);
     this.scene.add(this.mesh);
+
+    // プリズム素材は非同期。届いたら対応づけ層へ渡し、そこから選ばれるようになる。
+    void loadPrismAtlas(SPATIAL_STUDY.macro.atlas).then((prism) => {
+      if (!prism) return;
+      if (this.disposed) {
+        prism.texture.dispose();
+        return;
+      }
+      this.prism = prism;
+      if (this.macroMaterial) {
+        this.macroMaterial.uniforms.uAtlas!.value = prism.texture;
+        this.macroMaterial.uniforms.uAtlasGrid!.value = new THREE.Vector2(
+          prism.columns,
+          prism.rows,
+        );
+      }
+      this.mapping.setTextures(prism.tiles);
+    });
 
     // ---- 内部 Bloom（参照デモの UnrealBloomPass と同じ構成）----
     const size = new THREE.Vector2();
@@ -1064,6 +1213,206 @@ export class LightSpatialStudy implements LabExpression {
     );
   }
 
+  /**
+   * **プリズム質感レイヤーの描画体（1 ドロー）。**
+   *
+   * 10 枚ぶんの Material は作らない。素材番号も UV も色もインスタンス属性で渡し、
+   * アトラスから 1 マスを読むだけにする。素材は「完成した絵」ではなく
+   * **輝度マスク**として扱い、色は音から作る。
+   */
+  private createMacroMesh(): void {
+    if (!this.atlas) return;
+    const plane = new THREE.PlaneGeometry(1, 1);
+    const geometry = new THREE.InstancedBufferGeometry();
+    geometry.index = plane.index;
+    geometry.setAttribute('position', plane.getAttribute('position'));
+    geometry.setAttribute('uv', plane.getAttribute('uv'));
+    plane.dispose();
+
+    const add = (name: string, data: Float32Array, size: number): void => {
+      const attribute = new THREE.InstancedBufferAttribute(data, size);
+      attribute.setUsage(THREE.DynamicDrawUsage);
+      geometry.setAttribute(name, attribute);
+      this.macroAttributes[name] = attribute;
+    };
+    add('aOffset', this.macroOffsets, 3);
+    add('aSize', this.macroSizes, 3);
+    add('aIntensity', this.macroIntensities, 1);
+    add('aCrop', this.macroCrops, 4);
+    add('aOrient', this.macroOrients, 4);
+    add('aWarp', this.macroWarps, 4);
+    add('aStyle', this.macroStyles, 3);
+    add('aHues', this.macroHues, 4);
+    add('aSaturations', this.macroSaturations, 4);
+    geometry.instanceCount = 0;
+
+    // アトラスが届くまでの仮の 1×1 黒。無音＝黒を素材の到着に依らず守る。
+    const placeholder = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    placeholder.needsUpdate = true;
+
+    const macro = SPATIAL_STUDY.macro;
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uAtlas: { value: placeholder },
+        uAtlasGrid: { value: new THREE.Vector2(1, 1) },
+        uMaskAtlas: { value: this.atlas.texture },
+        uMaskGrid: { value: new THREE.Vector2(this.atlas.columns, this.atlas.rows) },
+        // 円窓の始まり / 黒浮きの敷居 / 同・幅 / 輝度の締め。
+        uMacro: {
+          value: new THREE.Vector4(
+            macro.edgeFadeStart,
+            macro.blackFloor,
+            macro.blackFloorWidth,
+            macro.luminanceGamma,
+          ),
+        },
+        // 多角形マスクの柔らかさ / マスの内側へ寄せる余白。
+        uMacroEdge: { value: new THREE.Vector2(macro.maskSoftness, macro.cellInset) },
+        uIntensity: { value: SPATIAL_STUDY.defaults.intensity },
+      },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      vertexShader: /* glsl */ `
+        attribute vec3 aOffset;
+        attribute vec3 aSize;
+        attribute float aIntensity;
+        attribute vec4 aCrop;
+        attribute vec4 aOrient;
+        attribute vec4 aWarp;
+        attribute vec3 aStyle;
+        attribute vec4 aHues;
+        attribute vec4 aSaturations;
+        varying vec2 vLocal;
+        varying float vIntensity;
+        varying float vTile;
+        varying vec4 vCrop;
+        varying vec4 vOrient;
+        varying vec4 vWarp;
+        varying vec3 vStyle;
+        varying vec4 vHues;
+        varying vec4 vSaturations;
+
+        void main() {
+          // 板の中を −1..1 で持つ。円窓も UV も全部この座標で作る。
+          vLocal = position.xy * 2.0;
+          vIntensity = aIntensity;
+          vTile = aSize.z;
+          vCrop = aCrop;
+          vOrient = aOrient;
+          vWarp = aWarp;
+          vStyle = aStyle;
+          vHues = aHues;
+          vSaturations = aSaturations;
+          // ビュー空間で広げるビルボード。膜は常にカメラを向く。
+          vec4 viewPosition = modelViewMatrix * vec4(aOffset, 1.0);
+          viewPosition.xy += vLocal * vec2(aSize.x, aSize.y);
+          gl_Position = projectionMatrix * viewPosition;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D uAtlas;
+        uniform vec2 uAtlasGrid;
+        uniform sampler2D uMaskAtlas;
+        uniform vec2 uMaskGrid;
+        uniform vec4 uMacro;
+        uniform vec2 uMacroEdge;
+        uniform float uIntensity;
+        varying vec2 vLocal;
+        varying float vIntensity;
+        varying float vTile;
+        varying vec4 vCrop;
+        varying vec4 vOrient;
+        varying vec4 vWarp;
+        varying vec3 vStyle;
+        varying vec4 vHues;
+        varying vec4 vSaturations;
+
+        vec3 spectralRgb(float hue, float saturation) {
+          vec3 p = fract(vec3(hue) + vec3(0.0, 0.6666667, 0.3333333)) * 6.0;
+          vec3 v = clamp(min(p, 4.0 - p), 0.0, 1.0);
+          return 1.0 - clamp(saturation, 0.0, 1.0) * (1.0 - v);
+        }
+
+        float ramp4(vec4 stops, float t) {
+          float u = clamp(t, 0.0, 1.0) * 3.0;
+          float f0 = clamp(u, 0.0, 1.0);
+          float f1 = clamp(u - 1.0, 0.0, 1.0);
+          float f2 = clamp(u - 2.0, 0.0, 1.0);
+          return mix(mix(mix(stops.x, stops.y, f0), stops.z, f1), stops.w, f2);
+        }
+
+        /** 分光の位置。Transient と同じ 5 形式を使う。 */
+        float gradientPosition(vec2 p, float form) {
+          float radius = clamp(length(p), 0.0, 1.0);
+          if (form < 0.5) return radius;
+          if (form < 1.5) return 1.0 - radius;
+          if (form < 2.5) return 0.5 + p.x * 0.5;
+          if (form < 3.5) return 0.5 + p.y * 0.5;
+          return atan(p.y, p.x) * 0.1591549 + 0.5;
+        }
+
+        void main() {
+          vec2 p = vLocal;
+          // ① 円窓。**板の四角い輪郭を絶対に見せない**ための一段目。
+          float window = 1.0 - smoothstep(uMacro.x, 1.0, length(p));
+          if (window <= 0.0) discard;
+
+          // ② 回転・反転・歪みを掛けた UV。歪みの位相は発生時に固定してあるので、
+          //    発光中に形がちらつくことはない。
+          vec2 q = vec2(p.x * vOrient.x - p.y * vOrient.y, p.x * vOrient.y + p.y * vOrient.x);
+          q *= vec2(vOrient.z, vOrient.w);
+          q += vec2(
+            sin(q.y * vWarp.y + vWarp.z),
+            cos(q.x * vWarp.y * 0.87 + vWarp.z * 1.31)
+          ) * vWarp.x;
+
+          // ③ クロップ。素材のどこを切り出すかが毎回変わるので、同じ素材でも別の絵になる。
+          vec2 cell = clamp(vCrop.xy + q * vCrop.zw, uMacroEdge.y, 1.0 - uMacroEdge.y);
+          float column = mod(vTile, uAtlasGrid.x);
+          float row = floor(vTile / uAtlasGrid.x);
+          vec2 atlasUv = (vec2(column, row) + cell) / uAtlasGrid;
+          vec3 source = texture2D(uAtlas, atlasUv).rgb;
+
+          // ④ 輝度マスク。素材は絵ではなく濃淡として読む。
+          float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
+          // 黒浮きを加算の前に落とす。これが無いと Haze で画面全体が灰色になる。
+          luminance *= smoothstep(uMacro.y, uMacro.y + uMacro.z, luminance);
+          luminance = pow(max(luminance, 0.0), uMacro.w);
+
+          // ⑤ 音から作った色。素材そのものの色みは割合で混ぜるだけ。
+          float t = gradientPosition(p, vWarp.w);
+          vec3 tint = spectralRgb(ramp4(vHues, t), ramp4(vSaturations, t));
+          vec3 sourceHue = source / max(max(source.r, max(source.g, source.b)), 1e-4);
+          vec3 tone = mix(tint, sourceHue, clamp(vStyle.z, 0.0, 1.0));
+
+          // ⑥ 多角形マスク。**硬い面としては見せず**、膜の外形を不揃いにするだけ。
+          vec2 maskCell = clamp(p * 0.5 + 0.5, 0.0, 1.0);
+          vec2 maskInset = mix(vec2(0.004), vec2(0.996), maskCell);
+          float maskColumn = mod(vStyle.x, uMaskGrid.x);
+          float maskRow = floor(vStyle.x / uMaskGrid.x);
+          vec2 maskUv = (vec2(maskColumn, maskRow) + maskInset) / uMaskGrid;
+          float sdf = texture2D(uMaskAtlas, maskUv).r;
+          float polygon = smoothstep(0.5 - uMacroEdge.x, 0.5 + uMacroEdge.x, sdf);
+          float silhouette = mix(1.0, polygon, clamp(vStyle.y, 0.0, 1.0));
+
+          vec3 color = tone * luminance * window * silhouette * max(vIntensity, 0.0) * uIntensity;
+          gl_FragColor = vec4(max(color, 0.0), 1.0);
+        }
+      `,
+    });
+
+    this.macroGeometry = geometry;
+    this.macroMaterial = material;
+    this.macroMesh = new THREE.Mesh(geometry, material);
+    // 板はシェーダーで広げるので、three の境界球では判定できない。
+    this.macroMesh.frustumCulled = false;
+    // 加算なので順序は絵に影響しないが、Transient より先に描いておく。
+    this.macroMesh.renderOrder = -1;
+  }
+
   /** 開発スライダーの値を内部 Bloom と露出へ流す。毎フレーム呼んで即座に効かせる。 */
   private syncOptics(): void {
     if (this.material && this.camera) {
@@ -1093,6 +1442,9 @@ export class LightSpatialStudy implements LabExpression {
     if (this.displayMaterial) {
       this.displayMaterial.uniforms.uExposure!.value = this.params.exposure;
     }
+    if (this.macroMaterial) {
+      this.macroMaterial.uniforms.uIntensity!.value = this.params.intensity;
+    }
   }
 
   // ---------------------------------------------------------------- 可視範囲
@@ -1112,6 +1464,8 @@ export class LightSpatialStudy implements LabExpression {
   private detectEvents(elapsed: number, delta: number): void {
     const audio = this.context?.audioEngine.getParameters() ?? {};
     const spectrum = this.context?.audioEngine.getSpectrum?.() ?? null;
+    // 発光の瞬間の余韻。対応づけ層へ渡すだけで、ここでは見え方を決めない。
+    this.lastSustain = clamp01(audio.sustain ?? 0);
     const events = this.detector.update(
       spectrum,
       {
@@ -1148,11 +1502,15 @@ export class LightSpatialStudy implements LabExpression {
    * 遅れも位置も音由来の決定論ハッシュなので、同じ音源なら同じ連鎖になる。
    */
   private scheduleBurst(event: BandLightEvent, elapsed: number): void {
-    const plan = this.mapping.resolveBurst(
-      event,
-      (depth) => this.visibleHalfExtent(depth),
-      this.mappingSettings(),
-    );
+    const visible = (depth: number): { halfWidth: number; halfHeight: number } =>
+      this.visibleHalfExtent(depth);
+    const settings = this.mappingSettings();
+    const plan = this.mapping.resolveBurst(event, visible, settings);
+
+    // Burst 全体を包む質感レイヤー。**遅れて開き、Transient より長く残る。**
+    for (const layer of this.mapping.resolveMacroLayers(event, visible, settings)) {
+      this.scheduledMacros.push({ at: elapsed + layer.delaySeconds, traits: layer.traits });
+    }
     this.lastBurstLights = plan.length;
     this.burstCount += 1;
     this.lastBand = event.band;
@@ -1167,18 +1525,37 @@ export class LightSpatialStudy implements LabExpression {
 
   /** 予約した光のうち、時刻が来たものを生む。 */
   private releaseScheduled(elapsed: number): void {
-    if (this.scheduled.length === 0) return;
+    if (this.scheduled.length > 0) {
+      let write = 0;
+      for (let read = 0; read < this.scheduled.length; read++) {
+        const entry = this.scheduled[read]!;
+        if (entry.at <= elapsed) {
+          this.spawn(entry.traits);
+          continue;
+        }
+        this.scheduled[write] = entry;
+        write += 1;
+      }
+      this.scheduled.length = write;
+    }
+    if (this.scheduledMacros.length === 0) return;
     let write = 0;
-    for (let read = 0; read < this.scheduled.length; read++) {
-      const entry = this.scheduled[read]!;
+    for (let read = 0; read < this.scheduledMacros.length; read++) {
+      const entry = this.scheduledMacros[read]!;
       if (entry.at <= elapsed) {
-        this.spawn(entry.traits);
+        this.spawnMacro(entry.traits);
         continue;
       }
-      this.scheduled[write] = entry;
+      this.scheduledMacros[write] = entry;
       write += 1;
     }
-    this.scheduled.length = write;
+    this.scheduledMacros.length = write;
+  }
+
+  /** 質感レイヤーを 1 枚開く。上限に達したら最も古いものから捨てる。 */
+  private spawnMacro(traits: MacroLayerTraits): void {
+    if (this.macros.length >= SPATIAL_STUDY.macro.maximumLayers) this.macros.shift();
+    this.macros.push({ traits, currentIntensity: 0, age: 0, completed: false });
   }
 
   /** 予定 1 つから光を 1 つ生む。見え方はすでに Mapping 層が決めている。 */
@@ -1231,6 +1608,7 @@ export class LightSpatialStudy implements LabExpression {
       motionAmount: this.params.motionAmount,
       trailAmount: this.params.trailAmount,
       burstDensity: this.params.burstDensity,
+      sustain: this.lastSustain,
       placementMode: this.placementMode,
     };
   }
@@ -1299,6 +1677,78 @@ export class LightSpatialStudy implements LabExpression {
     history[1] = core.position.y;
     history[2] = core.position.z;
     core.historyCount = Math.min(core.historyCount + 1, SPATIAL_STUDY.trailSegments);
+  }
+
+  /**
+   * 質感レイヤーを進める。**Transient とは別の時間軸。**
+   * 明るさは age の純粋な関数で、形も色も発生時から変わらない。
+   */
+  private advanceMacros(delta: number): void {
+    let write = 0;
+    for (let read = 0; read < this.macros.length; read++) {
+      const layer = this.macros[read]!;
+      layer.age += delta;
+      const { attackSeconds: attack, holdSeconds: hold, decaySeconds: decay } = layer.traits.lifetime;
+      const peak = layer.traits.intensity;
+      if (layer.age < attack) {
+        layer.currentIntensity = peak * (attack <= 0 ? 1 : layer.age / attack);
+      } else if (layer.age < attack + hold) {
+        layer.currentIntensity = peak;
+      } else {
+        const t = decay <= 0 ? 1 : (layer.age - attack - hold) / decay;
+        if (t >= 1) {
+          layer.completed = true;
+          layer.currentIntensity = 0;
+        } else {
+          layer.currentIntensity = peak * decayShape(t);
+        }
+      }
+      if (layer.completed) continue;
+      this.macros[write] = layer;
+      write += 1;
+    }
+    this.macros.length = write;
+  }
+
+  /** 質感レイヤーのインスタンス属性を書き戻す。確保はしない。 */
+  private syncMacroInstances(): void {
+    if (!this.macroGeometry) return;
+    const maskCount = Math.max(this.atlas?.patterns ?? 1, 1);
+    const opacity = SPATIAL_STUDY.macro.opacity;
+    let slot = 0;
+    for (const layer of this.macros) {
+      const t = layer.traits;
+      this.macroOffsets[slot * 3] = t.position.x;
+      this.macroOffsets[slot * 3 + 1] = t.position.y;
+      this.macroOffsets[slot * 3 + 2] = t.position.z;
+      this.macroSizes[slot * 3] = t.halfWidth;
+      this.macroSizes[slot * 3 + 1] = t.halfHeight;
+      this.macroSizes[slot * 3 + 2] = t.tile;
+      this.macroIntensities[slot] = layer.currentIntensity * opacity;
+      this.macroCrops[slot * 4] = t.crop.u;
+      this.macroCrops[slot * 4 + 1] = t.crop.v;
+      this.macroCrops[slot * 4 + 2] = t.crop.su;
+      this.macroCrops[slot * 4 + 3] = t.crop.sv;
+      this.macroOrients[slot * 4] = Math.cos(t.rotation);
+      this.macroOrients[slot * 4 + 1] = Math.sin(t.rotation);
+      this.macroOrients[slot * 4 + 2] = t.flipX;
+      this.macroOrients[slot * 4 + 3] = t.flipY;
+      this.macroWarps[slot * 4] = t.warp.amount;
+      this.macroWarps[slot * 4 + 1] = t.warp.frequency;
+      this.macroWarps[slot * 4 + 2] = t.warp.phase;
+      this.macroWarps[slot * 4 + 3] = t.gradient.form;
+      // 0..1 の割合を多角形の番号へ。枚数は描画側だけが知っている。
+      this.macroStyles[slot * 3] = Math.min(Math.floor(t.maskPattern * maskCount), maskCount - 1);
+      this.macroStyles[slot * 3 + 1] = t.maskAmount;
+      this.macroStyles[slot * 3 + 2] = t.sourceTint;
+      for (let c = 0; c < 4; c++) {
+        this.macroHues[slot * 4 + c] = t.gradient.hues[c]!;
+        this.macroSaturations[slot * 4 + c] = t.gradient.saturations[c]!;
+      }
+      slot += 1;
+    }
+    this.macroGeometry.instanceCount = slot;
+    for (const attribute of Object.values(this.macroAttributes)) attribute.needsUpdate = true;
   }
 
   /** 進めながら、終わった Core を詰めて捨てる（参照を残さない）。 */
@@ -1405,11 +1855,15 @@ export class LightSpatialStudy implements LabExpression {
 
     if (!active) {
       // PRD D5: 音がなければ発生も余韻もない（無音＝黒画面が正常）。
+      // 質感レイヤーは Decay が長いぶん、ここで確実に落とす。
       this.syncOptics();
       this.cores.length = 0;
       this.scheduled.length = 0;
+      this.macros.length = 0;
+      this.scheduledMacros.length = 0;
       this.resetDetection();
       this.syncInstances();
+      this.syncMacroInstances();
       this.pipeline?.update(audio, elapsed);
       return;
     }
@@ -1418,7 +1872,9 @@ export class LightSpatialStudy implements LabExpression {
     this.detectEvents(elapsed, delta);
     this.releaseScheduled(elapsed);
     this.advanceCores(delta);
+    this.advanceMacros(delta);
     this.syncInstances();
+    this.syncMacroInstances();
     this.pipeline?.update(audio, elapsed);
   }
 
@@ -1565,6 +2021,20 @@ export class LightSpatialStudy implements LabExpression {
       lastBurstLights: this.lastBurstLights,
       burstCount: this.burstCount,
       scheduledLights: this.scheduled.length,
+      prismTiles: this.prism?.tiles.length ?? 0,
+      macroLayers: this.macros.map((layer) => ({
+        tile: layer.traits.tile,
+        intensity: layer.currentIntensity,
+        age: layer.age,
+        halfWidth: layer.traits.halfWidth,
+        halfHeight: layer.traits.halfHeight,
+        rotation: layer.traits.rotation,
+        crop: { u: layer.traits.crop.u, v: layer.traits.crop.v, su: layer.traits.crop.su },
+        decaySeconds: layer.traits.lifetime.decaySeconds,
+        warp: layer.traits.warp.amount,
+        maskAmount: layer.traits.maskAmount,
+        hues: [...layer.traits.gradient.hues],
+      })),
       flux: this.detector.bandFlux,
       bands: {
         bass: this.detector.bandState('bass'),
@@ -1682,6 +2152,17 @@ export class LightSpatialStudy implements LabExpression {
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.macroGeometry?.dispose();
+    this.macroMaterial?.dispose();
+    this.prism?.texture.dispose();
+    if (this.macroMesh && this.scene) this.scene.remove(this.macroMesh);
+    this.macroGeometry = null;
+    this.macroMaterial = null;
+    this.macroMesh = null;
+    this.prism = null;
+    this.macros.length = 0;
+    this.scheduledMacros.length = 0;
     this.pipeline?.dispose();
     this.bloomPass?.dispose();
     this.bloomComposer?.dispose();
