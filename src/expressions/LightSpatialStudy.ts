@@ -15,7 +15,11 @@ import {
 import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
-import { LightSpatialMapping, type LightMappingSettings } from './spatialMapping';
+import {
+  LightSpatialMapping,
+  trailSeconds,
+  type LightMappingSettings,
+} from './spatialMapping';
 
 /**
  * Light Traces — Spatial Study。**3D 空間の検証表現**であり、完成版ではない。
@@ -56,6 +60,15 @@ const SPATIAL_STUDY = {
   coreWorldSize: 0.62,
   /** ガウス減衰の鋭さ。板の端で exp(-3) ≈ 0.05 まで落ちる。 */
   coreFalloff: 3,
+  /**
+   * 軌跡 1 本ぶんの節の数。**3D の位置履歴**を固定長で持ち、同じ InstancedMesh の
+   * 後ろ半分として 1 ドローで描く。増やすほど滑らかになるが描画量も増える。
+   */
+  trailSegments: 12,
+  /** 軌跡の節の明るさ（先端 → 末尾）。0 で完全に消える。 */
+  trailIntensityAtTail: 0,
+  /** 軌跡の節の大きさ（先端に対する末尾の倍率）。細くなるほど「光跡」に見える。 */
+  trailSizeAtTail: 0.35,
   /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
   maximumDelta: 0.05,
   /** Decay の曲がり。大きいほど頭で速く落ちる。 */
@@ -96,7 +109,7 @@ const SPATIAL_STUDY = {
     sizeAmount: 0.85,
     colorAmount: 0.8,
     motionAmount: 0.7,
-    trailAmount: 0,
+    trailAmount: 0.35,
   },
   ranges: {
     attackMs: { min: 1, max: 200, step: 1 },
@@ -144,6 +157,17 @@ interface SpatialCore {
   age: number;
   phase: SpatialCorePhase;
   completed: boolean;
+  /**
+   * 位置の履歴（新しい順に x,y,z の並び）。固定長のリングではなく、
+   * 節の数ぶんだけ確保した配列を先頭から詰め直す（節が少ないので十分速い）。
+   */
+  readonly history: Float32Array;
+  /** 履歴に入っている節の数。 */
+  historyCount: number;
+  /** 次に履歴へ 1 点足すまでの残り秒。 */
+  sampleCountdown: number;
+  /** この Core の軌跡の長さ（0..1）。発生時に確定する。 */
+  readonly trail: number;
 }
 
 /** 開発・検証用に外へ見せる Core 1 個ぶんの状態。 */
@@ -213,10 +237,16 @@ export class LightSpatialStudy implements LabExpression {
   private pipeline: EffectPipeline | null = null;
 
   /** インスタンス属性。毎フレーム中身だけ書き換え、確保し直さない。 */
-  private readonly offsets = new Float32Array(SPATIAL_STUDY.maximumCores * 3);
-  private readonly intensities = new Float32Array(SPATIAL_STUDY.maximumCores);
-  private readonly sizes = new Float32Array(SPATIAL_STUDY.maximumCores);
-  private readonly colors = new Float32Array(SPATIAL_STUDY.maximumCores * 3);
+  /**
+   * Core 本体 + 軌跡の節を 1 本の配列にまとめて持つ。
+   * こうしておけば軌跡が増えても**ドローコールは 1 のまま**。
+   */
+  private static readonly INSTANCE_CAPACITY =
+    SPATIAL_STUDY.maximumCores * (1 + SPATIAL_STUDY.trailSegments);
+  private readonly offsets = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 3);
+  private readonly intensities = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
+  private readonly sizes = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
+  private readonly colors = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 3);
   private offsetAttribute: THREE.InstancedBufferAttribute | null = null;
   private intensityAttribute: THREE.InstancedBufferAttribute | null = null;
   private sizeAttribute: THREE.InstancedBufferAttribute | null = null;
@@ -422,6 +452,10 @@ export class LightSpatialStudy implements LabExpression {
       age: 0,
       phase: 'attack',
       completed: false,
+      history: new Float32Array(SPATIAL_STUDY.trailSegments * 3),
+      historyCount: 0,
+      sampleCountdown: 0,
+      trail: traits.trail,
     });
     this.lastBand = event.band;
     this.lastOnsetStrength = event.strength;
@@ -457,6 +491,7 @@ export class LightSpatialStudy implements LabExpression {
     core.position.x += core.velocity.x * delta;
     core.position.y += core.velocity.y * delta;
     core.position.z += core.velocity.z * delta;
+    this.sampleHistory(core, delta);
     const { attackSeconds: attack, holdSeconds: hold, decaySeconds: decay } = core;
 
     if (core.age < attack) {
@@ -480,6 +515,37 @@ export class LightSpatialStudy implements LabExpression {
     core.currentIntensity = core.peakIntensity * decayShape(t);
   }
 
+  /**
+   * 位置の履歴を一定間隔で 1 点ずつ足す。
+   * 間隔は「軌跡の長さ ÷ 節の数」なので、Trail を動かすと履歴の張る時間だけが変わる。
+   */
+  private sampleHistory(core: SpatialCore, delta: number): void {
+    if (core.trail <= 0) {
+      core.historyCount = 0;
+      return;
+    }
+    core.sampleCountdown -= delta;
+    if (core.sampleCountdown > 0) return;
+    const interval = Math.max(
+      trailSeconds(core.trail) / SPATIAL_STUDY.trailSegments,
+      1 / 240,
+    );
+    core.sampleCountdown = interval;
+
+    // 先頭へ新しい点を差し込み、古い点を 1 つ後ろへずらす。
+    const history = core.history;
+    const last = Math.min(core.historyCount, SPATIAL_STUDY.trailSegments - 1);
+    for (let i = last; i > 0; i--) {
+      history[i * 3] = history[(i - 1) * 3]!;
+      history[i * 3 + 1] = history[(i - 1) * 3 + 1]!;
+      history[i * 3 + 2] = history[(i - 1) * 3 + 2]!;
+    }
+    history[0] = core.position.x;
+    history[1] = core.position.y;
+    history[2] = core.position.z;
+    core.historyCount = Math.min(core.historyCount + 1, SPATIAL_STUDY.trailSegments);
+  }
+
   /** 進めながら、終わった Core を詰めて捨てる（参照を残さない）。 */
   private advanceCores(delta: number): void {
     let write = 0;
@@ -497,19 +563,45 @@ export class LightSpatialStudy implements LabExpression {
   private syncInstances(): void {
     if (!this.geometry || !this.offsetAttribute || !this.intensityAttribute) return;
     if (!this.sizeAttribute || !this.colorAttribute) return;
-    for (let i = 0; i < this.cores.length; i++) {
-      const core = this.cores[i]!;
-      this.offsets[i * 3] = core.position.x;
-      this.offsets[i * 3 + 1] = core.position.y;
-      this.offsets[i * 3 + 2] = core.position.z;
-      this.intensities[i] = core.currentIntensity;
+    let slot = 0;
+    const write = (
+      x: number,
+      y: number,
+      z: number,
+      intensity: number,
+      size: number,
+      color: { r: number; g: number; b: number },
+    ): void => {
+      this.offsets[slot * 3] = x;
+      this.offsets[slot * 3 + 1] = y;
+      this.offsets[slot * 3 + 2] = z;
+      this.intensities[slot] = intensity;
+      this.sizes[slot] = size;
+      this.colors[slot * 3] = color.r;
+      this.colors[slot * 3 + 1] = color.g;
+      this.colors[slot * 3 + 2] = color.b;
+      slot += 1;
+    };
+
+    for (const core of this.cores) {
       // 大きさと色は発生時に確定した値。毎フレーム作り直さないのでちらつかない。
-      this.sizes[i] = core.size;
-      this.colors[i * 3] = core.color.r;
-      this.colors[i * 3 + 1] = core.color.g;
-      this.colors[i * 3 + 2] = core.color.b;
+      write(core.position.x, core.position.y, core.position.z, core.currentIntensity, core.size, core.color);
     }
-    this.geometry.instanceCount = this.cores.length;
+    // 軌跡は 3D の位置履歴そのもの（2D の残像合成ではない）。
+    // 先端ほど明るく太く、末尾へ向かって細く暗くなる。
+    for (const core of this.cores) {
+      if (core.trail <= 0) continue;
+      for (let k = 0; k < core.historyCount; k++) {
+        const fade = (k + 1) / SPATIAL_STUDY.trailSegments;
+        const intensity =
+          core.currentIntensity * (1 - fade) * (1 - fade) * (1 - SPATIAL_STUDY.trailIntensityAtTail);
+        if (intensity <= 0.002) continue;
+        const size = core.size * (1 - fade * (1 - SPATIAL_STUDY.trailSizeAtTail));
+        write(core.history[k * 3]!, core.history[k * 3 + 1]!, core.history[k * 3 + 2]!, intensity, size, core.color);
+      }
+    }
+
+    this.geometry.instanceCount = slot;
     this.offsetAttribute.needsUpdate = true;
     this.intensityAttribute.needsUpdate = true;
     this.sizeAttribute.needsUpdate = true;
