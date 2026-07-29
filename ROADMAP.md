@@ -393,6 +393,17 @@ RecordingController・QualityMonitor は再接続済み。
         検証: 決定論一致 / 発光後に音を大きく振っても軌道不変 / z は 1 フレームも動かない /
         無音 = 黒 / 白飽和 0（画角 3 種）/ Draw Call 16（増えていない）/
         1 フレーム p50 1.2ms・p90 2.0ms / 2D Core Study バイト不変
+  - [x] 検証: Light Element Lab — リファレンスの光を一度に調整せず、
+        **Core / Ray / Sheet / Haze / Prism / Depth / Envelope / Composite** の
+        8 モードへ分解して固定条件で比較する独立表現。Expression の Version ボタンで
+        即座に切り替えられる。Spatial Study の実装・状態は共有せず、安定している
+        `prismAtlas` と 10 枚の素材、EffectPipeline だけを再利用した。
+        Core / Sheet / Depth / Composite は同じアトラス・同じ分光シェーダーを通すため、
+        中心だけ別の光に見える問題を起こさない。Ray は直線のみ、Depth は Near / Mid / Far の
+        位置を固定して Z 方向へ移動させない。Envelope だけが 5 秒で
+        Attack → Hold → Decay → Off を繰り返し、時間形状を単独評価できる。
+        この段階では音へ接続しない。Composite の見た目を基準として採用した後に、
+        各要素へ音響パラメーターを 1 関係ずつ接続する
   - [ ] Spatial Study の次段階 — 空間の手掛かり（グリッドや床）/ カメラのゆっくりした動き /
         軌跡の太さを音へ結ぶか / バーストの自己励起（クラスター化）を入れるか
   - [ ] 同時発光時の位置設計（2D 側）— floor を下げると複数 Core が同じ centroid に重なる（未決）

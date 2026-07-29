@@ -5,6 +5,7 @@ import { Cymatics } from '../fields/Cymatics';
 import { CymaticsV2 } from '../fields/CymaticsV2';
 import { CymaticsPlate } from './CymaticsPlate';
 import { LightCoreStudy } from './LightCoreStudy';
+import { LightElementLab, type LightElementMode } from './LightElementLab';
 import { LightSpatialStudy } from './LightSpatialStudy';
 import { LightTraces } from './LightTraces';
 import { ModularPatternField } from './ModularPatternField';
@@ -25,6 +26,14 @@ export type ExpressionId =
   | 'light-traces-v1'
   | 'light-core-study-v1'
   | 'light-spatial-study-v1'
+  | 'light-element-core-v1'
+  | 'light-element-ray-v1'
+  | 'light-element-sheet-v1'
+  | 'light-element-haze-v1'
+  | 'light-element-prism-v1'
+  | 'light-element-depth-v1'
+  | 'light-element-envelope-v1'
+  | 'light-element-composite-v1'
   | 'reactive-geometry-v1';
 
 export interface ExpressionVersion {
@@ -100,6 +109,22 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
     label: 'Light Traces — Spatial Study',
     versions: [{ id: 'light-spatial-study-v1', label: 'V1' }],
   },
+  // リファレンスの光を要素ごとに分けて観察する独立した実験室。
+  // 各 Version は同じ固定条件を使い、最後の Composite だけで再結合する。
+  {
+    id: 'light-element-lab',
+    label: 'Light Element Lab',
+    versions: [
+      { id: 'light-element-core-v1', label: 'Core' },
+      { id: 'light-element-ray-v1', label: 'Ray' },
+      { id: 'light-element-sheet-v1', label: 'Sheet' },
+      { id: 'light-element-haze-v1', label: 'Haze' },
+      { id: 'light-element-prism-v1', label: 'Prism' },
+      { id: 'light-element-depth-v1', label: 'Depth' },
+      { id: 'light-element-envelope-v1', label: 'Envelope' },
+      { id: 'light-element-composite-v1', label: 'Composite' },
+    ],
+  },
   {
     id: 'reactive-geometry',
     label: 'Reactive Geometry',
@@ -110,6 +135,17 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
 const KNOWN_EXPRESSION_IDS = new Set<string>(
   EXPRESSION_FAMILIES.flatMap((family) => family.versions.map((version) => version.id)),
 );
+
+const LIGHT_ELEMENT_MODES: Partial<Record<ExpressionId, LightElementMode>> = {
+  'light-element-core-v1': 'core',
+  'light-element-ray-v1': 'ray',
+  'light-element-sheet-v1': 'sheet',
+  'light-element-haze-v1': 'haze',
+  'light-element-prism-v1': 'prism',
+  'light-element-depth-v1': 'depth',
+  'light-element-envelope-v1': 'envelope',
+  'light-element-composite-v1': 'composite',
+};
 
 /** 旧データ（'Cymatics' など id 以前の表記・不明値）はすべて V1 として扱う。 */
 export function normalizeExpressionId(raw: unknown): ExpressionId {
@@ -136,6 +172,8 @@ export function createExpression(
   if (id === 'light-traces-v1') return new LightTraces(effects, theme);
   if (id === 'light-core-study-v1') return new LightCoreStudy(effects, theme);
   if (id === 'light-spatial-study-v1') return new LightSpatialStudy(effects, theme);
+  const lightElementMode = LIGHT_ELEMENT_MODES[id];
+  if (lightElementMode) return new LightElementLab(id, lightElementMode, effects, theme);
   if (id === 'reactive-geometry-v1') return new ReactiveGeometry(effects, theme);
   applyTuning(id);
   const field = id === 'cymatics-v2' ? new CymaticsV2() : new Cymatics();
