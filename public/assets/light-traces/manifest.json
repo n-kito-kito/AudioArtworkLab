@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "basePath": "/assets/light-traces/textures/",
+  "colorSpace": "srgb",
+  "blendMode": "additive",
+  "background": "black",
+  "textures": [
+    {
+      "id": "vertical-veil",
+      "file": "prism-01-vertical-veil.png",
+      "role": "filament-and-curtain",
+      "weight": 1
+    },
+    {
+      "id": "diagonal-fan",
+      "file": "prism-02-diagonal-fan.png",
+      "role": "caustic-fan",
+      "weight": 1
+    },
+    {
+      "id": "folded-ribbon",
+      "file": "prism-03-folded-ribbon.png",
+      "role": "curved-volume",
+      "weight": 0.85
+    },
+    {
+      "id": "intersecting-membranes",
+      "file": "prism-04-intersecting-membranes.png",
+      "role": "layered-sheets",
+      "weight": 0.75
+    },
+    {
+      "id": "diffuse-haze",
+      "file": "prism-05-diffuse-haze.png",
+      "role": "wide-haze",
+      "weight": 0.65
+    },
+    {
+      "id": "filament-web",
+      "file": "prism-06-filament-web.png",
+      "role": "fine-filaments",
+      "weight": 0.8
+    },
+    {
+      "id": "wide-wedge",
+      "file": "prism-07-wide-wedge.png",
+      "role": "wide-caustic",
+      "weight": 0.7
+    },
+    {
+      "id": "vertical-curtains",
+      "file": "prism-08-vertical-curtains.png",
+      "role": "parallel-curtains",
+      "weight": 0.85
+    },
+    {
+      "id": "broken-beams",
+      "file": "prism-09-broken-beams.png",
+      "role": "segmented-rays",
+      "weight": 0.9
+    },
+    {
+      "id": "diffraction-wavefront",
+      "file": "prism-10-diffraction-wavefront.png",
+      "role": "curved-wavefront",
+      "weight": 0.7
+    }
+  ]
+}
