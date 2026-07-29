@@ -536,3 +536,20 @@ const hueToRgb = (hue: number, saturation: number): { r: number; g: number; b: n
   };
   return { r: channel(0), g: channel(2 / 3), b: channel(1 / 3) };
 };
+
+/**
+ * **Bloom を音で駆動するための差し込み口。**
+ *
+ * いまは何もせず素通しする（スライダーの値がそのまま効く）。
+ * 音に紐づけるときはここだけを書き換えれば、表現側は 1 行も変わらない。
+ * 例: 盛り上がりで滲みを強くするなら `strengthScale` に sustain や
+ * 直近のバースト密度を、静かな区間で敷居を上げるなら `thresholdOffset` に
+ * volume の逆数を返す、といった形になる。
+ *
+ * 音のどの値を使うかはまだ決めていないので、引数もあえて取っていない。
+ * 駆動を入れるときに `AudioEventSnapshot` を受け取る形へ広げる。
+ */
+export const bloomDrive = (): { strengthScale: number; thresholdOffset: number } => ({
+  strengthScale: 1,
+  thresholdOffset: 0,
+});

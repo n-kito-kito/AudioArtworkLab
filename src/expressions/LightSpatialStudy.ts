@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type {
   CompositionContext,
   DesignLayerCanvases,
@@ -17,6 +20,7 @@ import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
 import {
   LightSpatialMapping,
+  bloomDrive,
   trailSeconds,
   type LightMappingSettings,
   type LightRole,
@@ -86,12 +90,19 @@ const SPATIAL_STUDY = {
     coreSharpness: 3.4,
     /** 中距離の滲み（Bloom 相当）の広がり。核の何倍まで届くか。 */
     haloRadius: 3.2,
-    /** 同・強さ。0 で滲みなし。 */
-    haloStrength: 0.3,
+    /**
+     * 同・強さ。0 で滲みなし。
+     * 参照デモ（UnrealBloomPass の公式サンプル）のネオン感に寄せて引き上げてある。
+     */
+    haloStrength: 0.42,
     /** 広く弱い散乱光の広がり。 */
     scatterRadius: 6.5,
-    /** 同・強さ。0 で散乱なし。**霧ではなく、光の周りにだけ出る。** */
-    scatterStrength: 0.05,
+    /**
+     * 同・強さ。0 で散乱なし。**霧ではなく、光の周りにだけ出る。**
+     * 内部 Bloom が滲みを担うようになったので、散乱は控えめでよい。
+     * ここを強くすると画面全体が薄く光り、Bloom で一気に白飛びする。
+     */
+    scatterStrength: 0.028,
     /**
      * 板を張る余裕（散乱半径の何倍まで確保するか）。
      *
@@ -113,8 +124,21 @@ const SPATIAL_STUDY = {
     /** 同・効き始める距離と効ききる距離。 */
     contrastNearDepth: 5,
     contrastFarDepth: 17,
-    /** 画面全体の露出。核・滲み・散乱をすべて通したあとに最後に掛ける。 */
-    exposure: 1,
+    /**
+     * 内部 Bloom（three.js の `UnrealBloomPass`）。
+     * 既存の Effect チェーン（外側の Bloom Effect を含む）より**前**に掛かる。
+     * 参照デモ（threshold 0 / strength 1 / radius 0.5）は細い線が黒地にあるだけの
+     * 画なのでそのままで成立するが、こちらは散乱が画面を薄く覆うため、
+     * threshold を上げて**明るい核だけを滲ませる**。実測で色が残る範囲に詰めてある。
+     */
+    bloomThreshold: 0.3,
+    bloomStrength: 1.15,
+    bloomRadius: 0.28,
+    /**
+     * 画面全体の露出。核・滲み・散乱・Bloom をすべて通したあと、最後に掛ける。
+     * トーンマップは `1 - exp(-x·exposure)` なので、**黒は必ず黒のまま**。
+     */
+    exposure: 0.95,
   },
   /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
   maximumDelta: 0.05,
@@ -161,12 +185,24 @@ const SPATIAL_STUDY = {
     trailAmount: 0.35,
     /** サブの光の個数の倍率。0 でメインだけ、2 で計算値の倍。 */
     burstDensity: 1,
+    /** 光源そのものの強さ（滲み・露出とは別の役割）。 */
+    /** 内部 Bloom。参照デモと同じ操作感で並べる。 */
+    bloomThreshold: 0.3,
+    bloomStrength: 1.15,
+    bloomRadius: 0.28,
+    /** 画面全体の露出。 */
+    exposure: 0.95,
     /**
      * 発火のしやすさ。**小さいほど発火する**（閾値の倍率）。
      * ある程度の立ち上がりならほぼ光る状態にしたいので、既定で 2D より下げる。
      * クールダウンは据え置きなので連射の暴走はしない。
      */
     thresholdScale: 0.45,
+    /**
+     * 光源そのものの総合強度。Exposure や Bloom とは分ける。
+     * リファレンスの強い白い核を確認できるよう、従来の 1.0 より明るく始める。
+     */
+    intensity: 2.2,
   },
   ranges: {
     attackMs: { min: 0, max: 200, step: 1 },
@@ -183,7 +219,12 @@ const SPATIAL_STUDY = {
     motionAmount: { min: 0, max: 1, step: 0.05 },
     trailAmount: { min: 0, max: 1, step: 0.05 },
     burstDensity: { min: 0, max: 2, step: 0.05 },
+    bloomThreshold: { min: 0, max: 1, step: 0.01 },
+    bloomStrength: { min: 0, max: 3, step: 0.05 },
+    bloomRadius: { min: 0, max: 1.5, step: 0.01 },
+    exposure: { min: 0.1, max: 3, step: 0.05 },
     thresholdScale: { min: 0.15, max: 1.5, step: 0.05 },
+    intensity: { min: 0, max: 5, step: 0.05 },
   },
 } as const;
 
@@ -304,6 +345,17 @@ export class LightSpatialStudy implements LabExpression {
   private material: THREE.ShaderMaterial | null = null;
   private mesh: THREE.Mesh | null = null;
   private pipeline: EffectPipeline | null = null;
+  /**
+   * 内部 Bloom。**既存の Effect チェーンより前**に掛かる自前の合成器で、
+   * 3D の光を滲ませてから表示用の板へ渡す。外側の Effect は一切変えない。
+   */
+  private bloomComposer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
+  /** Bloom の結果を貼るだけの板。この板が Effect チェーンの入口になる。 */
+  private displayScene: THREE.Scene | null = null;
+  private displayCamera: THREE.OrthographicCamera | null = null;
+  private displayGeometry: THREE.PlaneGeometry | null = null;
+  private displayMaterial: THREE.ShaderMaterial | null = null;
 
   /** インスタンス属性。毎フレーム中身だけ書き換え、確保し直さない。 */
   /**
@@ -406,7 +458,8 @@ export class LightSpatialStudy implements LabExpression {
         uHalo: { value: new THREE.Vector2(SPATIAL_STUDY.optics.haloRadius, SPATIAL_STUDY.optics.haloStrength) },
         uScatter: { value: new THREE.Vector2(SPATIAL_STUDY.optics.scatterRadius, SPATIAL_STUDY.optics.scatterStrength) },
         uChromatic: { value: SPATIAL_STUDY.optics.chromaticSeparation },
-        uExposure: { value: SPATIAL_STUDY.optics.exposure },
+        // 光源そのものの強さ。滲み（Bloom）や露出とは別の役割。
+        uIntensity: { value: SPATIAL_STUDY.defaults.intensity },
         // 板を張る倍率。散乱がいちばん外まで届くので、その半径 × 余裕で決める。
         uSpan: {
           value: Math.max(
@@ -480,7 +533,7 @@ export class LightSpatialStudy implements LabExpression {
         uniform vec2 uHalo;
         uniform vec2 uScatter;
         uniform float uChromatic;
-        uniform float uExposure;
+        uniform float uIntensity;
         varying vec2 vLocal;
         varying float vIntensity;
         varying vec3 vColor;
@@ -520,7 +573,8 @@ export class LightSpatialStudy implements LabExpression {
           // 明るさ（vIntensity）と色の比率（vColor）は最後まで別々に持つ。
           // 音量が大きいだけで色が白へ飽和しないようにするための分離。
           vec3 level = vColor * (core + halo + scatter) + chroma * vColor;
-          level *= max(vIntensity, 0.0) * vDistanceFade * uExposure;
+          // 露出は最後の表示パスで 1 回だけ掛ける。ここでは光源の強さだけ。
+          level *= max(vIntensity, 0.0) * vDistanceFade * uIntensity;
           // 板の縁で必ず 0 にする窓。これがないと散乱が四角く切れて継ぎ目が見える。
           vec2 window = vec2(vLocal.x / elongation, vLocal.y) / uSpan;
           float edge = clamp(1.0 - dot(window, window), 0.0, 1.0);
@@ -538,7 +592,79 @@ export class LightSpatialStudy implements LabExpression {
     this.scene.background = new THREE.Color(0x000000);
     this.scene.add(this.mesh);
 
-    this.pipeline = new EffectPipeline(context.renderer, this.scene, this.camera, this.effects);
+    // ---- 内部 Bloom（参照デモの UnrealBloomPass と同じ構成）----
+    const size = new THREE.Vector2();
+    context.renderer.getSize(size);
+    this.bloomComposer = new EffectComposer(context.renderer);
+    // 画面には出さない。結果は readBuffer に残し、表示用の板が読み取る。
+    this.bloomComposer.renderToScreen = false;
+    this.bloomComposer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(Math.max(size.x, 1), Math.max(size.y, 1)),
+      SPATIAL_STUDY.optics.bloomStrength,
+      SPATIAL_STUDY.optics.bloomRadius,
+      SPATIAL_STUDY.optics.bloomThreshold,
+    );
+    this.bloomComposer.addPass(this.bloomPass);
+
+    // ---- 表示用の板（露出とトーンマップだけを掛ける）----
+    this.displayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    this.displayCamera.position.z = 1;
+    this.displayMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        tDiffuse: { value: null },
+        uExposure: { value: SPATIAL_STUDY.optics.exposure },
+      },
+      depthTest: false,
+      depthWrite: false,
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D tDiffuse;
+        uniform float uExposure;
+        varying vec2 vUv;
+
+        void main() {
+          vec3 color = texture2D(tDiffuse, vUv).rgb;
+          // 露出つきの指数トーンマップ。x = 0 なら必ず 0 なので、
+          // 無音の黒が浮くことはない（PRD D5）。
+          vec3 mapped = vec3(1.0) - exp(-max(color, 0.0) * uExposure);
+          gl_FragColor = vec4(mapped, 1.0);
+        }
+      `,
+    });
+    this.displayGeometry = new THREE.PlaneGeometry(2, 2);
+    this.displayScene = new THREE.Scene();
+    this.displayScene.background = new THREE.Color(0x000000);
+    this.displayScene.add(new THREE.Mesh(this.displayGeometry, this.displayMaterial));
+
+    // Effect チェーンは「Bloom 済みの板」を入口にする。外側の構成は変えない。
+    this.pipeline = new EffectPipeline(
+      context.renderer,
+      this.displayScene,
+      this.displayCamera,
+      this.effects,
+    );
+  }
+
+  /** 開発スライダーの値を内部 Bloom と露出へ流す。毎フレーム呼んで即座に効かせる。 */
+  private syncOptics(): void {
+    if (this.bloomPass) {
+      // 将来ここへ音を差し込む（`bloomDrive` の戻り値を掛ける）。
+      const drive = bloomDrive();
+      this.bloomPass.threshold = this.params.bloomThreshold + drive.thresholdOffset;
+      this.bloomPass.strength = this.params.bloomStrength * drive.strengthScale;
+      this.bloomPass.radius = this.params.bloomRadius;
+    }
+    if (this.displayMaterial) {
+      this.displayMaterial.uniforms.uExposure!.value = this.params.exposure;
+    }
   }
 
   // ---------------------------------------------------------------- 可視範囲
@@ -817,6 +943,7 @@ export class LightSpatialStudy implements LabExpression {
   update(elapsed: number): void {
     if (!this.context || !this.material) return;
     const audio = this.context.audioEngine.getParameters();
+    this.material.uniforms.uIntensity!.value = this.params.intensity;
     const active = audio.active === 1;
 
     const delta =
@@ -827,6 +954,7 @@ export class LightSpatialStudy implements LabExpression {
 
     if (!active) {
       // PRD D5: 音がなければ発生も余韻もない（無音＝黒画面が正常）。
+      this.syncOptics();
       this.cores.length = 0;
       this.scheduled.length = 0;
       this.resetDetection();
@@ -835,6 +963,7 @@ export class LightSpatialStudy implements LabExpression {
       return;
     }
 
+    this.syncOptics();
     this.detectEvents(elapsed, delta);
     this.releaseScheduled(elapsed);
     this.advanceCores(delta);
@@ -853,6 +982,12 @@ export class LightSpatialStudy implements LabExpression {
   }
 
   render(): void {
+    if (this.bloomComposer && this.displayMaterial) {
+      this.bloomComposer.render();
+      // 合成器は毎フレーム読み書きバッファを入れ替えるので、
+      // 結果が入っているほうを都度つなぎ直す。
+      this.displayMaterial.uniforms.tDiffuse!.value = this.bloomComposer.readBuffer.texture;
+    }
     this.pipeline?.render();
   }
 
@@ -863,6 +998,10 @@ export class LightSpatialStudy implements LabExpression {
       this.camera.aspect = width / height;
       this.camera.updateProjectionMatrix();
     }
+    const w = Math.max(width, 1);
+    const h = Math.max(height, 1);
+    this.bloomComposer?.setSize(w, h);
+    this.bloomPass?.setSize(w, h);
     this.pipeline?.resize(width, height);
   }
 
@@ -1034,6 +1173,11 @@ export class LightSpatialStudy implements LabExpression {
       row('trailAmount', 'Trail'),
       row('burstDensity', 'Burst density'),
       row('thresholdScale', 'Onset reach'),
+      row('bloomThreshold', 'Bloom threshold'),
+      row('bloomStrength', 'Bloom strength'),
+      row('bloomRadius', 'Bloom radius'),
+      row('exposure', 'Exposure'),
+      row('intensity', 'Intensity'),
       onOff('adaptiveThreshold', 'Adaptive threshold', this.adaptiveThreshold),
       onOff('adaptiveStrength', 'Adaptive strength', this.adaptiveStrength),
     ];
@@ -1067,6 +1211,10 @@ export class LightSpatialStudy implements LabExpression {
 
   dispose(): void {
     this.pipeline?.dispose();
+    this.bloomPass?.dispose();
+    this.bloomComposer?.dispose();
+    this.displayGeometry?.dispose();
+    this.displayMaterial?.dispose();
     this.geometry?.dispose();
     this.material?.dispose();
     this.cores.length = 0;
@@ -1074,6 +1222,12 @@ export class LightSpatialStudy implements LabExpression {
     this.resetDetection();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
     this.pipeline = null;
+    this.bloomPass = null;
+    this.bloomComposer = null;
+    this.displayScene = null;
+    this.displayCamera = null;
+    this.displayGeometry = null;
+    this.displayMaterial = null;
     this.mesh = null;
     this.scene = null;
     this.geometry = null;
