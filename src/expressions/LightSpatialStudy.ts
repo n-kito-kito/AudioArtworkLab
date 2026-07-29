@@ -150,6 +150,7 @@ const SPATIAL_STUDY = {
     colorAmount: 0.8,
     motionAmount: 0.7,
     trailAmount: 0.35,
+    trailWidthAmount: 0.7,
   },
   ranges: {
     attackMs: { min: 1, max: 200, step: 1 },
@@ -165,6 +166,7 @@ const SPATIAL_STUDY = {
     colorAmount: { min: 0, max: 1, step: 0.05 },
     motionAmount: { min: 0, max: 1, step: 0.05 },
     trailAmount: { min: 0, max: 1, step: 0.05 },
+    trailWidthAmount: { min: 0, max: 1, step: 0.05 },
   },
 } as const;
 
@@ -208,6 +210,8 @@ interface SpatialCore {
   sampleCountdown: number;
   /** この Core の軌跡の長さ（0..1）。発生時に確定する。 */
   readonly trail: number;
+  /** この Core の軌跡の太さ倍率。発生時に確定する。 */
+  readonly trailWidth: number;
 }
 
 /** 開発・検証用に外へ見せる Core 1 個ぶんの状態。 */
@@ -556,6 +560,7 @@ export class LightSpatialStudy implements LabExpression {
       historyCount: 0,
       sampleCountdown: 0,
       trail: traits.trail,
+      trailWidth: traits.trailWidth,
     });
     this.lastBand = event.band;
     this.lastOnsetStrength = event.strength;
@@ -577,6 +582,7 @@ export class LightSpatialStudy implements LabExpression {
       colorAmount: this.params.colorAmount,
       motionAmount: this.params.motionAmount,
       trailAmount: this.params.trailAmount,
+      trailWidthAmount: this.params.trailWidthAmount,
     };
   }
 
@@ -696,7 +702,8 @@ export class LightSpatialStudy implements LabExpression {
         const intensity =
           core.currentIntensity * (1 - fade) * (1 - fade) * (1 - SPATIAL_STUDY.trailIntensityAtTail);
         if (intensity <= 0.002) continue;
-        const size = core.size * (1 - fade * (1 - SPATIAL_STUDY.trailSizeAtTail));
+        // 軌跡の太さは帯域が決める（trailWidth）。先端 → 末尾の細りはその上へ掛かる。
+        const size = core.size * core.trailWidth * (1 - fade * (1 - SPATIAL_STUDY.trailSizeAtTail));
         write(core.history[k * 3]!, core.history[k * 3 + 1]!, core.history[k * 3 + 2]!, intensity, size, core.color);
       }
     }
@@ -920,6 +927,7 @@ export class LightSpatialStudy implements LabExpression {
       row('colorAmount', 'Color amount'),
       row('motionAmount', 'Motion amount'),
       row('trailAmount', 'Trail'),
+      row('trailWidthAmount', 'Trail width'),
       onOff('adaptiveThreshold', 'Adaptive threshold', this.adaptiveThreshold),
       onOff('adaptiveStrength', 'Adaptive strength', this.adaptiveStrength),
     ];
