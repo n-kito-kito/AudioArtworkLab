@@ -240,6 +240,10 @@ export const BURST_MAPPING = {
   retries: 6,
   /** 同じ位置への集中を避ける最低距離（画面正規化）。 */
   minimumSeparation: 0.6,
+  /** 混雑度がこの値以下なら合格として引き直しを止める。 */
+  crowdingTolerance: 0.45,
+  /** 直近の重心と同じ側を避ける重み。左右の寄りはここで崩す。 */
+  balanceWeight: 1.6,
 } as const;
 
 const clamp = (value: number, min: number, max: number): number =>
@@ -367,6 +371,9 @@ export class PrismaticBurstPlanner {
     const thickness = this.thickness(snapshot);
     // 構図ごとの置き方。Stage 3 未満は中央固定。
     const layout = varied ? this.layout(composition, h, 0) : { x: 0, y: 0, aspect: 1, tilt: 0.2, spin: 0 };
+    // **同じ場所への集中と左右の偏りを崩す。** 候補が混んでいたら
+    // ハッシュ列の次の値で引き直す（`Math.random()` は使わない）。
+    const placed = varied ? this.place(layout.x, layout.y, h) : { x: layout.x, y: layout.y };
     const half = BURST_MAPPING.coreWorldHalfSize * size * (varied ? band.size : 1);
 
     return {
@@ -374,8 +381,8 @@ export class PrismaticBurstPlanner {
       traits: {
         kind: 'core',
         position: {
-          x: layout.x * extent.halfWidth,
-          y: layout.y * extent.halfHeight,
+          x: placed.x * extent.halfWidth,
+          y: placed.y * extent.halfHeight,
           z: -depth,
         },
         halfWidth: half * layout.aspect * mix(1, thickness, 0.3),
@@ -387,7 +394,7 @@ export class PrismaticBurstPlanner {
         uvAngle: varied ? h(51) * Math.PI * 2 : 0,
         flipX: varied && h(53) < 0.5 ? -1 : 1,
         flipY: varied && h(55) < 0.5 ? -1 : 1,
-        hueOffset: varied ? h(61) : 0.12,
+        hueOffset: varied ? this.hue(h) : 0.12,
         hueSpan: varied ? mix(BURST_MAPPING.hueSpanNarrow, BURST_MAPPING.hueSpanWide, h(63)) : 0.38,
         gradientForm: varied ? Math.floor(h(65) * BURST_MAPPING.gradientFormCount) : 0,
         sourceTint: mix(BURST_MAPPING.sourceTintMinimum, BURST_MAPPING.sourceTintMaximum, h(67)),
@@ -562,6 +569,57 @@ export class PrismaticBurstPlanner {
 
   // ------------------------------------------------------------------ 部品
 
+  /**
+   * **配置の偏りを崩す。**
+   *
+   * 直近の Core と近すぎる候補、および左右どちらかへ寄り続ける候補は、
+   * ハッシュ列の次の値で引き直す。何度引いても駄目なら、その中で最も良い候補を採る。
+   * 引き直しはハッシュ列を進めるだけなので、決定論は崩れない。
+   */
+  private place(
+    baseX: number,
+    baseY: number,
+    h: (salt: number) => number,
+  ): { x: number; y: number } {
+    if (this.history.length === 0) return { x: baseX, y: baseY };
+    // 直近の重心。ここと反対側を選びやすくして左右の寄りを崩す。
+    const meanX =
+      this.history.reduce((sum, entry) => sum + entry.x, 0) / Math.max(this.history.length, 1);
+    let best: { x: number; y: number; score: number } | null = null;
+    for (let attempt = 0; attempt <= BURST_MAPPING.retries; attempt++) {
+      // 1 回目はそのまま。以降は候補をずらして引き直す。
+      const shift = attempt === 0 ? 0 : (h(401 + attempt * 2) * 2 - 1) * 0.9;
+      const lift = attempt === 0 ? 0 : (h(402 + attempt * 2) * 2 - 1) * 0.6;
+      const x = clamp(baseX + shift, -0.85, 0.85);
+      const y = clamp(baseY + lift, -0.8, 0.8);
+      let score = 0;
+      for (const entry of this.history) {
+        const distance = Math.hypot(entry.x - x, entry.y - y);
+        if (distance < BURST_MAPPING.minimumSeparation) {
+          score += 1 - distance / BURST_MAPPING.minimumSeparation;
+        }
+      }
+      // 直近の重心と同じ側なら悪い。反対側へ寄せる。
+      score += Math.max(meanX * x, 0) * BURST_MAPPING.balanceWeight;
+      if (best === null || score < best.score) best = { x, y, score };
+      if (score <= BURST_MAPPING.crowdingTolerance) break;
+    }
+    return best ?? { x: baseX, y: baseY };
+  }
+
+  /** 色相。**同じ色相帯が続かない**よう、履歴を見て引き直す。 */
+  private hue(h: (salt: number) => number): number {
+    const bandOf = (value: number): number => Math.floor((((value % 1) + 1) % 1) * 6);
+    const recent = this.history.slice(-1).map((entry) => bandOf(entry.hue));
+    let fallback = h(61);
+    for (let attempt = 0; attempt <= BURST_MAPPING.retries; attempt++) {
+      const candidate = h(61 + attempt * 3);
+      if (attempt === 0) fallback = candidate;
+      if (!recent.includes(bandOf(candidate))) return candidate;
+    }
+    return fallback;
+  }
+
   /** 構図タイプごとの置き方。同じ設計言語のまま、配置と比率だけを変える。 */
   private layout(
     composition: CompositionType,
@@ -572,25 +630,31 @@ export class PrismaticBurstPlanner {
     const step = index * 0.34;
     switch (composition) {
       case 'vertical-veil':
-        return { x: jitter(301) * 0.35, y: jitter(303) * 0.18, aspect: 0.55, tilt: 0.25, spin: jitter(305) * 0.12 };
+        return { x: jitter(301) * 0.6, y: jitter(303) * 0.3, aspect: 0.55, tilt: 0.25, spin: jitter(305) * 0.12 };
       case 'diagonal-fan':
         return {
-          x: (-0.5 + step) * 0.9,
-          y: (-0.35 + step * 0.7) * 0.8,
+          x: (-0.5 + step) * 0.9 + jitter(306) * 0.3,
+          y: (-0.35 + step * 0.7) * 0.8 + jitter(308) * 0.25,
           aspect: 1.7,
           tilt: 0.55,
           spin: 0.5 + jitter(307) * 0.2,
         };
       case 'prismatic-cross':
         return {
-          x: index % 2 === 0 ? jitter(309) * 0.2 : jitter(311) * 0.6,
-          y: index % 2 === 0 ? jitter(313) * 0.6 : jitter(315) * 0.2,
+          x: (index % 2 === 0 ? jitter(309) * 0.2 : jitter(311) * 0.6) + jitter(310) * 0.3,
+          y: (index % 2 === 0 ? jitter(313) * 0.6 : jitter(315) * 0.2) + jitter(312) * 0.25,
           aspect: index % 2 === 0 ? 0.5 : 2,
           tilt: 0.2,
           spin: index % 2 === 0 ? Math.PI / 2 : 0,
         };
       case 'depth-corridor':
-        return { x: (index - 1) * 0.42, y: jitter(317) * 0.12, aspect: 1.2, tilt: 0.7, spin: jitter(319) * 0.3 };
+        return {
+          x: (index - 1) * 0.42 + jitter(316) * 0.32,
+          y: jitter(317) * 0.3,
+          aspect: 1.2,
+          tilt: 0.7,
+          spin: jitter(319) * 0.3,
+        };
       case 'wide-haze':
         return { x: jitter(321) * 0.5, y: jitter(323) * 0.35, aspect: 1.9, tilt: 0.35, spin: jitter(325) * 0.5 };
       case 'layered-membrane':
