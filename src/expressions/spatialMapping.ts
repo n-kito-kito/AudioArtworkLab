@@ -40,6 +40,8 @@ export interface LightVisualTraits {
   };
   /** 軌跡の長さ（0..1）。0 で軌跡なし。 */
   readonly trail: number;
+  /** 軌跡の太さの倍率。1 で Core と同じ比率のまま細っていく。 */
+  readonly trailWidth: number;
 }
 
 /** 表現から渡す、その時点の運転設定。 */
@@ -57,6 +59,8 @@ export interface LightMappingSettings {
   readonly motionAmount: number;
   /** 軌跡の長さ（0..1）。 */
   readonly trailAmount: number;
+  /** 軌跡の太さへの帯域の効き（0 で従来どおり一様、1 で帯域差をそのまま出す）。 */
+  readonly trailWidthAmount: number;
 }
 
 /**
@@ -67,6 +71,12 @@ export const LIGHT_MAPPING = {
   /** 大きさ: 音量 0 → 1 でこの範囲を動く（基準サイズに対する倍率）。 */
   sizeAtSilence: 0.72,
   sizeAtFullVolume: 1.55,
+  /**
+   * 大きさ: 帯域の「体格」。低い音ほど大きな塊、高い音ほど小さな点になる。
+   * 速度の写像（Bass 遅い / Treble 速い）と合わせて、重いものは大きくゆっくり、
+   * 軽いものは小さく鋭く、という一貫した物性を作る。
+   */
+  sizeByBand: { bass: 1.3, mid: 1, treble: 0.68 },
   /**
    * 色: 帯域比率をそのまま RGB にすると 1 帯域だけの音が原色になりすぎる。
    * 白へ寄せる下駄を入れて、比率は残しつつ「光」に見える範囲に収める。
@@ -94,6 +104,11 @@ export const LIGHT_MAPPING = {
   /** 軌跡: Trail 0 → 1 でこの秒数ぶんの履歴を残す。 */
   trailSecondsAtMinimum: 0,
   trailSecondsAtMaximum: 0.9,
+  /**
+   * 軌跡の太さ: 帯域ごとの倍率。Bass は重く太い帯、Treble は鋭く細い筋になる。
+   * 速度の写像と合わさると、同じ Trail 長でも帯域の性格が線の質で読める。
+   */
+  trailWidthByBand: { bass: 1.55, mid: 1, treble: 0.6 },
 } as const;
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -148,6 +163,7 @@ export class LightSpatialMapping {
         decaySeconds: settings.decaySeconds,
       },
       trail: clamp01(settings.trailAmount),
+      trailWidth: this.trailWidth(snapshot, settings),
     };
   }
 
@@ -161,15 +177,29 @@ export class LightSpatialMapping {
     return minimum + clamp01(snapshot.onsetStrength) * (maximum - minimum);
   }
 
-  /** 大きさ。音量（RMS）で決める。明るさとは別の軸にしておく。 */
+  /** 大きさ。音量（RMS）が幅を、帯域が体格を決める。明るさとは別の軸にしておく。 */
   private size(snapshot: AudioEventSnapshot, settings: LightMappingSettings): number {
     const scaled = mix(
       LIGHT_MAPPING.sizeAtSilence,
       LIGHT_MAPPING.sizeAtFullVolume,
       clamp01(snapshot.volume),
     );
+    // 帯域の体格差は音量の効きと同じつまみ（sizeAmount）で運転する。つまみは増やさない。
+    const withBand = scaled * LIGHT_MAPPING.sizeByBand[snapshot.winningBand];
     // 効きが 0 のときはぴたりと 1.0（基準サイズ）に戻す。
-    return mix(1, scaled, clamp01(settings.sizeAmount));
+    return mix(1, withBand, clamp01(settings.sizeAmount));
+  }
+
+  /**
+   * 軌跡の太さ。**帯域だけ**で決める（1 関係ずつ足して確かめる方針）。
+   * onsetStrength は明るさが、音量は大きさが既に受け持っているので、ここへは混ぜない。
+   */
+  private trailWidth(snapshot: AudioEventSnapshot, settings: LightMappingSettings): number {
+    return mix(
+      1,
+      LIGHT_MAPPING.trailWidthByBand[snapshot.winningBand],
+      clamp01(settings.trailWidthAmount),
+    );
   }
 
   /**
