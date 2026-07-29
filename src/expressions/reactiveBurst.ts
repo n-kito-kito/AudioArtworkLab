@@ -143,6 +143,13 @@ export const BURST_MAPPING = {
   sizeAtSilence: 0.62,
   sizeAtFullVolume: 1.5,
   /**
+   * 板の基準の半サイズ（ワールド単位）。**可視範囲では割らない** —
+   * 割ると奥ほど板も大きくなって遠近が相殺され、層の集合が 1 枚の平面に見える。
+   * いちばん狭い画角（9:16）でも黒が残るところに置いてある。
+   */
+  coreWorldHalfSize: 0.95,
+  sheetWorldHalfSize: 1.7,
+  /**
    * 太さ: **centroid が低いほど太い。** Bass 比率と volume も少し足す。
    * 細い線が大量に飛ぶ状態を避けるための軸。
    */
@@ -360,7 +367,7 @@ export class PrismaticBurstPlanner {
     const thickness = this.thickness(snapshot);
     // 構図ごとの置き方。Stage 3 未満は中央固定。
     const layout = varied ? this.layout(composition, h, 0) : { x: 0, y: 0, aspect: 1, tilt: 0.2, spin: 0 };
-    const half = 1.05 * size * (varied ? band.size : 1);
+    const half = BURST_MAPPING.coreWorldHalfSize * size * (varied ? band.size : 1);
 
     return {
       delaySeconds: 0,
@@ -419,7 +426,11 @@ export class PrismaticBurstPlanner {
         : { x: 0.05 * (i % 2 ? 1 : -1), y: 0, aspect: 1.5, tilt: 0.3, spin: 0.1 };
       // 1 枚目は必ず広い膜系。細線だけで構成されると斬撃に見える。
       const wide = i === 0;
-      const half = 2.4 * mix(BURST_MAPPING.sizeAtSilence, BURST_MAPPING.sizeAtFullVolume, clamp01(snapshot.volume)) *
+      // 基準はワールド単位のまま（可視範囲で割ると遠近が相殺される）。
+      // いちばん狭い画角（9:16）でも黒が残る大きさに揃えてある。
+      const half =
+        BURST_MAPPING.sheetWorldHalfSize *
+        mix(BURST_MAPPING.sizeAtSilence, BURST_MAPPING.sizeAtFullVolume, clamp01(snapshot.volume)) *
         (varied ? band.size : 1);
       layers.push({
         delaySeconds: mix(BURST_MAPPING.sheetDelayMinimum, BURST_MAPPING.sheetDelayMaximum, s(105)),
