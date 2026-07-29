@@ -156,8 +156,16 @@ export interface MacroLayerTraits {
   readonly normal: { readonly x: number; readonly y: number; readonly z: number };
   /** 面内の回転（ラジアン）。素材の役割で寄り方が変わる。 */
   readonly spin: number;
-  /** ごくゆっくりした奥行き方向のドリフト（ワールド単位 / 秒）。 */
+  /** ごくゆっくりした奥行き方向のドリフト（ワールド単位 / 秒）。いまは常に 0。 */
   readonly drift: number;
+  /**
+   * **中心の光かどうか。**
+   *
+   * `true` なら Burst の原点に置かれる要（Prismatic Anchor）。
+   * 周囲の膜とまったく同じシェーダー・アトラス・分光・クロップ・マスクを通るので、
+   * 「中心だけ別素材の丸い点光源」にはならない。小さく・短く光って先に消える。
+   */
+  readonly anchor: boolean;
   /**
    * UV のクロップ。素材のどこを・どれだけ切り出すか。
    * 中心 (u, v) と半径 (su, sv) で、全体は必ず 0..1 に収まる。
@@ -377,8 +385,13 @@ export const LIGHT_MAPPING = {
    * うねりの量。**flatness（音の濁り）が乱れの量**を決める。
    * まっすぐな光条は不自然なので、澄んだ音でも 0 にはしない。
    */
-  wavinessAtPureTone: 0.18,
-  wavinessAtNoise: 0.85,
+  /**
+   * うねりの量。**輪郭の主軸は直線として読めること**が優先。
+   * ここが大きいと引っ掻き傷・爪痕に見えるので、以前（0.18 / 0.85）の 2 割以下に落とした。
+   * 0 にはしない — 完全な人工直線にはせず、ごく小さな光学的揺らぎだけ残す。
+   */
+  wavinessAtPureTone: 0.03,
+  wavinessAtNoise: 0.15,
   /** メインの光は等方の点のまま（伸ばさない）。 */
   mainElongation: 1,
   /**
@@ -386,7 +399,8 @@ export const LIGHT_MAPPING = {
    * 完全な自由方向だと放射状の花火に見えてしまい、リファレンスの
    * 「層が重なる」感じから離れる。0 で完全に水平／垂直、1 で自由。
    */
-  needleAxisDeviation: 0.22,
+  // 水平・垂直から ±約 7 度。ここを広げると放射状の斬撃に見える。
+  needleAxisDeviation: 0.04,
 
   // ---- 原点集中の配置（`placementMode: 'center'`）----
   /** 中心からのゆらぎ（ワールド単位）。同一点に重ねず、わずかにずらして層にする。 */
@@ -427,12 +441,13 @@ export const LIGHT_MAPPING = {
    * アトラスに無い役割は単に選ばれないので、素材が増減しても壊れない。
    */
   macroRolesByBand: {
-    // 低域: 広い霧・広いプリズム扇・並ぶ縦膜。長い Decay。
-    bass: ['wide-haze', 'wide-caustic', 'parallel-curtains'],
-    // 中域: 曲がるボリューム・重なる膜・曲線的な回折波。
-    mid: ['curved-volume', 'layered-sheets', 'curved-wavefront', 'caustic-fan'],
-    // 高域: 細い回折線・途切れた斜光・細い縦光。短い Decay。
-    treble: ['fine-filaments', 'segmented-rays', 'filament-and-curtain'],
+    // 低域: 広い霧・並ぶ縦膜・広いプリズム扇。長い Decay。
+    bass: ['wide-haze', 'parallel-curtains', 'wide-caustic', 'layered-sheets'],
+    // 中域: 重なる膜と縦膜を主にする。曲がるボリュームは脇役へ回した
+    //（曲率の強い素材に寄せると、膜ではなく引っ掻き傷に見えるため）。
+    mid: ['layered-sheets', 'parallel-curtains', 'wide-haze', 'caustic-fan'],
+    // 高域: 途切れた斜光と細い回折線。短い Decay。
+    treble: ['segmented-rays', 'fine-filaments', 'filament-and-curtain'],
   } as Readonly<Record<BandName, readonly string[]>>,
   /**
    * 帯域に合わない素材が選ばれる余地。
@@ -489,8 +504,12 @@ export const LIGHT_MAPPING = {
    * UV の歪み。**flatness（音の濁り）が歪み方を決める。**
    * 発光中は動かさず、seed で固定する（毎フレーム入れるとちらつく）。
    */
-  macroWarpAtPureTone: 0.015,
-  macroWarpAtNoise: 0.11,
+  /**
+   * UV の歪み。**flatness は輪郭を曲げるためではなく、濃淡と内部質感を
+   * わずかに乱すためだけに使う。** 大きいと膜の縁がうねって斬撃に見える。
+   */
+  macroWarpAtPureTone: 0.005,
+  macroWarpAtNoise: 0.028,
   macroWarpFrequencyMinimum: 1.4,
   macroWarpFrequencyMaximum: 5.2,
   /**
@@ -513,6 +532,32 @@ export const LIGHT_MAPPING = {
   macroMaskAmountMaximum: 0.7,
   /** Macro layer の分光の広がり（Transient より広く取り、虹寄りにする）。 */
   macroHueSpread: 0.62,
+
+  // ---- 中心の要（Prismatic Anchor）----
+  /**
+   * **中心も周囲と同じプリズム光にする。**
+   * 丸いガウスの点光源を中心に置くと「中心の点 + 周囲の別素材」に見えてしまうので、
+   * 原点にも Macro layer を 1 枚だけ置き、同じ描画経路を通す。
+   */
+  /** 周囲の層に対する大きさの倍率。**周囲より小さい。** */
+  macroAnchorSizeScale: 0.42,
+  /** 同・明るさの倍率。中心は強くてよいが、白い円にはしない。 */
+  macroAnchorIntensityScale: 1.2,
+  /** 立ち上がりと保持（ミリ秒）。周囲より短く、打撃の瞬間に間に合う。 */
+  macroAnchorAttackMs: 6,
+  macroAnchorHoldMs: 28,
+  /** 減衰の倍率（周囲の層に対する）。先に消えて、周囲の膜が残る。 */
+  macroAnchorDecayScale: 0.42,
+  /** クロップの倍率。中心は寄って切り出し、構造が読める密度にする。 */
+  macroAnchorCropScale: 0.72,
+  /** 面の傾きの倍率。中心は正面寄りに立てて要として読ませる。 */
+  macroAnchorTiltScale: 0.4,
+
+  /**
+   * 中心に残す白い芯（Hotspot）の大きさの倍率。
+   * 丸い Main Spark は主役から降ろし、**ごく小さな芯**としてだけ残す。
+   */
+  mainHotspotScale: 0.3,
   /**
    * **必ず 1 枚は広い膜系にする。** 細線素材（fine-filaments / segmented-rays）
    * だけで Macro 全体が構成されると、質感ではなく斬撃の束にしか見えない。
@@ -557,12 +602,16 @@ export const LIGHT_MAPPING = {
     'wide-caustic': { angle: 0, strength: 0.12 },
   } as Readonly<Record<string, { angle: number; strength: number }>>,
   /** 3D の傾きを強めに取る役割（曲がるボリューム）。 */
-  macroStrongTiltRoles: ['curved-volume', 'curved-wavefront', 'layered-sheets'] as readonly string[],
+  macroStrongTiltRoles: ['layered-sheets', 'parallel-curtains', 'wide-haze'] as readonly string[],
   /** 板の基準の半サイズ（ワールド単位）。中間の段で画面をほぼ埋める大きさ。 */
   macroWorldHalfSize: 3.4,
-  /** Z 方向のごくゆっくりしたドリフト（ワールド単位 / 秒）。Bass と Sustain で増える。 */
-  macroDriftAtQuiet: 0.05,
-  macroDriftAtLoud: 0.55,
+  /**
+   * **奥行き方向の移動は持たない。**
+   * 手前へ寄ってくる動きは「カメラに迫る」印象になり、
+   * 層が置かれた奥行きに留まっている感じを壊す。
+   * 奥行きは発生位置と面の傾きだけで感じさせ、動きは発光・拡大・減衰・色で作る。
+   */
+  macroDrift: 0,
 
   // ---- 太さ（thickness）----
   /**
@@ -708,26 +757,33 @@ export class LightSpatialMapping {
     const width = this.thickness(snapshot, settings, 'arc');
 
     const layers: PlannedMacroLayer[] = [];
-    for (let i = 0; i < count; i++) {
+    // i = -1 は**中心の要（Prismatic Anchor）**。周囲の膜とまったく同じ経路を通し、
+    // 位置・大きさ・寿命・傾きだけを変える。中心に別種の光を置かないための一手。
+    for (let i = -1; i < count; i++) {
+      const anchor = i === -1;
       const h = (salt: number): number => hash01(...seed, 500 + i, salt);
       // **最低 1 枚は広い膜系。** 細線素材だけで構成されると斬撃の束に見える。
-      const tile = i === 0 ? this.pickWideTile(snapshot, h) : this.pickTile(snapshot, h);
+      // 中心の要も同じ系統から選び、周囲と地続きに見せる。
+      const tile = anchor || i === 0 ? this.pickWideTile(snapshot, h) : this.pickTile(snapshot, h);
       const role = this.tiles[tile]?.role ?? '';
 
       // 奥行きは 3 段（手前 / 中間 / 奥）。段ごとに大きさと明るさが違う。
+      // 中心の要だけは Burst の原点の奥行きにそのまま置く。
       const band = this.pickDepthBand(h(41), clamp01(settings.depthAmount));
-      const depth = mix(band.near, band.far, h(3));
+      const depth = anchor ? Math.max(-origin.z, 1) : mix(band.near, band.far, h(3));
       const extent = visible(depth);
       // 中心に主役を残しつつ、一部だけ周辺へ大きく飛ばす（Hybrid 配置）。
-      const outer = h(43) < LIGHT_MAPPING.macroOuterFraction;
-      const spread = spreadBase * (outer ? LIGHT_MAPPING.macroOuterSpreadScale : 1);
+      const outer = !anchor && h(43) < LIGHT_MAPPING.macroOuterFraction;
+      const spread = anchor ? 0 : spreadBase * (outer ? LIGHT_MAPPING.macroOuterSpreadScale : 1);
       const size =
         mix(LIGHT_MAPPING.macroSizeAtSilence, LIGHT_MAPPING.macroSizeAtFullVolume, volume) *
-        band.size;
+        (anchor ? LIGHT_MAPPING.macroAnchorSizeScale : band.size);
       const aspect = mix(LIGHT_MAPPING.macroAspectMinimum, LIGHT_MAPPING.macroAspectMaximum, h(5));
       // 素材のどこを切り出すか。中心も大きさも毎回変わるので、
       // 同じ素材でも別の絵に見える。全体は必ず 0..1 に収まるよう寄せる。
-      const halfCrop = mix(LIGHT_MAPPING.macroCropMinimum, LIGHT_MAPPING.macroCropMaximum, h(7));
+      const halfCrop =
+        mix(LIGHT_MAPPING.macroCropMinimum, LIGHT_MAPPING.macroCropMaximum, h(7)) *
+        (anchor ? LIGHT_MAPPING.macroAnchorCropScale : 1);
       const cropCenter = (value: number): number =>
         halfCrop + value * Math.max(1 - halfCrop * 2, 0);
       const hueOffset = (h(9) * 2 - 1) * LIGHT_MAPPING.macroHueSpread;
@@ -736,7 +792,10 @@ export class LightSpatialMapping {
       const half = LIGHT_MAPPING.macroWorldHalfSize * size;
 
       layers.push({
-        delaySeconds: mix(LIGHT_MAPPING.macroDelayMinimum, LIGHT_MAPPING.macroDelayMaximum, h(11)),
+        // 中心の要は打撃と同時。周囲の膜だけが遅れて開く。
+        delaySeconds: anchor
+          ? 0
+          : mix(LIGHT_MAPPING.macroDelayMinimum, LIGHT_MAPPING.macroDelayMaximum, h(11)),
         traits: {
           position: {
             x: origin.x + (h(13) * 2 - 1) * spread * extent.halfWidth,
@@ -747,19 +806,19 @@ export class LightSpatialMapping {
           intensity:
             mix(LIGHT_MAPPING.macroIntensityMinimum, LIGHT_MAPPING.macroIntensityMaximum, strength) *
             mix(0.7, 1, h(17)) *
-            band.intensity,
+            (anchor ? LIGHT_MAPPING.macroAnchorIntensityScale : band.intensity),
           halfWidth: half * aspect * mix(1, width, 0.35),
           halfHeight: (half / aspect) * mix(1, width, 0.35),
           // 面はカメラ正面に固定しない。seed の向きへ倒して実 3D 平面として置く。
-          normal: this.macroNormal(role, h, clamp01(settings.depthAmount)),
+          normal: this.macroNormal(
+            role,
+            h,
+            clamp01(settings.depthAmount) * (anchor ? LIGHT_MAPPING.macroAnchorTiltScale : 1),
+          ),
           spin: this.macroSpin(role, h),
-          // Bass と Sustain でごくゆっくり奥行き方向へ流れる。
-          drift:
-            mix(
-              LIGHT_MAPPING.macroDriftAtQuiet,
-              LIGHT_MAPPING.macroDriftAtLoud,
-              clamp01((bass / total) * 0.6 + clamp01(settings.sustain) * 0.4),
-            ) * (h(45) < 0.5 ? -1 : 1),
+          // 奥行き方向へは動かさない（発生した奥行きに留まる）。
+          drift: LIGHT_MAPPING.macroDrift,
+          anchor,
           crop: { u: cropCenter(h(19)), v: cropCenter(h(21)), su: halfCrop, sv: halfCrop },
           rotation: h(23) * Math.PI * 2,
           flipX: h(25) < 0.5 ? -1 : 1,
@@ -793,10 +852,13 @@ export class LightSpatialMapping {
             h(37),
           ),
           lifetime: {
-            attackSeconds:
-              mix(LIGHT_MAPPING.macroAttackMsShort, LIGHT_MAPPING.macroAttackMsLong, lengthT) / 1000,
-            holdSeconds:
-              mix(LIGHT_MAPPING.macroHoldMsShort, LIGHT_MAPPING.macroHoldMsLong, lengthT) / 1000,
+            // 中心の要は立ち上がりも保持も短い。打撃の瞬間に間に合い、先に消える。
+            attackSeconds: anchor
+              ? LIGHT_MAPPING.macroAnchorAttackMs / 1000
+              : mix(LIGHT_MAPPING.macroAttackMsShort, LIGHT_MAPPING.macroAttackMsLong, lengthT) / 1000,
+            holdSeconds: anchor
+              ? LIGHT_MAPPING.macroAnchorHoldMs / 1000
+              : mix(LIGHT_MAPPING.macroHoldMsShort, LIGHT_MAPPING.macroHoldMsLong, lengthT) / 1000,
             // 同じバーストでも層ごとに残り方を変え、まとめて消えないようにする。
             // 上限は README の 1800ms を超えないよう抑える。
             decaySeconds:
@@ -804,7 +866,9 @@ export class LightSpatialMapping {
                 mix(LIGHT_MAPPING.macroDecayMsShort, LIGHT_MAPPING.macroDecayMsLong, lengthT) *
                   mix(0.7, 1.25, h(39)),
                 LIGHT_MAPPING.macroDecayMsLong,
-              ) / 1000,
+              ) *
+              (anchor ? LIGHT_MAPPING.macroAnchorDecayScale : 1) /
+              1000,
           },
         },
       });
@@ -955,7 +1019,9 @@ export class LightSpatialMapping {
         role: 'main',
         position: origin,
         intensity: mainIntensity,
-        size: mainSize,
+        // **丸い点光源は主役から降ろす。** 中心の見え方は Prismatic Anchor が担い、
+        // ここはその内側に残るごく小さな白い芯にとどめる。
+        size: mainSize * LIGHT_MAPPING.mainHotspotScale,
         color,
         gradient: this.gradient(snapshot, settings, 0, 0),
         velocity: mainVelocity,
@@ -1264,7 +1330,8 @@ export class LightSpatialMapping {
             LIGHT_MAPPING.wavinessAtPureTone,
             LIGHT_MAPPING.wavinessAtNoise,
             clamp01(snapshot.spectralFlatness),
-          ) * (kind === 'arc' ? 1.6 : 1) * (0.6 + h(31) * 0.8);
+          // 弧だけを余分に曲げる倍率は廃止。曲率の差は elongation だけで付ける。
+          ) * (0.6 + h(31) * 0.8);
 
     // 向きは水平か垂直を基本にして、seed で少しだけ逸らす。
     // 自由方向のままだと放射状の花火に見えて、層の重なりが読めなくなる。
@@ -1452,8 +1519,12 @@ export class LightSpatialMapping {
 
   /**
    * 速度。帯域が「重さ」を、onsetStrength が初速を、centroid が散らばりの鋭さを決める。
-   * 向きは決定論ハッシュなので、同じ帯域でも上下左右前後どこへでも出る
+   * 向きは決定論ハッシュなので、同じ帯域でも上下左右どこへでも出る
    * （帯域を固定の方向に縛らない）。
+   *
+   * **奥行き方向（z）へは動かさない。** 前後に動くと「カメラへ迫ってくる」
+   * 印象になり、層がその奥行きに置かれている感じが壊れる。
+   * 奥行きは発生位置と面の傾きだけで感じさせる。
    */
   private velocity(
     snapshot: AudioEventSnapshot,
@@ -1496,7 +1567,8 @@ export class LightSpatialMapping {
     return {
       x: Math.cos(azimuth) * sine * speed * planar * amount,
       y: Math.sin(azimuth) * sine * speed * planar * amount,
-      z: cosine * speed * (0.25 + depthBias) * amount,
+      // 前後には動かさない。帯域ごとの「重さ」は画面平行の速さだけに残る。
+      z: 0,
     };
   }
 }

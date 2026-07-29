@@ -203,7 +203,12 @@ const SPATIAL_STUDY = {
      * メインの光だけに掛ける追加ゲイン。
      * 「強い打撃の中心は強くてよい」ぶんをここで戻す。
      */
-    mainScale: 0.9,
+    /**
+     * **中心の芯（Hotspot）だけに掛かる倍率。**
+     * 中心の主役は Prismatic Anchor（質感レイヤー）へ移したので、
+     * ここは「その奥にごく小さく白が残る」程度に抑える。
+     */
+    mainScale: 0.55,
     /** 軌跡の節に掛ける追加の薄さ。残像はさらに引っ込める。 */
     trailScale: 0.55,
   },
@@ -304,7 +309,7 @@ const SPATIAL_STUDY = {
      * 1 枚あたりの濃度。**膜として透ける**のが役目なので、
      * Transient の芯より薄い。重なったところだけが濃くなる。
      */
-    opacity: 0.8,
+    opacity: 1.45,
     /**
      * 板の四角い輪郭を消す円窓。この半径から外へ向けて 0 になる。
      * **ここを 1.0 に近づけると素材の正方形が見えてしまう。**
@@ -333,6 +338,16 @@ const SPATIAL_STUDY = {
     maskSoftness: 0.3,
     /** UV をマスの内側へ寄せる余白。隣の素材へ絶対に滲ませない。 */
     cellInset: 0.004,
+    /**
+     * **1 枚あたりの明るさの天井（ソフトニー）。**
+     *
+     * `x / (1 + x/ceiling)` で上だけを潰す。色相は変えない。
+     * これが無いと、広い面がそのまま内部 Bloom の敷居（0.22）を一斉に越えて
+     * 面ごと滲み、中心の周りが広範囲に白く飽和する。
+     * 天井を敷居の少し上に置くと、**1 枚では白へ行けず、
+     * 違う色の層が狭い範囲で重なったところだけ**が越えて白熱する。
+     */
+    softCeiling: 0.8,
   },
 
   /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
@@ -496,8 +511,6 @@ interface MacroLayer {
   currentIntensity: number;
   age: number;
   completed: boolean;
-  /** 発生時からの奥行き方向のドリフト量（ワールド単位）。 */
-  driftZ: number;
 }
 
 /** 開発・検証用に外へ見せる Core 1 個ぶんの状態。 */
@@ -958,10 +971,10 @@ export class LightSpatialStudy implements LabExpression {
           // ビュー空間で板を広げるので、板は常にカメラを向く（ビルボード）。
           // 大きさはワールド単位のまま置くだけで、遠近は投影行列が付ける。
           // 軸方向へ伸ばしてから、向きのぶんだけ回す。
-          // うねりは「まっすぐな光条は不自然」ぶんの微小な曲がりで、
-          // 波形をそのまま形にしているわけではない。
-          float sway = sin(stretched.x * 2.6) * aShape.z * 0.16;
-          vec2 shaped = vec2(stretched.x, stretched.y + sway);
+          // **板そのものは曲げない。** 以前は頂点側でも sin で反らせていたが、
+          // フラグメント側の bend と二重に効いて引っ掻き傷に見えていた。
+          // ごく弱い揺らぎはフラグメント側だけが持つ。
+          vec2 shaped = stretched;
           float ca = cos(aShape.y);
           float sa = sin(aShape.y);
           vec2 rotated = vec2(shaped.x * ca - shaped.y * sa, shaped.x * sa + shaped.y * ca);
@@ -1077,7 +1090,8 @@ export class LightSpatialStudy implements LabExpression {
           // こうすると同じガウスのまま「細長い光」になる。
           float elongation = max(vShape.x, 1.0);
           // うねりを距離にも効かせる。芯がわずかに蛇行して見える。
-          float bend = sin(vLocal.x * 1.7) * vShape.y * 0.22;
+          // 光学的なごく小さい揺らぎだけ。主軸は直線として読めること。
+          float bend = sin(vLocal.x * 1.7) * vShape.y * 0.08;
           // 伸びと太さを戻して等方に測る。太いほどガウスが横へ広がる。
           vec2 axis = vec2(vLocal.x / elongation, (vLocal.y + bend) / max(vThickness, 0.05));
           float d2 = dot(axis, axis);
@@ -1313,6 +1327,7 @@ export class LightSpatialStudy implements LabExpression {
         },
         // 多角形マスクの柔らかさ / マスの内側へ寄せる余白。
         uMacroEdge: { value: new THREE.Vector2(macro.maskSoftness, macro.cellInset) },
+        uMacroCeiling: { value: macro.softCeiling },
         uIntensity: { value: SPATIAL_STUDY.defaults.intensity },
       },
       transparent: true,
@@ -1376,6 +1391,7 @@ export class LightSpatialStudy implements LabExpression {
         uniform vec2 uMaskGrid;
         uniform vec4 uMacro;
         uniform vec2 uMacroEdge;
+        uniform float uMacroCeiling;
         uniform float uIntensity;
         varying vec2 vLocal;
         varying float vIntensity;
@@ -1456,6 +1472,10 @@ export class LightSpatialStudy implements LabExpression {
           float silhouette = mix(1.0, polygon, clamp(vStyle.y, 0.0, 1.0));
 
           vec3 color = tone * luminance * window * silhouette * max(vIntensity, 0.0) * uIntensity;
+          // 上だけを潰すソフトニー。**1 枚では白へ行けない**ようにして、
+          // 白は「違う色の層が重なった場所」でだけ生まれるようにする。
+          float peak = max(color.r, max(color.g, color.b));
+          color /= 1.0 + peak / max(uMacroCeiling, 0.0001);
           gl_FragColor = vec4(max(color, 0.0), 1.0);
         }
       `,
@@ -1612,7 +1632,7 @@ export class LightSpatialStudy implements LabExpression {
   /** 質感レイヤーを 1 枚開く。上限に達したら最も古いものから捨てる。 */
   private spawnMacro(traits: MacroLayerTraits): void {
     if (this.macros.length >= SPATIAL_STUDY.macro.maximumLayers) this.macros.shift();
-    this.macros.push({ traits, currentIntensity: 0, age: 0, completed: false, driftZ: 0 });
+    this.macros.push({ traits, currentIntensity: 0, age: 0, completed: false });
   }
 
   /** 予定 1 つから光を 1 つ生む。見え方はすでに Mapping 層が決めている。 */
@@ -1749,7 +1769,6 @@ export class LightSpatialStudy implements LabExpression {
     for (let read = 0; read < this.macros.length; read++) {
       const layer = this.macros[read]!;
       layer.age += delta;
-      layer.driftZ += layer.traits.drift * delta;
       const { attackSeconds: attack, holdSeconds: hold, decaySeconds: decay } = layer.traits.lifetime;
       const peak = layer.traits.intensity;
       if (layer.age < attack) {
@@ -1782,8 +1801,8 @@ export class LightSpatialStudy implements LabExpression {
       const t = layer.traits;
       this.macroOffsets[slot * 3] = t.position.x;
       this.macroOffsets[slot * 3 + 1] = t.position.y;
-      // Bass と Sustain でごくゆっくり前後へ流れる（発生時に決まった速度）。
-      this.macroOffsets[slot * 3 + 2] = t.position.z + layer.driftZ;
+      // **発生した奥行きに留まる。** 前後には動かさない。
+      this.macroOffsets[slot * 3 + 2] = t.position.z;
       this.macroSizes[slot * 3] = t.halfWidth;
       this.macroSizes[slot * 3 + 1] = t.halfHeight;
       this.macroSizes[slot * 3 + 2] = t.tile;
