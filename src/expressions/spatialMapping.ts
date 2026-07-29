@@ -21,8 +21,12 @@ import {
  * 別の参照値で割った値なので、帯域どうしを比べると静かな帯域が不当に大きく出る。
  */
 
+/** バーストの中での役割。メインは 1 つ、サブは複数。 */
+export type LightRole = 'main' | 'sub';
+
 /** 1 つの光が生まれるときに決まる見え方。決まったら寿命の間は変えない。 */
 export interface LightVisualTraits {
+  readonly role: LightRole;
   readonly position: SpatialPosition;
   /** 明るさの倍率（0..1）。Core ごとの明るさはこれだけで決まる。 */
   readonly intensity: number;
@@ -42,6 +46,15 @@ export interface LightVisualTraits {
   readonly trail: number;
 }
 
+/**
+ * バーストの中の光 1 つぶんの予定。
+ * `delaySeconds` だけ遅れて生まれるので、1 つの打撃が連鎖して光る。
+ */
+export interface PlannedLight {
+  readonly delaySeconds: number;
+  readonly traits: LightVisualTraits;
+}
+
 /** 表現から渡す、その時点の運転設定。 */
 export interface LightMappingSettings {
   readonly minimumIntensity: number;
@@ -57,6 +70,8 @@ export interface LightMappingSettings {
   readonly motionAmount: number;
   /** 軌跡の長さ（0..1）。 */
   readonly trailAmount: number;
+  /** サブの光の個数の倍率（0〜2）。ユーザーが増減を調整する。 */
+  readonly burstDensity: number;
 }
 
 /**
@@ -94,6 +109,38 @@ export const LIGHT_MAPPING = {
   /** 軌跡: Trail 0 → 1 でこの秒数ぶんの履歴を残す。 */
   trailSecondsAtMinimum: 0,
   trailSecondsAtMaximum: 0.9,
+
+  // ---- バースト（1 つの打撃 = メイン 1 + サブ N の連鎖）----
+  /**
+   * サブの個数。**周波数の高さでは増やさない**（低音中心の曲で発生が枯れるため）。
+   *   N = (base + volume 寄与 + onset 寄与 + 新奇性 寄与) × burstDensity
+   */
+  subCountBase: 1.6,
+  subCountPerVolume: 4.4,
+  subCountPerOnset: 2.6,
+  subCountPerNovelty: 3.8,
+  /** 1 バーストのサブの上限。増やしすぎると画面が埋まる。 */
+  subCountMaximum: 16,
+  /** サブが遅れて生まれる幅（秒）。この間に連鎖しているように見える。 */
+  subDelayMinimum: 0.005,
+  subDelayMaximum: 0.15,
+  /** サブがメインからどれだけ離れるか（可視範囲の半分に対する割合）。 */
+  subSpreadMinimum: 0.04,
+  subSpreadMaximum: 0.22,
+  /** サブの奥行きのばらつき（ワールド単位）。 */
+  subDepthSpread: 1.8,
+  /** サブの大きさ（メインに対する倍率）。**メインが最大**になるよう 1 未満に収める。 */
+  subSizeMinimum: 0.22,
+  subSizeMaximum: 0.68,
+  /** サブの明るさ（メインに対する倍率）。 */
+  subIntensityMinimum: 0.3,
+  subIntensityMaximum: 0.85,
+  /** サブの寿命（メインに対する倍率）。**さらに短命で、ばらつく**。 */
+  subLifetimeMinimum: 0.28,
+  subLifetimeMaximum: 0.85,
+  /** サブの速さ（メインに対する倍率）。 */
+  subSpeedMinimum: 0.6,
+  subSpeedMaximum: 2.2,
 } as const;
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -129,26 +176,116 @@ export class LightSpatialMapping {
     this.positions.reset();
   }
 
-  /** イベント 1 個ぶんの見え方を決める。 */
-  resolve(
+  /**
+   * イベント 1 個から**バースト**を組み立てる。
+   *
+   * メインの光 1 つと、5〜150ms 遅れて連鎖するサブの光 N 個を返す。
+   * 遅れ・位置・大きさ・寿命はすべて音由来の決定論ハッシュで決まるので、
+   * 同じ音源なら同じ連鎖になる（`Math.random()` は使わない）。
+   */
+  resolveBurst(
     event: BandLightEvent,
     visible: VisibleExtent,
     settings: LightMappingSettings,
-  ): LightVisualTraits {
+  ): PlannedLight[] {
     const snapshot = event.snapshot;
-    return {
-      position: this.positions.resolve(event, visible),
-      intensity: this.intensity(snapshot, settings),
-      size: this.size(snapshot, settings),
-      color: this.color(snapshot, settings),
-      velocity: this.velocity(snapshot, settings),
-      lifetime: {
-        attackSeconds: settings.attackSeconds,
-        holdSeconds: settings.holdSeconds,
-        decaySeconds: settings.decaySeconds,
+    const origin = this.positions.resolve(event, visible);
+    const mainIntensity = this.intensity(snapshot, settings);
+    const mainSize = this.size(snapshot, settings);
+    const color = this.color(snapshot, settings);
+    const mainVelocity = this.velocity(snapshot, settings);
+    const trail = clamp01(settings.trailAmount);
+
+    const main: PlannedLight = {
+      delaySeconds: 0,
+      traits: {
+        role: 'main',
+        position: origin,
+        intensity: mainIntensity,
+        size: mainSize,
+        color,
+        velocity: mainVelocity,
+        lifetime: {
+          attackSeconds: settings.attackSeconds,
+          holdSeconds: settings.holdSeconds,
+          decaySeconds: settings.decaySeconds,
+        },
+        trail,
       },
-      trail: clamp01(settings.trailAmount),
     };
+
+    const count = this.subCount(snapshot, settings);
+    const lights: PlannedLight[] = [main];
+    const seed = [snapshot.audioSeed, BAND_INDEX[snapshot.winningBand], snapshot.eventIndex];
+    const depth = -origin.z;
+    const extent = visible(depth);
+
+    for (let i = 0; i < count; i++) {
+      const h = (salt: number): number => hash01(...seed, i, salt);
+      const delay = mix(LIGHT_MAPPING.subDelayMinimum, LIGHT_MAPPING.subDelayMaximum, h(3));
+      // メインの近くに散らす。近くで交わるほど、加算で白が生まれる。
+      const angle = h(5) * Math.PI * 2;
+      const radius = mix(LIGHT_MAPPING.subSpreadMinimum, LIGHT_MAPPING.subSpreadMaximum, h(7));
+      const dz = (h(9) * 2 - 1) * LIGHT_MAPPING.subDepthSpread;
+      const subDepth = Math.max(depth + dz, 1);
+      const subExtent = visible(subDepth);
+      const usable = 1 - 0.05;
+      const position = {
+        // 画面外へこぼさないよう、その奥行きの可視範囲で必ず抑える。
+        x: clampAbs(origin.x + Math.cos(angle) * radius * extent.halfWidth, subExtent.halfWidth * usable),
+        y: clampAbs(origin.y + Math.sin(angle) * radius * extent.halfHeight, subExtent.halfHeight * usable),
+        z: -subDepth,
+      };
+      const sizeScale = mix(LIGHT_MAPPING.subSizeMinimum, LIGHT_MAPPING.subSizeMaximum, h(11));
+      const intensityScale = mix(
+        LIGHT_MAPPING.subIntensityMinimum,
+        LIGHT_MAPPING.subIntensityMaximum,
+        h(13),
+      );
+      const lifeScale = mix(
+        LIGHT_MAPPING.subLifetimeMinimum,
+        LIGHT_MAPPING.subLifetimeMaximum,
+        h(17),
+      );
+      const speedScale = mix(LIGHT_MAPPING.subSpeedMinimum, LIGHT_MAPPING.subSpeedMaximum, h(19));
+      lights.push({
+        delaySeconds: delay,
+        traits: {
+          role: 'sub',
+          position,
+          intensity: mainIntensity * intensityScale,
+          size: mainSize * sizeScale,
+          color,
+          velocity: {
+            x: mainVelocity.x * speedScale,
+            y: mainVelocity.y * speedScale,
+            z: mainVelocity.z * speedScale,
+          },
+          lifetime: {
+            // Attack はほぼゼロ。点いた瞬間に最大で、あとは落ちるだけ。
+            attackSeconds: settings.attackSeconds * 0.5,
+            holdSeconds: settings.holdSeconds * lifeScale * 0.6,
+            decaySeconds: settings.decaySeconds * lifeScale,
+          },
+          trail,
+        },
+      });
+    }
+    return lights;
+  }
+
+  /**
+   * サブの個数。**音量が基礎、onset と新奇性が上乗せ、スライダーが倍率。**
+   * 周波数の高さ（centroid）は使わない — 低音中心の曲で発生が枯れてしまうため。
+   */
+  private subCount(snapshot: AudioEventSnapshot, settings: LightMappingSettings): number {
+    const raw =
+      LIGHT_MAPPING.subCountBase +
+      LIGHT_MAPPING.subCountPerVolume * clamp01(snapshot.volume) +
+      LIGHT_MAPPING.subCountPerOnset * clamp01(snapshot.onsetStrength) +
+      LIGHT_MAPPING.subCountPerNovelty * clamp01(snapshot.novelty);
+    const scaled = raw * Math.max(settings.burstDensity, 0);
+    return Math.min(Math.round(scaled), LIGHT_MAPPING.subCountMaximum);
   }
 
   /**
@@ -261,3 +398,6 @@ export class LightSpatialMapping {
 /** Trail のスライダー値（0..1）を履歴の秒数へ写す。 */
 export const trailSeconds = (trail: number): number =>
   mix(LIGHT_MAPPING.trailSecondsAtMinimum, LIGHT_MAPPING.trailSecondsAtMaximum, trail);
+
+const clampAbs = (value: number, limit: number): number =>
+  Math.min(Math.max(value, -limit), limit);

@@ -323,6 +323,8 @@ export interface OnsetGateInput {
   readonly adaptiveThreshold: boolean;
   /** strength の局所正規化を使うか。閾値の適応とは独立に切れる。 */
   readonly adaptiveStrength: boolean;
+  /** 閾値の倍率。1.0 で従来どおり、小さいほど発火しやすい。 */
+  readonly thresholdScale: number;
 }
 
 /**
@@ -360,6 +362,7 @@ export class OnsetGate {
   private clock = 0;
   private currentThreshold = 0;
   private currentReference = 0;
+  private currentTypicalPeak = 0;
   private warming = true;
 
   reset(): void {
@@ -373,6 +376,7 @@ export class OnsetGate {
     this.clock = 0;
     this.currentThreshold = 0;
     this.currentReference = 0;
+    this.currentTypicalPeak = 0;
     this.warming = true;
   }
 
@@ -402,6 +406,14 @@ export class OnsetGate {
   }
 
   /**
+   * その区間の「代表的な山の高さ」（窓に入った局所最大の中央値）。
+   * いまの打撃がいつもより大きいか（新奇性）を測る物差しに使う。
+   */
+  get typicalPeak(): number {
+    return this.currentTypicalPeak;
+  }
+
+  /**
    * 発火したら strength（0..1）を返す。しなければ null。
    *
    * `measured` が false のフレームはフラックスがラッチ値のままなので、
@@ -424,10 +436,11 @@ export class OnsetGate {
     this.warming =
       sorted.length < BAND_DETECTION.adaptive.minimumSamples ||
       sortedPeaks.length < BAND_DETECTION.adaptive.minimumPeaks;
-    this.currentThreshold =
+    const base =
       input.adaptiveThreshold && !this.warming
         ? this.adaptiveThreshold(sorted, sortedPeaks, input.sensitivity)
         : input.fallbackThreshold;
+    this.currentThreshold = base * Math.max(input.thresholdScale, 0.01);
     this.currentReference =
       input.adaptiveStrength && !this.warming
         ? Math.max(
@@ -459,6 +472,7 @@ export class OnsetGate {
       kAtZeroSensitivity - clamp01(sensitivity) * (kAtZeroSensitivity - kAtFullSensitivity);
     const baseline = quantileOf(sorted, 0.5);
     const typicalPeak = quantileOf(sortedPeaks, 0.5);
+    this.currentTypicalPeak = typicalPeak;
     const spread = Math.max(typicalPeak - baseline, 0);
     return Math.max(absoluteFloor, baseline + k * spread);
   }
@@ -514,6 +528,12 @@ export interface AudioEventSnapshot {
   readonly onsetStrength: number;
   readonly spectralFlatness: number;
   readonly audioSeed: number;
+  /**
+   * 新奇性（0..1）。**直近数秒の文脈と比べて、この打撃がどれだけ突出しているか。**
+   * `OnsetGate` の統計窓が持つ「代表的な山の高さ」を物差しに使う。
+   * いつもどおりの打撃なら 0 付近、久しぶりの大きな一撃なら 1 に近づく。
+   */
+  readonly novelty: number;
   /** イベント通し番号（＝ sequence）。決定論のシードに使える。 */
   readonly eventIndex: number;
 }
@@ -548,6 +568,12 @@ export interface BandDetectionSettings {
   readonly cooldownSeconds: number;
   /** 最強帯域に対する相対マージン。1 なら最強 1 本だけ。 */
   readonly relativeStrengthFloor: number;
+  /**
+   * 閾値の倍率。**1.0 が従来の効き**で、小さいほど発火しやすくなる。
+   * 2D Core Study は 1.0 のまま（イベント列を変えないため）、
+   * 3D の Spatial Study だけが下げてバーストを増やす。
+   */
+  readonly thresholdScale: number;
   readonly adaptiveThreshold: boolean;
   readonly adaptiveStrength: boolean;
 }
@@ -673,6 +699,7 @@ export class BandLightEventDetector {
       cooldownSeconds: settings.cooldownSeconds,
       adaptiveThreshold: settings.adaptiveThreshold,
       adaptiveStrength: settings.adaptiveStrength,
+      thresholdScale: settings.thresholdScale,
     };
 
     // 先に期限の切れた窓を閉じる。閉じてから新しい発火を受けるので、
@@ -785,6 +812,9 @@ export class BandLightEventDetector {
     const index = this.eventCounter;
     this.eventCounter += 1;
     const bandFlux = { ...event.peakFlux };
+    // 新奇性: 主役帯域のフラックスが、その区間の代表的な山をどれだけ超えたか。
+    const typical = this.bandGates[top.band].typicalPeak;
+    const novelty = clamp01((top.flux - typical) / Math.max(typical, 0.12));
     return chosen.map((entry, siblingIndex) => ({
       time: elapsed,
       band: entry.band,
@@ -806,6 +836,7 @@ export class BandLightEventDetector {
         onsetStrength: entry.strength,
         spectralFlatness: event.audio.spectralFlatness,
         audioSeed: event.audio.audioSeed,
+        novelty,
         eventIndex: index,
       },
     }));

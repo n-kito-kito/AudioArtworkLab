@@ -19,6 +19,8 @@ import {
   LightSpatialMapping,
   trailSeconds,
   type LightMappingSettings,
+  type LightRole,
+  type LightVisualTraits,
 } from './spatialMapping';
 
 /**
@@ -47,8 +49,12 @@ import {
  * （`SpatialPositionResolver` はこのオブジェクトを受け取るだけで、自前の定数を持たない）。
  */
 const SPATIAL_STUDY = {
-  /** 同時に生かす Core の上限。2D と揃える。 */
-  maximumCores: 32,
+  /**
+   * 同時に生かす光の上限。
+   * 1 イベント = メイン 1 + サブ N のバーストになったので、2D の 32 では足りない。
+   * 上限に達したら最も古い光から捨てる（ドローコールは 1 のまま）。
+   */
+  maximumCores: 168,
   /** 固定カメラの垂直画角（度）。奥行きの見え方はこの値で決まる。 */
   fieldOfView: 50,
   nearPlane: 0.1,
@@ -64,7 +70,7 @@ const SPATIAL_STUDY = {
    * 軌跡 1 本ぶんの節の数。**3D の位置履歴**を固定長で持ち、同じ InstancedMesh の
    * 後ろ半分として 1 ドローで描く。増やすほど滑らかになるが描画量も増える。
    */
-  trailSegments: 12,
+  trailSegments: 8,
   /** 軌跡の節の明るさ（先端 → 末尾）。0 で完全に消える。 */
   trailIntensityAtTail: 0,
   /** 軌跡の節の大きさ（先端に対する末尾の倍率）。細くなるほど「光跡」に見える。 */
@@ -136,10 +142,12 @@ const SPATIAL_STUDY = {
 
   /** 開発用パラメータの既定値。2D Core Study と同じ意味・同じ既定値。 */
   defaults: {
-    attackMs: 15,
-    holdMs: 60,
-    decayMs: 350,
-    minimumIntensity: 0.35,
+    // 瞬間的な点滅感にする。Attack はほぼゼロ、Decay は 2D の半分。
+    attackMs: 4,
+    holdMs: 22,
+    decayMs: 175,
+    // 暗い光を減らす。ただし上限との差は残して強さの分布は広く保つ。
+    minimumIntensity: 0.5,
     maximumIntensity: 1,
     onsetSensitivity: 0.5,
     fluxGain: 2.5,
@@ -150,9 +158,17 @@ const SPATIAL_STUDY = {
     colorAmount: 0.8,
     motionAmount: 0.7,
     trailAmount: 0.35,
+    /** サブの光の個数の倍率。0 でメインだけ、2 で計算値の倍。 */
+    burstDensity: 1,
+    /**
+     * 発火のしやすさ。**小さいほど発火する**（閾値の倍率）。
+     * ある程度の立ち上がりならほぼ光る状態にしたいので、既定で 2D より下げる。
+     * クールダウンは据え置きなので連射の暴走はしない。
+     */
+    thresholdScale: 0.45,
   },
   ranges: {
-    attackMs: { min: 1, max: 200, step: 1 },
+    attackMs: { min: 0, max: 200, step: 1 },
     holdMs: { min: 0, max: 500, step: 1 },
     decayMs: { min: 20, max: 2000, step: 10 },
     minimumIntensity: { min: 0, max: 1, step: 0.01 },
@@ -165,6 +181,8 @@ const SPATIAL_STUDY = {
     colorAmount: { min: 0, max: 1, step: 0.05 },
     motionAmount: { min: 0, max: 1, step: 0.05 },
     trailAmount: { min: 0, max: 1, step: 0.05 },
+    burstDensity: { min: 0, max: 2, step: 0.05 },
+    thresholdScale: { min: 0.15, max: 1.5, step: 0.05 },
   },
 } as const;
 
@@ -183,7 +201,8 @@ interface SpatialCore {
   readonly origin: { readonly x: number; readonly y: number; readonly z: number };
   /** 速度（ワールド単位 / 秒）。発生時に音から決まり、以後変わらない。 */
   readonly velocity: { readonly x: number; readonly y: number; readonly z: number };
-  readonly band: BandName;
+  /** バーストの中での役割。メインは 1 つ、サブは複数。 */
+  readonly role: LightRole;
   readonly onsetStrength: number;
   readonly peakIntensity: number;
   /** 基準サイズに対する倍率。発生時に確定してちらつかせない。 */
@@ -216,7 +235,7 @@ export interface SpatialCoreSnapshot {
   readonly y: number;
   readonly z: number;
   readonly speed: number;
-  readonly band: BandName;
+  readonly role: LightRole;
   readonly size: number;
   readonly color: { readonly r: number; readonly g: number; readonly b: number };
   readonly onsetStrength: number;
@@ -237,6 +256,10 @@ export interface SpatialStudyState {
   readonly lastSize: number;
   readonly lastPhase: SpatialCorePhase | null;
   readonly lastEventCores: number;
+  /** 直近のバーストが持っていた光の数（メイン + サブ）。 */
+  readonly lastBurstLights: number;
+  /** 生まれるのを待っている光の数。 */
+  readonly scheduledLights: number;
   readonly flux: BandFlux;
   readonly bands: Readonly<Record<BandName, BandGateState>>;
   readonly cores: readonly SpatialCoreSnapshot[];
@@ -304,6 +327,10 @@ export class LightSpatialStudy implements LabExpression {
     SPATIAL_STUDY.maximumCores,
   );
   private readonly cores: SpatialCore[] = [];
+  /** 遅れて生まれる予定の光（バーストの連鎖）。 */
+  private readonly scheduled: { at: number; traits: LightVisualTraits }[] = [];
+  /** 直近のバーストが持っていた光の数（メイン + サブ）。 */
+  private lastBurstLights = 0;
 
   private previousElapsed = -1;
   private lastBand: BandName | null = null;
@@ -515,33 +542,63 @@ export class LightSpatialStudy implements LabExpression {
         relativeStrengthFloor: this.params.relativeStrengthFloor,
         adaptiveThreshold: this.adaptiveThreshold,
         adaptiveStrength: this.adaptiveStrength,
+        thresholdScale: this.params.thresholdScale,
       },
     );
     if (events.length === 0) return;
     this.lastEventCores = events.length;
-    for (const event of events) this.spawn(event);
+    for (const event of events) this.scheduleBurst(event, elapsed);
   }
 
   /**
-   * イベント 1 個から Core を 1 個作る。
+   * イベント 1 個から**バースト**を予約する。
    *
-   * 位置は `SpatialPositionResolver` が音だけから決める（`Math.random()` は使わない）。
-   * 決めた位置は寿命の間ずっと動かさない。
+   * メインはその場で生まれ、サブは 5〜150ms 遅れて連鎖する。
+   * 遅れも位置も音由来の決定論ハッシュなので、同じ音源なら同じ連鎖になる。
    */
-  private spawn(event: BandLightEvent): void {
-    if (this.cores.length >= SPATIAL_STUDY.maximumCores) this.cores.shift();
-    const traits = this.mapping.resolve(
+  private scheduleBurst(event: BandLightEvent, elapsed: number): void {
+    const plan = this.mapping.resolveBurst(
       event,
       (depth) => this.visibleHalfExtent(depth),
       this.mappingSettings(),
     );
+    this.lastBurstLights = plan.length;
+    this.lastBand = event.band;
+    for (const light of plan) {
+      if (light.delaySeconds <= 0) {
+        this.spawn(light.traits);
+        continue;
+      }
+      this.scheduled.push({ at: elapsed + light.delaySeconds, traits: light.traits });
+    }
+  }
+
+  /** 予約した光のうち、時刻が来たものを生む。 */
+  private releaseScheduled(elapsed: number): void {
+    if (this.scheduled.length === 0) return;
+    let write = 0;
+    for (let read = 0; read < this.scheduled.length; read++) {
+      const entry = this.scheduled[read]!;
+      if (entry.at <= elapsed) {
+        this.spawn(entry.traits);
+        continue;
+      }
+      this.scheduled[write] = entry;
+      write += 1;
+    }
+    this.scheduled.length = write;
+  }
+
+  /** 予定 1 つから光を 1 つ生む。見え方はすでに Mapping 層が決めている。 */
+  private spawn(traits: LightVisualTraits): void {
+    if (this.cores.length >= SPATIAL_STUDY.maximumCores) this.cores.shift();
 
     this.cores.push({
       position: { ...traits.position },
       origin: { ...traits.position },
       velocity: traits.velocity,
-      band: event.band,
-      onsetStrength: event.strength,
+      role: traits.role,
+      onsetStrength: traits.intensity,
       peakIntensity: traits.intensity,
       size: traits.size,
       color: traits.color,
@@ -557,12 +614,13 @@ export class LightSpatialStudy implements LabExpression {
       sampleCountdown: 0,
       trail: traits.trail,
     });
-    this.lastBand = event.band;
-    this.lastOnsetStrength = event.strength;
-    this.lastPeakIntensity = traits.intensity;
-    this.lastPosition = { ...traits.position };
-    this.lastColor = { ...traits.color };
-    this.lastSize = traits.size;
+    if (traits.role === 'main') {
+      this.lastOnsetStrength = traits.intensity;
+      this.lastPeakIntensity = traits.intensity;
+      this.lastPosition = { ...traits.position };
+      this.lastColor = { ...traits.color };
+      this.lastSize = traits.size;
+    }
   }
 
   /** Mapping 層へ渡す運転設定。開発用パラメータをそのまま束ねるだけ。 */
@@ -577,6 +635,7 @@ export class LightSpatialStudy implements LabExpression {
       colorAmount: this.params.colorAmount,
       motionAmount: this.params.motionAmount,
       trailAmount: this.params.trailAmount,
+      burstDensity: this.params.burstDensity,
     };
   }
 
@@ -724,6 +783,7 @@ export class LightSpatialStudy implements LabExpression {
     if (!active) {
       // PRD D5: 音がなければ発生も余韻もない（無音＝黒画面が正常）。
       this.cores.length = 0;
+      this.scheduled.length = 0;
       this.resetDetection();
       this.syncInstances();
       this.pipeline?.update(audio, elapsed);
@@ -731,6 +791,7 @@ export class LightSpatialStudy implements LabExpression {
     }
 
     this.detectEvents(elapsed, delta);
+    this.releaseScheduled(elapsed);
     this.advanceCores(delta);
     this.syncInstances();
     this.pipeline?.update(audio, elapsed);
@@ -741,6 +802,7 @@ export class LightSpatialStudy implements LabExpression {
     this.lastBand = null;
     this.lastEventCores = 0;
     this.lastPosition = null;
+    this.lastBurstLights = 0;
     this.mapping.reset();
   }
 
@@ -864,6 +926,8 @@ export class LightSpatialStudy implements LabExpression {
       lastSize: this.lastSize,
       lastPhase: this.cores.length > 0 ? this.cores[this.cores.length - 1]!.phase : null,
       lastEventCores: this.lastEventCores,
+      lastBurstLights: this.lastBurstLights,
+      scheduledLights: this.scheduled.length,
       flux: this.detector.bandFlux,
       bands: {
         bass: this.detector.bandState('bass'),
@@ -875,7 +939,7 @@ export class LightSpatialStudy implements LabExpression {
         y: core.position.y,
         z: core.position.z,
         speed: Math.hypot(core.velocity.x, core.velocity.y, core.velocity.z),
-        band: core.band,
+        role: core.role,
         size: core.size,
         color: { ...core.color },
         onsetStrength: core.onsetStrength,
@@ -920,6 +984,8 @@ export class LightSpatialStudy implements LabExpression {
       row('colorAmount', 'Color amount'),
       row('motionAmount', 'Motion amount'),
       row('trailAmount', 'Trail'),
+      row('burstDensity', 'Burst density'),
+      row('thresholdScale', 'Onset reach'),
       onOff('adaptiveThreshold', 'Adaptive threshold', this.adaptiveThreshold),
       onOff('adaptiveStrength', 'Adaptive strength', this.adaptiveStrength),
     ];
@@ -956,6 +1022,7 @@ export class LightSpatialStudy implements LabExpression {
     this.geometry?.dispose();
     this.material?.dispose();
     this.cores.length = 0;
+    this.scheduled.length = 0;
     this.resetDetection();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
     this.pipeline = null;

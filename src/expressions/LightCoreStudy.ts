@@ -376,6 +376,8 @@ export class LightCoreStudy implements LabExpression {
         relativeStrengthFloor: this.params.relativeStrengthFloor,
         adaptiveThreshold: this.adaptiveThreshold,
         adaptiveStrength: this.adaptiveStrength,
+        // 2D は従来の効きのまま（イベント列を 1 ビットも変えない）。
+        thresholdScale: 1,
       },
     );
     if (events.length === 0) return;
