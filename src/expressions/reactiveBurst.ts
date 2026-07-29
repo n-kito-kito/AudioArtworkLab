@@ -218,8 +218,10 @@ export const BURST_MAPPING = {
    * Ray は**強い onset か Treble 優勢のときだけ**。
    * 水平垂直が基本で、傾きは小さく、本数も絞る（斬撃にしない）。
    */
-  rayOnsetThreshold: 0.72,
-  rayTrebleThreshold: 0.5,
+  rayOnsetThreshold: 0.78,
+  rayTrebleThreshold: 0.62,
+  /** Treble 優勢で出すときも、この強さの打撃であることを要る（常時表示にしない）。 */
+  rayTrebleOnsetFloor: 0.55,
   rayCountMaximum: 2,
   rayTiltRadians: 0.07,
   rayHorizontalProbability: 0.7,
@@ -501,8 +503,8 @@ export class PrismaticBurstPlanner {
           y: core.position.y * 0.4 + (h(155) * 2 - 1) * hazeExtent.halfHeight * 0.2,
           z: -hazeDepth,
         },
-        halfWidth: hazeExtent.halfWidth * mix(1.1, 1.7, clamp01(snapshot.volume)),
-        halfHeight: hazeExtent.halfHeight * mix(1.1, 1.6, clamp01(snapshot.volume)),
+        halfWidth: hazeExtent.halfWidth * mix(0.8, 1.15, clamp01(snapshot.volume)),
+        halfHeight: hazeExtent.halfHeight * mix(0.8, 1.1, clamp01(snapshot.volume)),
         normal: { x: 0, y: 0, z: 1 },
         spin: h(157) * Math.PI,
         tile: this.pickTile(snapshot, h, 159, true),
@@ -525,10 +527,15 @@ export class PrismaticBurstPlanner {
     // Ray — **強い onset か Treble 優勢のときだけ。** 水平垂直が基本で本数も絞る。
     const strength = clamp01(snapshot.onsetStrength);
     const trebleShare = treble / total;
+    // **強い onset か、Treble 優勢かつそれなりの打撃のときだけ。**
+    // 常時出すと細い直線が並んで斬撃に戻る。
     const wants =
-      strength >= BURST_MAPPING.rayOnsetThreshold || trebleShare >= BURST_MAPPING.rayTrebleThreshold;
+      strength >= BURST_MAPPING.rayOnsetThreshold ||
+      (trebleShare >= BURST_MAPPING.rayTrebleThreshold &&
+        strength >= BURST_MAPPING.rayTrebleOnsetFloor);
     if (!wants) return layers;
-    const count = 1 + (strength > 0.88 ? 1 : 0);
+    // 2 本目はよほど強い打撃のときだけ。
+    const count = 1 + (strength > 0.94 ? 1 : 0);
     for (let i = 0; i < Math.min(count, BURST_MAPPING.rayCountMaximum); i++) {
       const r = (salt: number): number => hash01(snapshot.audioSeed, snapshot.eventIndex, 700 + i, salt);
       const horizontal = r(3) < BURST_MAPPING.rayHorizontalProbability;

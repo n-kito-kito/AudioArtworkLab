@@ -404,6 +404,33 @@ RecordingController・QualityMonitor は再接続済み。
         Attack → Hold → Decay → Off を繰り返し、時間形状を単独評価できる。
         この段階では音へ接続しない。Composite の見た目を基準として採用した後に、
         各要素へ音響パラメーターを 1 関係ずつ接続する
+  - [x] Light Reactive Lab — 静的な Light Element Lab の光学を**音イベント反応**へ進めた表現。
+        Version ボタンで Trigger / Texture / Variation / Composite の 4 段を切り替える。
+        データの流れは AudioEngine → `BandLightEventDetector` → `AudioEventSnapshot`
+        → **`PrismaticBurstPlanner`（`reactiveBurst.ts`。音 → 見え方はここだけ）**
+        → 各層 Envelope → 共通プリズム Shader（**1 ドロー**）→ 内部 Bloom → Effect。
+        `LightReactiveLab` は Planner が返した値を描くだけで、AudioEngine を形や色へ直接入れない。
+        **発生時にすべて固定する**のが芯 — 素材・色・クロップ・大きさ・太さ・位置・奥行き・
+        傾き・寿命・構図タイプは発光の瞬間に確定し、以後変わるのは A/H/D の明るさ・
+        発生時に決めた拡大・ごく弱い面内移動・素材内のスクロール / せん断 / 回転だけ。
+        **Z 方向とカメラ方向へは動かさない**（実測: 追跡 149 層すべてで z が不動）。
+        Stage 1 Trigger … Core のみ。立ち上がりで 1 回だけ発生し A/H/D で消える
+        Stage 2 Texture … Core + Sheet を同じ seed・同じ基準色・同じ発生位置で。
+          Core が先、Sheet は約 100ms 遅れて開き 1.68 倍長く残る。Ray はまだ出さない
+        Stage 3 Variation … 構図タイプ 6 種（Vertical Veil / Diagonal Fan / Prismatic Cross /
+          Depth Corridor / Wide Haze / Layered Membrane）と、素材・クロップ・比率・回転・反転・
+          色相・グラデーション形式・Near-Mid-Far・傾き・A/H/D をイベントごとに変える。
+          直近履歴で連続を防ぐ（実測: 構図・素材・角度・クロップ・色相帯の連続 0、
+          同じ位置への集中 46% → 0%、左右比 22:7 → 17:12）
+        Stage 4 Composite … Haze / Ray / Depth を追加。Wide Sheet は毎回必須、
+          Haze は余韻と空気感、**Ray は強い onset（≥0.78）か Treble 優勢（≥0.62）かつ
+          打撃が強い時だけ**・水平垂直基本・傾き ±0.07rad・同時 2 本まで（斬撃にしない）。
+          白は異色の層の重なりだけで作り、1 枚では超えられない soft-knee を再利用。
+          Bloom と Exposure は音量で直接動かさない
+        検証: 4 モードすべて無音 = 完全な黒 / 決定論一致 / 白飽和 0（画角 3 種すべて）/
+        Draw Call 15（層の数と素材の枚数に依らず 1 ドロー）/ 1 フレーム p50 0.2ms /
+        表現を切り替えて戻しても Atlas が黒くならない / 既存の Light Element Lab と
+        Light Spatial Study は比較用にそのまま残してある
   - [ ] Spatial Study の次段階 — 空間の手掛かり（グリッドや床）/ カメラのゆっくりした動き /
         軌跡の太さを音へ結ぶか / バーストの自己励起（クラスター化）を入れるか
   - [ ] 同時発光時の位置設計（2D 側）— floor を下げると複数 Core が同じ centroid に重なる（未決）

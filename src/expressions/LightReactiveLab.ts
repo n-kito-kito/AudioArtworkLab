@@ -65,7 +65,7 @@ const MODE_STAGE: Readonly<Record<ReactiveMode, ReactiveStage>> = {
 /** この表現の質感はすべてここに集める。日本語の意味つきで 1 箇所に置く。 */
 const REACTIVE = {
   /** 同時に生かす層の上限。上限に達したら最も古い層から捨てる。 */
-  maximumLayers: 40,
+  maximumLayers: 28,
   /** 固定カメラ。静的 Lab と同じ画角にして見え方を揃える。 */
   fieldOfView: 45,
   nearPlane: 0.1,
@@ -89,9 +89,9 @@ const REACTIVE = {
    */
   density: {
     core: 0.62,
-    sheet: 0.78,
-    haze: 0.5,
-    ray: 0.5,
+    sheet: 0.58,
+    haze: 0.32,
+    ray: 0.42,
   },
 
   /**
