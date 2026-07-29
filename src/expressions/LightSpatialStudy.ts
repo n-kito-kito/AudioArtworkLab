@@ -22,6 +22,7 @@ import {
   LightSpatialMapping,
   bloomDrive,
   trailSeconds,
+  type LightGradient,
   type LightMappingSettings,
   type LightRole,
   type LightShape,
@@ -116,6 +117,15 @@ const SPATIAL_STUDY = {
      * 余裕を持たせたうえで、縁で必ず 0 になる窓関数も掛けて二重に防ぐ。
      */
     scatterSpanMargin: 1.5,
+    /**
+     * **1 要素の内部の分光が広がる半径**（核の半径を 1 とした単位）。
+     *
+     * 板は散乱ぶんまで大きく（`scatterRadius × scatterSpanMargin` = 5.7）張ってあるが、
+     * 実際に色が読める明るさが出ているのは核と滲みの範囲だけ。物差しを板いっぱいに
+     * 取ると色相の変化がまるごと「暗くて見えない外側」に入ってしまうので、
+     * 滲みの半径あたりに合わせる。
+     */
+    gradientReach: 2.2,
     /**
      * RGB の微小な空間分離。色収差のように、色ごとに滲みの半径をわずかに変える。
      * 0 で分離なし。大きくすると輪郭に色が付く。
@@ -292,8 +302,10 @@ interface SpatialCore {
   readonly peakIntensity: number;
   /** 基準サイズに対する倍率。発生時に確定してちらつかせない。 */
   readonly size: number;
-  /** 色の比率（明るさは含まない）。発生時に確定する。 */
+  /** 代表色（明るさは含まない）。検証・状態表示のための 1 点サンプル。 */
   readonly color: { readonly r: number; readonly g: number; readonly b: number };
+  /** 1 要素の内部の分光。実際に描かれる色はこれを補間して作る。 */
+  readonly gradient: LightGradient;
   /** 形（種類・伸び・向き・うねり・面の法線）。発生時に確定する。 */
   readonly shape: LightShape;
   /** 大きさの時間変化。平面のフラッシュだけが大きく開く。 */
@@ -328,6 +340,12 @@ export interface SpatialCoreSnapshot {
   readonly shape: string;
   readonly size: number;
   readonly color: { readonly r: number; readonly g: number; readonly b: number };
+  /** 分光の形式と色相の並び（検証用）。 */
+  readonly gradient: {
+    readonly form: number;
+    readonly hues: readonly number[];
+    readonly saturations: readonly number[];
+  };
   readonly onsetStrength: number;
   readonly peakIntensity: number;
   readonly currentIntensity: number;
@@ -448,7 +466,15 @@ export class LightSpatialStudy implements LabExpression {
   private readonly offsets = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 3);
   private readonly intensities = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
   private readonly sizes = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
-  private readonly colors = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 3);
+  /**
+   * 分光。**RGB ではなく色相と彩度で送る。**
+   * 4 ストップぶんを vec4 2 本に収めれば済むので、RGB を 4 本送るより属性が減り、
+   * かつフラグメントで色相を直接補間できる（RGB 補間では色相環を通らない）。
+   */
+  private readonly hues = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 4);
+  private readonly saturations = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 4);
+  /** グラデーションの形式（`GRADIENT_FORM`）。 */
+  private readonly forms = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
   /** 形: x = 伸び / y = 向き(rad) / z = うねり / w = 種類(0 点 / 1 針 / 2 弧 / 3 平面)。 */
   private readonly shapes = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 4);
   /** 平面の法線（ワールド空間）。他の形では使わない。 */
@@ -456,7 +482,9 @@ export class LightSpatialStudy implements LabExpression {
   private offsetAttribute: THREE.InstancedBufferAttribute | null = null;
   private intensityAttribute: THREE.InstancedBufferAttribute | null = null;
   private sizeAttribute: THREE.InstancedBufferAttribute | null = null;
-  private colorAttribute: THREE.InstancedBufferAttribute | null = null;
+  private hueAttribute: THREE.InstancedBufferAttribute | null = null;
+  private saturationAttribute: THREE.InstancedBufferAttribute | null = null;
+  private formAttribute: THREE.InstancedBufferAttribute | null = null;
   private shapeAttribute: THREE.InstancedBufferAttribute | null = null;
   private normalAttribute: THREE.InstancedBufferAttribute | null = null;
 
@@ -528,14 +556,20 @@ export class LightSpatialStudy implements LabExpression {
     this.intensityAttribute.setUsage(THREE.DynamicDrawUsage);
     this.sizeAttribute = new THREE.InstancedBufferAttribute(this.sizes, 1);
     this.sizeAttribute.setUsage(THREE.DynamicDrawUsage);
-    this.colorAttribute = new THREE.InstancedBufferAttribute(this.colors, 3);
-    this.colorAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.hueAttribute = new THREE.InstancedBufferAttribute(this.hues, 4);
+    this.hueAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.saturationAttribute = new THREE.InstancedBufferAttribute(this.saturations, 4);
+    this.saturationAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.formAttribute = new THREE.InstancedBufferAttribute(this.forms, 1);
+    this.formAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aOffset', this.offsetAttribute);
     this.geometry.setAttribute('aIntensity', this.intensityAttribute);
     this.shapeAttribute = new THREE.InstancedBufferAttribute(this.shapes, 4);
     this.shapeAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aSize', this.sizeAttribute);
-    this.geometry.setAttribute('aColor', this.colorAttribute);
+    this.geometry.setAttribute('aHues', this.hueAttribute);
+    this.geometry.setAttribute('aSaturations', this.saturationAttribute);
+    this.geometry.setAttribute('aForm', this.formAttribute);
     this.normalAttribute = new THREE.InstancedBufferAttribute(this.normals, 3);
     this.normalAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aShape', this.shapeAttribute);
@@ -550,6 +584,7 @@ export class LightSpatialStudy implements LabExpression {
         uHalo: { value: new THREE.Vector2(SPATIAL_STUDY.optics.haloRadius, SPATIAL_STUDY.optics.haloStrength) },
         uScatter: { value: new THREE.Vector2(SPATIAL_STUDY.optics.scatterRadius, SPATIAL_STUDY.optics.scatterStrength) },
         uChromatic: { value: SPATIAL_STUDY.optics.chromaticSeparation },
+        uGradientReach: { value: SPATIAL_STUDY.optics.gradientReach },
         // 光源そのものの強さ。滲み（Bloom）や露出とは別の役割。
         uIntensity: { value: SPATIAL_STUDY.defaults.intensity },
         // 板を張る倍率。散乱がいちばん外まで届くので、その半径 × 余裕で決める。
@@ -576,7 +611,9 @@ export class LightSpatialStudy implements LabExpression {
         attribute vec3 aOffset;
         attribute float aIntensity;
         attribute float aSize;
-        attribute vec3 aColor;
+        attribute vec4 aHues;
+        attribute vec4 aSaturations;
+        attribute float aForm;
         attribute vec4 aShape;
         attribute vec3 aNormal;
         uniform float uSize;
@@ -584,7 +621,9 @@ export class LightSpatialStudy implements LabExpression {
         uniform vec3 uContrast;
         varying vec2 vLocal;
         varying float vIntensity;
-        varying vec3 vColor;
+        varying vec4 vHues;
+        varying vec4 vSaturations;
+        varying float vForm;
         varying float vDistanceFade;
         varying vec3 vShape;
 
@@ -596,7 +635,9 @@ export class LightSpatialStudy implements LabExpression {
           vec2 stretched = position.xy * vec2(elongation, 1.0);
           vLocal = stretched * 2.0 * uSpan;
           vIntensity = aIntensity;
-          vColor = aColor;
+          vHues = aHues;
+          vSaturations = aSaturations;
+          vForm = aForm;
           vShape = vec3(elongation, aShape.z, aShape.w);
           // ビュー空間で板を広げるので、板は常にカメラを向く（ビルボード）。
           // 大きさはワールド単位のまま置くだけで、遠近は投影行列が付ける。
@@ -639,15 +680,51 @@ export class LightSpatialStudy implements LabExpression {
         uniform vec2 uScatter;
         uniform float uChromatic;
         uniform float uIntensity;
+        uniform float uGradientReach;
         varying vec2 vLocal;
         varying float vIntensity;
-        varying vec3 vColor;
+        varying vec4 vHues;
+        varying vec4 vSaturations;
+        varying float vForm;
         varying float vDistanceFade;
         varying vec3 vShape;
 
         // 半径 r のガウス。radius を変えるだけで核・滲み・散乱を作り分ける。
         float glow(float d2, float radius) {
           return exp(-d2 / max(radius * radius, 0.0001));
+        }
+
+        // 色相（0..1 へ折り返す）と彩度から RGB。CPU 側の hueToRgb と同じ式。
+        vec3 spectralRgb(float hue, float saturation) {
+          vec3 p = fract(vec3(hue) + vec3(0.0, 0.6666667, 0.3333333)) * 6.0;
+          vec3 v = clamp(min(p, 4.0 - p), 0.0, 1.0);
+          return 1.0 - clamp(saturation, 0.0, 1.0) * (1.0 - v);
+        }
+
+        /**
+         * 4 ストップの折れ線を t で読む。
+         * GLSL ES 1.0 では vec4 を変数で添字できないので、
+         * 区間ごとの割合を clamp して mix を重ねる形にしてある。
+         */
+        float ramp4(vec4 stops, float t) {
+          float u = clamp(t, 0.0, 1.0) * 3.0;
+          float f0 = clamp(u, 0.0, 1.0);
+          float f1 = clamp(u - 1.0, 0.0, 1.0);
+          float f2 = clamp(u - 2.0, 0.0, 1.0);
+          return mix(mix(mix(stops.x, stops.y, f0), stops.z, f1), stops.w, f2);
+        }
+
+        /**
+         * **1 要素の内部で色相が動く位置（0..1）。** 形式は seed が選ぶ。
+         * axis は軸方向の伸びを戻した等方座標、radius は板の中心からの正規化距離。
+         */
+        float gradientPosition(vec2 axis, float reach) {
+          float radius = clamp(length(axis) / max(reach, 0.0001), 0.0, 1.0);
+          if (vForm < 0.5) return radius;                       // 放射状
+          if (vForm < 1.5) return 1.0 - radius;                 // 放射状（反転）
+          if (vForm < 2.5) return 0.5 + axis.x / (2.0 * reach); // 軸方向
+          if (vForm < 3.5) return 0.5 + axis.y / (2.0 * reach); // 軸直交
+          return atan(axis.y, axis.x) * 0.1591549 + 0.5;        // 角度方向
         }
 
         void main() {
@@ -663,11 +740,22 @@ export class LightSpatialStudy implements LabExpression {
           if (vShape.z > 2.5) {
             float r = sqrt(dot(vLocal, vLocal)) / max(uSpan, 0.0001);
             float sheet = max(1.0 - r, 0.0);
+            // 平面は板いっぱいまで見えるので、分光の物差しも板の半径そのもの。
+            float st = gradientPosition(vLocal, uSpan);
+            vec3 tint = spectralRgb(ramp4(vHues, st), ramp4(vSaturations, st));
             // flat は GLSL ES 3.00 の予約語なので変数名には使えない。
-            vec3 sheetColor = vColor * sheet * sheet * max(vIntensity, 0.0) * vDistanceFade * uIntensity;
+            vec3 sheetColor = tint * sheet * sheet * max(vIntensity, 0.0) * vDistanceFade * uIntensity;
             gl_FragColor = vec4(max(sheetColor, 0.0), 1.0);
             return;
           }
+
+          // **1 要素の内部の分光。** 位置ごとに色相が動くので、
+          // 「白 → 一色」ではなくプリズムを通った光のように色が連続して変わる。
+          // 物差しは板の半径ではなく**目に見える明るさが届く範囲**。
+          // 板は散乱ぶんまで大きく張ってあるので、板いっぱいで測ると
+          // 色相の変化が全部「暗くて見えない外側」に入ってしまう。
+          float t = gradientPosition(axis, uGradientReach);
+          vec3 tint = spectralRgb(ramp4(vHues, t), ramp4(vSaturations, t));
 
           // ① 明るい中心核。締まった芯。
           float core = glow(d2 * uCoreSharpness, 1.0 / max(uFalloff, 0.0001));
@@ -685,9 +773,9 @@ export class LightSpatialStudy implements LabExpression {
             glow(d2, uHalo.x * spread.b)
           ) * uHalo.y * uChromatic;
 
-          // 明るさ（vIntensity）と色の比率（vColor）は最後まで別々に持つ。
+          // 明るさ（vIntensity）と色の比率（tint）は最後まで別々に持つ。
           // 音量が大きいだけで色が白へ飽和しないようにするための分離。
-          vec3 level = vColor * (core + halo + scatter) + chroma * vColor;
+          vec3 level = tint * (core + halo + scatter) + chroma * tint;
           // 露出は最後の表示パスで 1 回だけ掛ける。ここでは光源の強さだけ。
           level *= max(vIntensity, 0.0) * vDistanceFade * uIntensity;
           // 板の縁で必ず 0 にする窓。これがないと散乱が四角く切れて継ぎ目が見える。
@@ -881,6 +969,7 @@ export class LightSpatialStudy implements LabExpression {
       peakIntensity: traits.intensity,
       size: traits.size,
       color: traits.color,
+      gradient: traits.gradient,
       shape: traits.shape,
       expansion: traits.expansion,
       currentIntensity: 0,
@@ -1003,7 +1092,8 @@ export class LightSpatialStudy implements LabExpression {
   /** インスタンス属性へ書き戻す。確保はせず、中身と instanceCount だけ更新する。 */
   private syncInstances(): void {
     if (!this.geometry || !this.offsetAttribute || !this.intensityAttribute) return;
-    if (!this.sizeAttribute || !this.colorAttribute || !this.shapeAttribute) return;
+    if (!this.sizeAttribute || !this.hueAttribute || !this.shapeAttribute) return;
+    if (!this.saturationAttribute || !this.formAttribute) return;
     let slot = 0;
     const write = (
       x: number,
@@ -1011,7 +1101,7 @@ export class LightSpatialStudy implements LabExpression {
       z: number,
       intensity: number,
       size: number,
-      color: { r: number; g: number; b: number },
+      gradient: LightGradient,
       shape: LightShape,
     ): void => {
       this.offsets[slot * 3] = x;
@@ -1019,9 +1109,11 @@ export class LightSpatialStudy implements LabExpression {
       this.offsets[slot * 3 + 2] = z;
       this.intensities[slot] = intensity;
       this.sizes[slot] = size;
-      this.colors[slot * 3] = color.r;
-      this.colors[slot * 3 + 1] = color.g;
-      this.colors[slot * 3 + 2] = color.b;
+      for (let c = 0; c < 4; c++) {
+        this.hues[slot * 4 + c] = gradient.hues[c]!;
+        this.saturations[slot * 4 + c] = gradient.saturations[c]!;
+      }
+      this.forms[slot] = gradient.form;
       this.shapes[slot * 4] = shape.elongation;
       this.shapes[slot * 4 + 1] = shape.angle;
       this.shapes[slot * 4 + 2] = shape.waviness;
@@ -1037,7 +1129,7 @@ export class LightSpatialStudy implements LabExpression {
       // 大きさと色は発生時に確定した値。毎フレーム作り直さないのでちらつかない。
       write(core.position.x, core.position.y, core.position.z,
         core.currentIntensity * layerOpacity(core.shape.kind, core.role),
-        core.size * expansionAt(core), core.color, core.shape);
+        core.size * expansionAt(core), core.gradient, core.shape);
     }
     // 軌跡は 3D の位置履歴そのもの（2D の残像合成ではない）。
     // 先端ほど明るく太く、末尾へ向かって細く暗くなる。
@@ -1051,7 +1143,7 @@ export class LightSpatialStudy implements LabExpression {
           (1 - SPATIAL_STUDY.trailIntensityAtTail);
         if (intensity <= 0.002) continue;
         const size = core.size * (1 - fade * (1 - SPATIAL_STUDY.trailSizeAtTail));
-        write(core.history[k * 3]!, core.history[k * 3 + 1]!, core.history[k * 3 + 2]!, intensity, size, core.color, core.shape);
+        write(core.history[k * 3]!, core.history[k * 3 + 1]!, core.history[k * 3 + 2]!, intensity, size, core.gradient, core.shape);
       }
     }
 
@@ -1059,7 +1151,9 @@ export class LightSpatialStudy implements LabExpression {
     this.offsetAttribute.needsUpdate = true;
     this.intensityAttribute.needsUpdate = true;
     this.sizeAttribute.needsUpdate = true;
-    this.colorAttribute.needsUpdate = true;
+    this.hueAttribute.needsUpdate = true;
+    this.saturationAttribute.needsUpdate = true;
+    this.formAttribute.needsUpdate = true;
     this.shapeAttribute.needsUpdate = true;
     this.normalAttribute!.needsUpdate = true;
   }
@@ -1257,6 +1351,11 @@ export class LightSpatialStudy implements LabExpression {
           : `${core.shape.kind}:${core.shape.elongation.toFixed(1)}`,
         size: core.size,
         color: { ...core.color },
+        gradient: {
+          form: core.gradient.form,
+          hues: [...core.gradient.hues],
+          saturations: [...core.gradient.saturations],
+        },
         onsetStrength: core.onsetStrength,
         peakIntensity: core.peakIntensity,
         currentIntensity: core.currentIntensity,
@@ -1377,7 +1476,9 @@ export class LightSpatialStudy implements LabExpression {
     this.offsetAttribute = null;
     this.intensityAttribute = null;
     this.sizeAttribute = null;
-    this.colorAttribute = null;
+    this.hueAttribute = null;
+    this.saturationAttribute = null;
+    this.formAttribute = null;
     this.shapeAttribute = null;
     this.normalAttribute = null;
     this.camera = null;

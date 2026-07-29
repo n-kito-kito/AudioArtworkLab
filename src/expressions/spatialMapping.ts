@@ -46,6 +46,36 @@ export interface LightShape {
   readonly normal: { readonly x: number; readonly y: number; readonly z: number } | null;
 }
 
+/**
+ * **1 つの光の中の色の移り変わり。**
+ *
+ * 狙いは「発光体が一色で光る」ことではなく、**プリズムを通った光**が空間に現れた状態。
+ * 1 要素の内部でスペクトル上を少し進む色相の並びを持ち、白 → 一色にはならない。
+ *
+ * 色相は**ラップさせずに連続値のまま**持つ（0.95 → 1.05 のような並びをそのまま補間し、
+ * 描画側の `fract` で環に戻す）。0.95 → 0.05 に折り返すと補間が色相環を逆走する。
+ */
+export interface LightGradient {
+  /**
+   * 形式。`GRADIENT_FORM` の番号で、seed が選ぶ。
+   * 0 放射状 / 1 放射状（反転）/ 2 軸方向 / 3 軸直交 / 4 角度方向。
+   */
+  readonly form: number;
+  /** 等間隔 4 点へリサンプルした色相。元のストップ数は 2〜4。 */
+  readonly hues: readonly [number, number, number, number];
+  /** 同・彩度。0 で白。 */
+  readonly saturations: readonly [number, number, number, number];
+}
+
+/** グラデーションの形式。描画側の分岐と 1 対 1 に対応する。 */
+export const GRADIENT_FORM = {
+  radial: 0,
+  radialInverted: 1,
+  axial: 2,
+  transverse: 3,
+  angular: 4,
+} as const;
+
 /** 1 つの光が生まれるときに決まる見え方。決まったら寿命の間は変えない。 */
 export interface LightVisualTraits {
   readonly role: LightRole;
@@ -54,8 +84,13 @@ export interface LightVisualTraits {
   readonly intensity: number;
   /** 大きさの倍率（1 が基準サイズ）。 */
   readonly size: number;
-  /** 色。明るさとは分けてあり、**比率だけ**を表す（最大成分が 1 に正規化される）。 */
+  /**
+   * 代表色。明るさとは分けてあり、**比率だけ**を表す（最大成分が 1 に正規化される）。
+   * 実際に描かれるのは `gradient` のほうで、これは検証・状態表示のための 1 点サンプル。
+   */
   readonly color: { readonly r: number; readonly g: number; readonly b: number };
+  /** 1 要素の内部で色相が動く並び。描画はこれを補間する。 */
+  readonly gradient: LightGradient;
   /** 速度（ワールド単位 / 秒）。 */
   readonly velocity: { readonly x: number; readonly y: number; readonly z: number };
   /** 寿命の 3 段階（秒）。 */
@@ -140,6 +175,37 @@ export const LIGHT_MAPPING = {
    * 白は「違う色が交わったとき」にしか出ないため、色相環をそれなりに使う。
    */
   colorHueSpreadInBurst: 0.44,
+  // ---- 1 要素の内部の分光（グラデーション）----
+  /**
+   * **1 つの発光の中で色相が連続的に変わる**ようにするための並び。
+   * 単体では「白 → 一色」で終わらせず、プリズムの分光のように
+   * スペクトル上を少し進んだ色が 1 要素の中に同居する。
+   */
+  /** 形式の種類数。0..この数−1 を seed が選ぶ（`GRADIENT_FORM` と対応）。 */
+  gradientFormCount: 5,
+  /**
+   * 色相の走る幅（狭い側 = 隣接色、広い側 = やや離れた色）。1.0 で色相環一周。
+   * 狭い側でも 0.1（36°）は動かす。これ以下だと単色にしか見えない。
+   * 広い側は 0.5（180°）まで。ここを超えると 1 要素の中で補色が同居して濁る。
+   */
+  gradientSpanNarrow: 0.1,
+  gradientSpanWide: 0.5,
+  /** ストップの数（2〜4）。少ないほど単純な移り、多いほど虹寄りになる。 */
+  gradientStopsMinimum: 2,
+  gradientStopsMaximum: 4,
+  /**
+   * 走りの途中で色相が折り返す確率（ストップ 3 個以上のとき）。
+   * 直線の走りばかりだと分光が均質に見えるので、山形も混ぜる。
+   */
+  gradientTurnProbability: 0.38,
+  /**
+   * 彩度の端の落ち具合。白い端（芯が白く抜けるプリズムらしさ）を作る側の倍率。
+   * 0 で完全な白、1 で落とさない。
+   */
+  gradientWhiteEndScale: 0.14,
+  /** 彩度が一定の並びを選ぶ確率。残りは白 → 色 と 色 → 白 に半々で割れる。 */
+  gradientFlatSaturationProbability: 0.26,
+
   /** 速度: 帯域ごとの基準の速さ（ワールド単位 / 秒）。 */
   speedByBand: { bass: 0.55, mid: 1.15, treble: 2.1 },
   /** 速度: onsetStrength 0 → 1 でこの倍率を掛ける。 */
@@ -322,6 +388,7 @@ export class LightSpatialMapping {
         intensity: mainIntensity,
         size: mainSize,
         color,
+        gradient: this.gradient(snapshot, settings, 0, 0),
         velocity: mainVelocity,
         lifetime: {
           attackSeconds: settings.attackSeconds,
@@ -391,6 +458,7 @@ export class LightSpatialMapping {
           intensity: mainIntensity * intensityScale,
           size: mainSize * sizeScale,
           color: this.color(snapshot, settings, hueOffset),
+          gradient: this.gradient(snapshot, settings, hueOffset, 1 + i),
           velocity: {
             x: mainVelocity.x * speedScale,
             y: mainVelocity.y * speedScale,
@@ -440,6 +508,7 @@ export class LightSpatialMapping {
         LIGHT_MAPPING.planeLifetimeMaximum,
         h(10),
       );
+      const planeHueOffset = (h(16) * 2 - 1) * LIGHT_MAPPING.colorHueSpreadInBurst;
       lights.push({
         delaySeconds: mix(0, LIGHT_MAPPING.subDelayMaximum * 0.5, h(12)),
         traits: {
@@ -449,7 +518,8 @@ export class LightSpatialMapping {
             mainIntensity *
             mix(LIGHT_MAPPING.planeIntensityMinimum, LIGHT_MAPPING.planeIntensityMaximum, h(14)),
           size: mainSize,
-          color: this.color(snapshot, settings, (h(16) * 2 - 1) * LIGHT_MAPPING.colorHueSpreadInBurst),
+          color: this.color(snapshot, settings, planeHueOffset),
+          gradient: this.gradient(snapshot, settings, planeHueOffset, 900 + i),
           // 平面は動かない。開くことそのものが動き。
           velocity: { x: 0, y: 0, z: 0 },
           lifetime: {
@@ -598,8 +668,24 @@ export class LightSpatialMapping {
     settings: LightMappingSettings,
     hueOffset = 0,
   ): { r: number; g: number; b: number } {
+    const { hue, saturation } = this.tone(snapshot, settings, hueOffset);
+    return hueToRgb(hue, saturation);
+  }
+
+  /**
+   * 色の素（色相と彩度）。`color` と `gradient` はどちらもここから作るので、
+   * 代表色とグラデーションが別々の色相を持つことはない。
+   *
+   * **色相はラップさせずに返す**（0.98 + 0.1 = 1.08 のまま）。
+   * グラデーションの補間は連続値でないと色相環を逆走してしまう。
+   */
+  private tone(
+    snapshot: AudioEventSnapshot,
+    settings: LightMappingSettings,
+    hueOffset: number,
+  ): { hue: number; saturation: number } {
     const seed = [snapshot.audioSeed, snapshot.eventIndex, snapshot.spectralCentroid];
-    const hue = (hash01(...seed, 101) + hueOffset + 1) % 1;
+    const hue = hash01(...seed, 101) + hueOffset;
     const saturationSeed = mix(
       LIGHT_MAPPING.colorSaturationMinimum,
       LIGHT_MAPPING.colorSaturationMaximum,
@@ -616,8 +702,56 @@ export class LightSpatialMapping {
         Math.max(1 - LIGHT_MAPPING.colorWhiteAtExtreme, 0.01),
     );
     const saturation = withCentroid * (1 - extreme);
-    const rgb = hueToRgb(hue, mix(0, saturation, clamp01(settings.colorAmount)));
-    return rgb;
+    return { hue, saturation: mix(0, saturation, clamp01(settings.colorAmount)) };
+  }
+
+  /**
+   * **1 要素の内部の分光。** 形式・色相の走る幅・向き・ストップ数・彩度の並びを
+   * すべて音由来の決定論ハッシュで決める（`Math.random()` は使わない）。
+   *
+   * `variant` は同じイベントの中で光ごとに別の流れを取るための番号。
+   * これがないとバースト中の全部が同じグラデーションになる。
+   */
+  private gradient(
+    snapshot: AudioEventSnapshot,
+    settings: LightMappingSettings,
+    hueOffset: number,
+    variant: number,
+  ): LightGradient {
+    const { hue, saturation } = this.tone(snapshot, settings, hueOffset);
+    const seed = [snapshot.audioSeed, snapshot.eventIndex, variant];
+    const h = (salt: number): number => hash01(...seed, salt);
+
+    const form = Math.min(
+      Math.floor(h(211) * LIGHT_MAPPING.gradientFormCount),
+      LIGHT_MAPPING.gradientFormCount - 1,
+    );
+    const range = LIGHT_MAPPING.gradientStopsMaximum - LIGHT_MAPPING.gradientStopsMinimum;
+    const stops = Math.min(
+      LIGHT_MAPPING.gradientStopsMinimum + Math.floor(h(213) * (range + 1)),
+      LIGHT_MAPPING.gradientStopsMaximum,
+    );
+    const span =
+      mix(LIGHT_MAPPING.gradientSpanNarrow, LIGHT_MAPPING.gradientSpanWide, h(215)) *
+      (h(217) < 0.5 ? -1 : 1);
+    // 3 ストップ以上のときだけ、走った色相が途中で折り返す並びを混ぜる。
+    const turns = stops >= 3 && h(219) < LIGHT_MAPPING.gradientTurnProbability;
+    // 彩度の並び: 0 = 白 → 色 / 1 = 色 → 白 / 2 = 一定。
+    const saturationMode =
+      h(221) < LIGHT_MAPPING.gradientFlatSaturationProbability ? 2 : h(223) < 0.5 ? 0 : 1;
+
+    const hueStops: number[] = [];
+    const saturationStops: number[] = [];
+    for (let i = 0; i < stops; i++) {
+      const u = i / (stops - 1);
+      // 折り返す並びは山形（0 → 1 → 0）にして、同じ幅の中を往復させる。
+      const travel = turns ? 1 - Math.abs(u * 2 - 1) : u;
+      hueStops.push(hue + span * travel);
+      const white = LIGHT_MAPPING.gradientWhiteEndScale;
+      const ramp = saturationMode === 2 ? 1 : saturationMode === 0 ? mix(white, 1, u) : mix(1, white, u);
+      saturationStops.push(saturation * ramp);
+    }
+    return { form, hues: resample4(hueStops), saturations: resample4(saturationStops) };
   }
 
   /**
@@ -677,6 +811,23 @@ export const trailSeconds = (trail: number): number =>
 
 const clampAbs = (value: number, limit: number): number =>
   Math.min(Math.max(value, -limit), limit);
+
+/**
+ * 2〜4 個のストップからなる折れ線を、等間隔 4 点へリサンプルする。
+ * 描画側は常に 4 点を受け取るので、ストップ数が変わっても属性の形は変わらない
+ * （インスタンス属性は固定長でないと 1 ドローを保てない）。
+ */
+const resample4 = (values: number[]): [number, number, number, number] => {
+  const last = Math.max(values.length - 1, 1);
+  const at = (t: number): number => {
+    const u = clamp01(t) * last;
+    const index = Math.min(Math.floor(u), last - 1);
+    const a = values[index] ?? 0;
+    const b = values[index + 1] ?? a;
+    return a + (b - a) * (u - index);
+  };
+  return [at(0), at(1 / 3), at(2 / 3), at(1)];
+};
 
 /**
  * 色相（0..1）と彩度から RGB を作る。**最大成分は必ず 1**（明るさは含めない）。
