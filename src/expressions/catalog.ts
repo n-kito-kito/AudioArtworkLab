@@ -6,6 +6,7 @@ import { CymaticsV2 } from '../fields/CymaticsV2';
 import { CymaticsPlate } from './CymaticsPlate';
 import { LightCoreStudy } from './LightCoreStudy';
 import { LightElementLab, type LightElementMode } from './LightElementLab';
+import { LightReactiveLab, type ReactiveMode } from './LightReactiveLab';
 import { LightSpatialStudy } from './LightSpatialStudy';
 import { LightTraces } from './LightTraces';
 import { ModularPatternField } from './ModularPatternField';
@@ -34,6 +35,10 @@ export type ExpressionId =
   | 'light-element-depth-v1'
   | 'light-element-envelope-v1'
   | 'light-element-composite-v1'
+  | 'light-reactive-trigger-v1'
+  | 'light-reactive-texture-v1'
+  | 'light-reactive-variation-v1'
+  | 'light-reactive-composite-v1'
   | 'reactive-geometry-v1';
 
 export interface ExpressionVersion {
@@ -125,6 +130,18 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
       { id: 'light-element-composite-v1', label: 'Composite' },
     ],
   },
+  // 静的な Light Element Lab の光学を、音イベントへ反応する表現へ進めた実験室。
+  // Trigger → Texture → Variation → Composite の順に、接続する音の関係を増やす。
+  {
+    id: 'light-reactive-lab',
+    label: 'Light Reactive Lab',
+    versions: [
+      { id: 'light-reactive-trigger-v1', label: 'Trigger' },
+      { id: 'light-reactive-texture-v1', label: 'Texture' },
+      { id: 'light-reactive-variation-v1', label: 'Variation' },
+      { id: 'light-reactive-composite-v1', label: 'Composite' },
+    ],
+  },
   {
     id: 'reactive-geometry',
     label: 'Reactive Geometry',
@@ -145,6 +162,13 @@ const LIGHT_ELEMENT_MODES: Partial<Record<ExpressionId, LightElementMode>> = {
   'light-element-depth-v1': 'depth',
   'light-element-envelope-v1': 'envelope',
   'light-element-composite-v1': 'composite',
+};
+
+const LIGHT_REACTIVE_MODES: Partial<Record<ExpressionId, ReactiveMode>> = {
+  'light-reactive-trigger-v1': 'trigger',
+  'light-reactive-texture-v1': 'texture',
+  'light-reactive-variation-v1': 'variation',
+  'light-reactive-composite-v1': 'composite',
 };
 
 /** 旧データ（'Cymatics' など id 以前の表記・不明値）はすべて V1 として扱う。 */
@@ -174,6 +198,8 @@ export function createExpression(
   if (id === 'light-spatial-study-v1') return new LightSpatialStudy(effects, theme);
   const lightElementMode = LIGHT_ELEMENT_MODES[id];
   if (lightElementMode) return new LightElementLab(id, lightElementMode, effects, theme);
+  const reactiveMode = LIGHT_REACTIVE_MODES[id];
+  if (reactiveMode) return new LightReactiveLab(id, reactiveMode, effects, theme);
   if (id === 'reactive-geometry-v1') return new ReactiveGeometry(effects, theme);
   applyTuning(id);
   const field = id === 'cymatics-v2' ? new CymaticsV2() : new Cymatics();
