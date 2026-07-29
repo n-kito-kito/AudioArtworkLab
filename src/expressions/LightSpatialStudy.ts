@@ -550,6 +550,8 @@ export class LightSpatialStudy implements LabExpression {
   private atlas: PolygonAtlas | null = null;
   /** 描画バッファの高さ（画素）。針の芯を「1〜2px」に保つのに要る。 */
   private viewportHeight = 1;
+  /** 上を毎フレーム測り直すための使い回しの入れ物（確保し直さない）。 */
+  private readonly bufferSize = new THREE.Vector2();
   private pipeline: EffectPipeline | null = null;
   /**
    * 内部 Bloom。**既存の Effect チェーンより前**に掛かる自前の合成器で、
@@ -1004,7 +1006,6 @@ export class LightSpatialStudy implements LabExpression {
     // ---- 内部 Bloom（参照デモの UnrealBloomPass と同じ構成）----
     const size = new THREE.Vector2();
     context.renderer.getSize(size);
-    this.viewportHeight = context.renderer.getDrawingBufferSize(new THREE.Vector2()).y;
     this.bloomComposer = new EffectComposer(context.renderer);
     // 画面には出さない。結果は readBuffer に残し、表示用の板が読み取る。
     this.bloomComposer.renderToScreen = false;
@@ -1067,12 +1068,19 @@ export class LightSpatialStudy implements LabExpression {
   private syncOptics(): void {
     if (this.material && this.camera) {
       // 針の長さと太さは画角・Aspect・描画高さから逆算する。
-      // Aspect は画角の切替でも変わるので、リサイズだけでなく毎フレーム合わせる。
+      // **毎フレーム測り直す。** 描画高さを持ち回すと、リサイズと update の順番次第で
+      // 古い値のまま描いてしまい、針が桁違いに太くなる（4px のときに実際に踏んだ）。
+      if (this.context) {
+        this.viewportHeight = Math.max(
+          this.context.renderer.getDrawingBufferSize(this.bufferSize).y,
+          1,
+        );
+      }
       const view = this.material.uniforms.uView!.value as THREE.Vector3;
       view.set(
         Math.tan((SPATIAL_STUDY.fieldOfView * Math.PI) / 360),
         Math.max(this.camera.aspect, 1e-6),
-        Math.max(this.viewportHeight, 1),
+        this.viewportHeight,
       );
     }
     if (this.bloomPass) {
@@ -1443,13 +1451,6 @@ export class LightSpatialStudy implements LabExpression {
     }
     const w = Math.max(width, 1);
     const h = Math.max(height, 1);
-    if (this.context) {
-      // 針の芯を「1〜2px」に保つには、CSS 画素ではなく描画バッファの高さが要る。
-      this.viewportHeight = Math.max(
-        this.context.renderer.getDrawingBufferSize(new THREE.Vector2()).y,
-        1,
-      );
-    }
     this.bloomComposer?.setSize(w, h);
     this.bloomPass?.setSize(w, h);
     this.pipeline?.resize(width, height);
