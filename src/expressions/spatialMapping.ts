@@ -159,6 +159,22 @@ export interface MacroLayerTraits {
   /** ごくゆっくりした奥行き方向のドリフト（ワールド単位 / 秒）。いまは常に 0。 */
   readonly drift: number;
   /**
+   * **面内のゆっくりした漂い。** すべて「1 秒あたりの量」で、
+   * 描画側は経過秒を掛けるだけ（時間の純関数なので毎フレームの音では揺れない）。
+   *
+   * **奥行き方向・カメラ方向へは動かない。** 面の中だけで滑る・ずれる・回る。
+   * 量は「漂っている」と読める最小限で、「流れている」までは行かせない。
+   */
+  readonly motion: {
+    /** 素材を面内で滑らせる速さ（クロップ座標 / 秒）。 */
+    readonly scrollU: number;
+    readonly scrollV: number;
+    /** せん断（軸に沿って横へずれる量 / 秒）。膜がたわむ感じを作る。 */
+    readonly shear: number;
+    /** 面内の回転（ラジアン / 秒）。板ごと同じ面の中で回る。 */
+    readonly spin: number;
+  };
+  /**
    * **中心の光かどうか。**
    *
    * `true` なら Burst の原点に置かれる要（Prismatic Anchor）。
@@ -232,6 +248,8 @@ export interface LightMappingSettings {
   readonly depthAmount: number;
   /** 横へ走る針の出やすさ（0 で縦だけ、1 で横に強く寄る）。 */
   readonly horizontalRayAmount: number;
+  /** 膜が面内で漂う量（0 で完全静止、1 で最大）。 */
+  readonly membraneMotion: number;
   /**
    * 発光の瞬間の sustain（0..1）。Macro layer の余韻の長さに使う。
    *
@@ -553,6 +571,46 @@ export const LIGHT_MAPPING = {
   /** 面の傾きの倍率。中心は正面寄りに立てて要として読ませる。 */
   macroAnchorTiltScale: 0.4,
 
+  // ---- 面内のゆっくりした漂い（Membrane motion）----
+  /**
+   * **発光時に確定し、以後は経過秒の純関数として動く。**
+   * リファレンスの膜は静止しておらず、面の中でゆっくり漂ってせん断している。
+   * ただし動きが見えすぎると「流れる」になってしまうので、上限は控えめに置く。
+   */
+  /** 素材を滑らせる速さ（クロップ座標 / 秒）。 */
+  motionScrollMinimum: 0.014,
+  motionScrollMaximum: 0.12,
+  /** せん断の速さ（/ 秒）。 */
+  motionShearMinimum: 0,
+  motionShearMaximum: 0.09,
+  /** 面内回転の速さ（ラジアン / 秒）。1 秒で最大 6.3 度ほど。 */
+  motionSpinMinimum: 0,
+  motionSpinMaximum: 0.11,
+  /**
+   * Sustain が長い音ほどゆっくり大きく漂う。
+   * 逆に Treble 優勢の短命な層はほとんど動かない（余韻が無いので漂う時間もない）。
+   */
+  motionFromSustain: 0.65,
+  motionFromBassShare: 0.35,
+  /** Treble 優勢のときに掛ける倍率。短命な層はほぼ静止させる。 */
+  motionAtTrebleLead: 0.25,
+  /** クロップ中心に空けておく余白。滑った先がマスの縁へ届かないようにする。 */
+  motionCropMargin: 0.1,
+
+  // ---- 配置の偏りを崩す（anti-clustering）----
+  /**
+   * 連続したバーストが近い位置へ落ちると、画面が 1〜2 秒だけ片側へ寄る。
+   * cores（`spatialPositions`）にある最低距離の仕組みを質感レイヤーにも入れる。
+   * **引き直しはハッシュ列の次の値**を使うので決定論は崩れない。
+   */
+  macroPlacementRetries: 5,
+  /** 画面正規化での最低距離。これより近いと混み合っていると見なす。 */
+  macroMinimumSeparation: 0.62,
+  /** 混雑度がこの値以下なら合格として引き直しを止める。 */
+  macroCrowdingTolerance: 0.55,
+  /** 判定に使う直近の配置の数（およそ 4 バースト＝層の寿命ぶん）。 */
+  macroRecentLimit: 14,
+
   /**
    * 中心に残す白い芯（Hotspot）の大きさの倍率。
    * 丸い Main Spark は主役から降ろし、**ごく小さな芯**としてだけ残す。
@@ -690,6 +748,11 @@ export class LightSpatialMapping {
    * **描画側はどれを選ぶかを決めない** — 決めるのはこの層だけ。
    */
   private tiles: readonly { readonly role: string; readonly weight: number }[] = [];
+  /**
+   * 直近に置いた質感レイヤーの**画面正規化位置**。
+   * 偏りの判定にだけ使い、見え方そのものは決めない。
+   */
+  private readonly recentMacro: { x: number; y: number }[] = [];
 
   constructor(positionConfig: SpatialPositionConfig, recentLimit: number) {
     this.positions = new SpatialPositionResolver(positionConfig, recentLimit);
@@ -702,6 +765,7 @@ export class LightSpatialMapping {
 
   reset(): void {
     this.positions.reset();
+    this.recentMacro.length = 0;
   }
 
   /**
@@ -775,6 +839,10 @@ export class LightSpatialMapping {
       // 中心に主役を残しつつ、一部だけ周辺へ大きく飛ばす（Hybrid 配置）。
       const outer = !anchor && h(43) < LIGHT_MAPPING.macroOuterFraction;
       const spread = anchor ? 0 : spreadBase * (outer ? LIGHT_MAPPING.macroOuterSpreadScale : 1);
+      // **偏りを崩す。** 直近の層と混み合う候補は、ハッシュ列の次の値で引き直す。
+      const placement = anchor
+        ? { x: 0, y: 0 }
+        : this.placeMacro(h, spread, origin, extent);
       const size =
         mix(LIGHT_MAPPING.macroSizeAtSilence, LIGHT_MAPPING.macroSizeAtFullVolume, volume) *
         (anchor ? LIGHT_MAPPING.macroAnchorSizeScale : band.size);
@@ -784,8 +852,9 @@ export class LightSpatialMapping {
       const halfCrop =
         mix(LIGHT_MAPPING.macroCropMinimum, LIGHT_MAPPING.macroCropMaximum, h(7)) *
         (anchor ? LIGHT_MAPPING.macroAnchorCropScale : 1);
+      const margin = LIGHT_MAPPING.motionCropMargin;
       const cropCenter = (value: number): number =>
-        halfCrop + value * Math.max(1 - halfCrop * 2, 0);
+        halfCrop + margin + value * Math.max(1 - halfCrop * 2 - margin * 2, 0);
       const hueOffset = (h(9) * 2 - 1) * LIGHT_MAPPING.macroHueSpread;
       // 板のワールド半径。**可視範囲では割らない** — 割ると奥ほど板も大きくなって
       // 遠近が相殺され、板の集合が 1 枚の平面に見えてしまう。
@@ -798,8 +867,8 @@ export class LightSpatialMapping {
           : mix(LIGHT_MAPPING.macroDelayMinimum, LIGHT_MAPPING.macroDelayMaximum, h(11)),
         traits: {
           position: {
-            x: origin.x + (h(13) * 2 - 1) * spread * extent.halfWidth,
-            y: origin.y + (h(15) * 2 - 1) * spread * extent.halfHeight,
+            x: origin.x + placement.x * extent.halfWidth,
+            y: origin.y + placement.y * extent.halfHeight,
             z: -depth,
           },
           tile,
@@ -818,6 +887,7 @@ export class LightSpatialMapping {
           spin: this.macroSpin(role, h),
           // 奥行き方向へは動かさない（発生した奥行きに留まる）。
           drift: LIGHT_MAPPING.macroDrift,
+          motion: this.membraneMotion(snapshot, settings, h),
           anchor,
           crop: { u: cropCenter(h(19)), v: cropCenter(h(21)), su: halfCrop, sv: halfCrop },
           rotation: h(23) * Math.PI * 2,
@@ -874,6 +944,101 @@ export class LightSpatialMapping {
       });
     }
     return layers;
+  }
+
+  /**
+   * **配置の偏りを崩す。**
+   *
+   * 連続したバーストが近い offset に落ちると、画面が 1〜2 秒だけ片側へ寄る。
+   * 直近に置いた層と混み合う候補は、**ハッシュ列の次の値**で引き直す
+   * （`Math.random()` は使わないので、同じ音・同じ seed なら同じ結果になる）。
+   * 何度引いても混んでいるときは、その中で最も空いている候補を採る。
+   *
+   * 中心の要（Anchor）はこの対象外で、常に原点に置く。
+   */
+  private placeMacro(
+    h: (salt: number) => number,
+    spread: number,
+    origin: SpatialPosition,
+    extent: { readonly halfWidth: number; readonly halfHeight: number },
+  ): { x: number; y: number } {
+    // 判定は画面正規化で行う。原点そのもののずれも含めて混雑を見る。
+    const baseX = origin.x / Math.max(extent.halfWidth, 1e-6);
+    const baseY = origin.y / Math.max(extent.halfHeight, 1e-6);
+    let best: { x: number; y: number; score: number } | null = null;
+    for (let attempt = 0; attempt <= LIGHT_MAPPING.macroPlacementRetries; attempt++) {
+      const x = (h(60 + attempt * 2) * 2 - 1) * spread;
+      const y = (h(61 + attempt * 2) * 2 - 1) * spread;
+      const score = this.crowding(baseX + x, baseY + y);
+      if (best === null || score < best.score) best = { x, y, score };
+      if (score <= LIGHT_MAPPING.macroCrowdingTolerance) break;
+    }
+    const chosen = best ?? { x: 0, y: 0 };
+    this.recentMacro.push({ x: baseX + chosen.x, y: baseY + chosen.y });
+    if (this.recentMacro.length > LIGHT_MAPPING.macroRecentLimit) this.recentMacro.shift();
+    return { x: chosen.x, y: chosen.y };
+  }
+
+  /**
+   * 候補の悪さ。**直近の層に近いほど悪い。**
+   *
+   * 重心を中央へ引き戻す項も試したが、片寄りの指標（重心が 0.35 を超えた
+   * フレームの割合）は改善せず、象限の散らばりだけが悪化したので入れていない。
+   * 隣どうしを離すだけで、片寄りは 21.2% → 11.6% まで下がる。
+   */
+  private crowding(x: number, y: number): number {
+    const limit = LIGHT_MAPPING.macroMinimumSeparation;
+    let score = 0;
+    for (const point of this.recentMacro) {
+      const distance = Math.hypot(point.x - x, point.y - y);
+      if (distance < limit) score += 1 - distance / limit;
+    }
+    return score;
+  }
+
+  /**
+   * **面内のゆっくりした漂い。**
+   *
+   * 発光の瞬間の音（Snapshot）と seed で速さと向きを確定し、以後は経過秒を
+   * 掛けるだけの純関数として動かす。毎フレームの生の音響値は入れないので、
+   * 音が揺れても軌道は変わらない。
+   *
+   * Sustain が長い音ほどゆっくり大きく漂い、Treble 優勢の短命な層はほぼ静止する。
+   */
+  private membraneMotion(
+    snapshot: AudioEventSnapshot,
+    settings: LightMappingSettings,
+    h: (salt: number) => number,
+  ): { scrollU: number; scrollV: number; shear: number; spin: number } {
+    const amount = clamp01(settings.membraneMotion);
+    if (amount <= 0) return { scrollU: 0, scrollV: 0, shear: 0, spin: 0 };
+
+    const { bass, mid, treble } = snapshot.bandFlux;
+    const total = Math.max(bass + mid + treble, 1e-6);
+    const trebleLead = clamp01((treble / total - 0.45) / 0.55);
+    // 余韻の長さが漂いの大きさを決める。低域寄りも少し足す。
+    const drive =
+      clamp01(
+        LIGHT_MAPPING.motionFromSustain * clamp01(settings.sustain) +
+          LIGHT_MAPPING.motionFromBassShare * (bass / total),
+      ) * mix(1, LIGHT_MAPPING.motionAtTrebleLead, trebleLead);
+    const scale = drive * amount;
+
+    // 向きは seed 由来。面内のどちらへでも滑る（奥行きへは動かない）。
+    const heading = h(71) * Math.PI * 2;
+    const speed = mix(LIGHT_MAPPING.motionScrollMinimum, LIGHT_MAPPING.motionScrollMaximum, h(73)) * scale;
+    return {
+      scrollU: Math.cos(heading) * speed,
+      scrollV: Math.sin(heading) * speed,
+      shear:
+        mix(LIGHT_MAPPING.motionShearMinimum, LIGHT_MAPPING.motionShearMaximum, h(75)) *
+        scale *
+        (h(77) < 0.5 ? -1 : 1),
+      spin:
+        mix(LIGHT_MAPPING.motionSpinMinimum, LIGHT_MAPPING.motionSpinMaximum, h(79)) *
+        scale *
+        (h(81) < 0.5 ? -1 : 1),
+    };
   }
 
   /**

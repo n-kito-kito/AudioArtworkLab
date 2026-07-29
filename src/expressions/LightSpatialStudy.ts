@@ -406,6 +406,8 @@ const SPATIAL_STUDY = {
     depthAmount: 1,
     /** 横へ走る針の出やすさ。0 で縦横同数、1 で横に強く寄る。 */
     horizontalRayAmount: 1,
+    /** 膜が面内で漂う量。**0 で完全静止**（従来の見え方へ戻る）。 */
+    membraneMotion: 1,
     /** 光源そのものの強さ（滲み・露出とは別の役割）。 */
     /** 内部 Bloom。参照デモと同じ操作感で並べる。 */
     bloomThreshold: 0.22,
@@ -444,6 +446,7 @@ const SPATIAL_STUDY = {
     macroSpreadAmount: { min: 0, max: 1.5, step: 0.05 },
     depthAmount: { min: 0, max: 1, step: 0.05 },
     horizontalRayAmount: { min: 0, max: 1, step: 0.05 },
+    membraneMotion: { min: 0, max: 1, step: 0.05 },
     bloomThreshold: { min: 0, max: 1, step: 0.01 },
     bloomStrength: { min: 0, max: 3, step: 0.05 },
     bloomRadius: { min: 0, max: 1.5, step: 0.01 },
@@ -734,8 +737,13 @@ export class LightSpatialStudy implements LabExpression {
   private readonly macroOrients = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
   /** 歪みの量 / 周波数 / 位相 / グラデーションの形式。 */
   private readonly macroWarps = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
-  /** 多角形マスクの番号 / 効き / 素材の色を残す割合。 */
-  private readonly macroStyles = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 3);
+  /** 多角形マスクの番号 / 効き / 素材の色を残す割合 / 経過秒。 */
+  private readonly macroStyles = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
+  /**
+   * 面内の漂い（1 秒あたり）。スクロール u/v・せん断・面内回転。
+   * 描画側は経過秒を掛けるだけなので、**時間の純関数**で動く。
+   */
+  private readonly macroMotions = new Float32Array(SPATIAL_STUDY.macro.maximumLayers * 4);
   /**
    * 面の法線（xyz）と面内回転（w）。
    * **ビルボードにしないための向き。** これが無いと板の集合が 1 枚の平面に見える。
@@ -1299,7 +1307,8 @@ export class LightSpatialStudy implements LabExpression {
     add('aCrop', this.macroCrops, 4);
     add('aOrient', this.macroOrients, 4);
     add('aWarp', this.macroWarps, 4);
-    add('aStyle', this.macroStyles, 3);
+    add('aStyle', this.macroStyles, 4);
+    add('aMotion', this.macroMotions, 4);
     add('aNormal', this.macroNormals, 4);
     add('aHues', this.macroHues, 4);
     add('aSaturations', this.macroSaturations, 4);
@@ -1341,7 +1350,8 @@ export class LightSpatialStudy implements LabExpression {
         attribute vec4 aCrop;
         attribute vec4 aOrient;
         attribute vec4 aWarp;
-        attribute vec3 aStyle;
+        attribute vec4 aStyle;
+        attribute vec4 aMotion;
         attribute vec4 aNormal;
         attribute vec4 aHues;
         attribute vec4 aSaturations;
@@ -1351,7 +1361,8 @@ export class LightSpatialStudy implements LabExpression {
         varying vec4 vCrop;
         varying vec4 vOrient;
         varying vec4 vWarp;
-        varying vec3 vStyle;
+        varying vec4 vStyle;
+        varying vec4 vMotion;
         varying vec4 vHues;
         varying vec4 vSaturations;
 
@@ -1364,6 +1375,7 @@ export class LightSpatialStudy implements LabExpression {
           vOrient = aOrient;
           vWarp = aWarp;
           vStyle = aStyle;
+          vMotion = aMotion;
           vHues = aHues;
           vSaturations = aSaturations;
           // **ビルボードにしない。** 法線から接線・従法線を組み、ワールド空間で
@@ -1374,8 +1386,11 @@ export class LightSpatialStudy implements LabExpression {
           vec3 tangent = normalize(cross(helper, n));
           vec3 bitangent = cross(n, tangent);
           // 面内回転。素材の役割で寄せる向きが違う（縦膜は縦のまま等）。
-          float cs = cos(aNormal.w);
-          float sn = sin(aNormal.w);
+          // ここに**面の中だけのゆっくりした回転**を経過秒ぶん足す。
+          // 面法線は変えないので、奥行きにもカメラ方向にも動かない。
+          float spin = aNormal.w + aMotion.w * aStyle.w;
+          float cs = cos(spin);
+          float sn = sin(spin);
           vec3 axisU = tangent * cs + bitangent * sn;
           vec3 axisV = bitangent * cs - tangent * sn;
           // 大きさはワールド単位のまま。遠近は投影行列だけが付ける。
@@ -1399,7 +1414,8 @@ export class LightSpatialStudy implements LabExpression {
         varying vec4 vCrop;
         varying vec4 vOrient;
         varying vec4 vWarp;
-        varying vec3 vStyle;
+        varying vec4 vStyle;
+        varying vec4 vMotion;
         varying vec4 vHues;
         varying vec4 vSaturations;
 
@@ -1441,6 +1457,11 @@ export class LightSpatialStudy implements LabExpression {
             sin(q.y * vWarp.y + vWarp.z),
             cos(q.x * vWarp.y * 0.87 + vWarp.z * 1.31)
           ) * vWarp.x;
+          // **面内のゆっくりした漂い。** せん断で膜がたわみ、素材が面の中を滑る。
+          // どちらも経過秒（vStyle.w）を掛けるだけの純関数で、奥行きへは動かない。
+          float age = vStyle.w;
+          q.y += q.x * vMotion.z * age;
+          q += vMotion.xy * age;
 
           // ③ クロップ。素材のどこを切り出すかが毎回変わるので、同じ素材でも別の絵になる。
           vec2 cell = clamp(vCrop.xy + q * vCrop.zw, uMacroEdge.y, 1.0 - uMacroEdge.y);
@@ -1689,6 +1710,7 @@ export class LightSpatialStudy implements LabExpression {
       macroSpreadAmount: this.params.macroSpreadAmount,
       depthAmount: this.params.depthAmount,
       horizontalRayAmount: this.params.horizontalRayAmount,
+      membraneMotion: this.params.membraneMotion,
       sustain: this.lastSustain,
       placementMode: this.placementMode,
     };
@@ -1820,9 +1842,15 @@ export class LightSpatialStudy implements LabExpression {
       this.macroWarps[slot * 4 + 2] = t.warp.phase;
       this.macroWarps[slot * 4 + 3] = t.gradient.form;
       // 0..1 の割合を多角形の番号へ。枚数は描画側だけが知っている。
-      this.macroStyles[slot * 3] = Math.min(Math.floor(t.maskPattern * maskCount), maskCount - 1);
-      this.macroStyles[slot * 3 + 1] = t.maskAmount;
-      this.macroStyles[slot * 3 + 2] = t.sourceTint;
+      this.macroStyles[slot * 4] = Math.min(Math.floor(t.maskPattern * maskCount), maskCount - 1);
+      this.macroStyles[slot * 4 + 1] = t.maskAmount;
+      this.macroStyles[slot * 4 + 2] = t.sourceTint;
+      // 漂いは経過秒の純関数。ここで渡すのは「発生からの秒数」だけ。
+      this.macroStyles[slot * 4 + 3] = layer.age;
+      this.macroMotions[slot * 4] = t.motion.scrollU;
+      this.macroMotions[slot * 4 + 1] = t.motion.scrollV;
+      this.macroMotions[slot * 4 + 2] = t.motion.shear;
+      this.macroMotions[slot * 4 + 3] = t.motion.spin;
       this.macroNormals[slot * 4] = t.normal.x;
       this.macroNormals[slot * 4 + 1] = t.normal.y;
       this.macroNormals[slot * 4 + 2] = t.normal.z;
@@ -2193,6 +2221,7 @@ export class LightSpatialStudy implements LabExpression {
       row('macroSpreadAmount', 'Macro spread'),
       row('depthAmount', 'Depth'),
       row('horizontalRayAmount', 'Horizontal rays'),
+      row('membraneMotion', 'Membrane motion'),
       row('thresholdScale', 'Onset reach'),
       row('bloomThreshold', 'Bloom threshold'),
       row('bloomStrength', 'Bloom strength'),
