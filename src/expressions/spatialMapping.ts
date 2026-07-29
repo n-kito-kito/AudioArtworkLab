@@ -28,7 +28,7 @@ export type LightRole = 'main' | 'sub';
  * 光の形。**波形をそのまま光の形にはしない**（波を光で描くことになるため）。
  * うねりは「自然界にまっすぐは無い」ぶんの微妙な変形としてだけ使う。
  */
-export type LightShapeKind = 'spark' | 'needle' | 'arc';
+export type LightShapeKind = 'spark' | 'needle' | 'arc' | 'plane';
 
 /** 形の指定。描画側はこれを見て板の張り方と減衰を変える。 */
 export interface LightShape {
@@ -39,6 +39,11 @@ export interface LightShape {
   readonly angle: number;
   /** 軸のうねり（0 でまっすぐ、大きいほど曲がる）。**振幅は小さく保つ。** */
   readonly waviness: number;
+  /**
+   * `plane` のときだけ使う面の法線（ワールド空間）。
+   * X/Y/Z 軸平面を基本に、seed で少し傾ける。他の形では null。
+   */
+  readonly normal: { readonly x: number; readonly y: number; readonly z: number } | null;
 }
 
 /** 1 つの光が生まれるときに決まる見え方。決まったら寿命の間は変えない。 */
@@ -62,6 +67,12 @@ export interface LightVisualTraits {
   /** 軌跡の長さ（0..1）。0 で軌跡なし。 */
   readonly trail: number;
   readonly shape: LightShape;
+  /**
+   * 大きさの時間変化（発生時 → 寿命の終わり）。
+   * 平面のフラッシュは中心から外へ一気に開くので、ここが大きく動く。
+   * 点や光条は 1 → 1 で、発生時のまま変わらない。
+   */
+  readonly expansion: { readonly from: number; readonly to: number };
 }
 
 /**
@@ -90,6 +101,12 @@ export interface LightMappingSettings {
   readonly trailAmount: number;
   /** サブの光の個数の倍率（0〜2）。ユーザーが増減を調整する。 */
   readonly burstDensity: number;
+  /**
+   * 配置の流儀。
+   * `center` は原点付近へ集めて**光の層を重ねる**（既定）。
+   * `scatter` は音由来の決定論配置で空間へ散らす（従来）。
+   */
+  readonly placementMode: 'center' | 'scatter';
 }
 
 /**
@@ -145,12 +162,16 @@ export const LIGHT_MAPPING = {
    * サブの個数。**周波数の高さでは増やさない**（低音中心の曲で発生が枯れるため）。
    *   N = (base + volume 寄与 + onset 寄与 + 新奇性 寄与) × burstDensity
    */
-  subCountBase: 1.6,
-  subCountPerVolume: 4.4,
-  subCountPerOnset: 2.6,
-  subCountPerNovelty: 3.8,
-  /** 1 バーストのサブの上限。増やしすぎると画面が埋まる。 */
-  subCountMaximum: 16,
+  subCountBase: 3,
+  subCountPerVolume: 8,
+  subCountPerOnset: 5,
+  subCountPerNovelty: 6,
+  /**
+   * 1 バーストのサブの上限。
+   * 原点へ集めて層を重ねる狙いなので、以前より厚くしてある。
+   * 上限は 60fps とドローコール 1 を保てる範囲で実測して決めた。
+   */
+  subCountMaximum: 30,
   /** サブが遅れて生まれる幅（秒）。この間に連鎖しているように見える。 */
   subDelayMinimum: 0.005,
   subDelayMaximum: 0.15,
@@ -198,6 +219,43 @@ export const LIGHT_MAPPING = {
   wavinessAtNoise: 0.85,
   /** メインの光は等方の点のまま（伸ばさない）。 */
   mainElongation: 1,
+  /**
+   * 光条の向きの偏り。**横に伸びるもの・縦に伸びるものを主にする。**
+   * 完全な自由方向だと放射状の花火に見えてしまい、リファレンスの
+   * 「層が重なる」感じから離れる。0 で完全に水平／垂直、1 で自由。
+   */
+  needleAxisDeviation: 0.22,
+
+  // ---- 原点集中の配置（`placementMode: 'center'`）----
+  /** 中心からのゆらぎ（ワールド単位）。同一点に重ねず、わずかにずらして層にする。 */
+  centerJitter: 0.55,
+  /** 中心配置で使う奥行きの幅（ワールド単位）。狭いほど層が密に重なる。 */
+  centerDepthJitter: 2.6,
+  /** 中心配置の基準の奥行き。 */
+  centerDepth: 9,
+  /** 中心から少し離して散らすサブの割合（0..1）。「周辺の細かい散り」。 */
+  outerFraction: 0.26,
+  /** 同・離す距離（可視範囲の半分に対する割合）。 */
+  outerSpreadMinimum: 0.25,
+  outerSpreadMaximum: 0.72,
+  /** 同・大きさの倍率。周辺は小さく細かく。 */
+  outerSizeScale: 0.42,
+
+  // ---- 軸平面のフラッシュ ----
+  /** 1 バーストで開く平面の枚数（下限・上限）。onset の強さで増える。 */
+  planeCountMinimum: 1,
+  planeCountMaximum: 6,
+  /** 平面の法線を軸からどれだけ傾けるか（0 で完全な軸平面、1 で自由）。 */
+  planeAxisDeviation: 0.3,
+  /** 平面の開き始めと開ききりの大きさ（Core の基準サイズに対する倍率）。 */
+  planeScaleFrom: 0.5,
+  planeScaleTo: 16,
+  /** 平面の明るさ（メインに対する倍率）。**透けるように淡く。** */
+  planeIntensityMinimum: 0.1,
+  planeIntensityMaximum: 0.26,
+  /** 平面の寿命（メインに対する倍率）。瞬間的に開いて消える。 */
+  planeLifetimeMinimum: 0.5,
+  planeLifetimeMaximum: 1.1,
 } as const;
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -246,7 +304,10 @@ export class LightSpatialMapping {
     settings: LightMappingSettings,
   ): PlannedLight[] {
     const snapshot = event.snapshot;
-    const origin = this.positions.resolve(event, visible);
+    const origin =
+      settings.placementMode === 'center'
+        ? this.centerOrigin(snapshot, visible)
+        : this.positions.resolve(event, visible);
     const mainIntensity = this.intensity(snapshot, settings);
     const mainSize = this.size(snapshot, settings);
     const color = this.color(snapshot, settings);
@@ -269,7 +330,14 @@ export class LightSpatialMapping {
         },
         trail,
         // メインは等方の点。形のバリエーションはサブが担う。
-        shape: { kind: 'spark', elongation: LIGHT_MAPPING.mainElongation, angle: 0, waviness: 0 },
+        shape: {
+          kind: 'spark',
+          elongation: LIGHT_MAPPING.mainElongation,
+          angle: 0,
+          waviness: 0,
+          normal: null,
+        },
+        expansion: { from: 1, to: 1 },
       },
     };
 
@@ -283,8 +351,12 @@ export class LightSpatialMapping {
       const h = (salt: number): number => hash01(...seed, i, salt);
       const delay = mix(LIGHT_MAPPING.subDelayMinimum, LIGHT_MAPPING.subDelayMaximum, h(3));
       // メインの近くに散らす。近くで交わるほど、加算で白が生まれる。
+      // 一部だけは遠くへ小さく飛ばして「周辺の細かい散り」を作る。
+      const outer = h(41) < LIGHT_MAPPING.outerFraction;
       const angle = h(5) * Math.PI * 2;
-      const radius = mix(LIGHT_MAPPING.subSpreadMinimum, LIGHT_MAPPING.subSpreadMaximum, h(7));
+      const radius = outer
+        ? mix(LIGHT_MAPPING.outerSpreadMinimum, LIGHT_MAPPING.outerSpreadMaximum, h(7))
+        : mix(LIGHT_MAPPING.subSpreadMinimum, LIGHT_MAPPING.subSpreadMaximum, h(7));
       const dz = (h(9) * 2 - 1) * LIGHT_MAPPING.subDepthSpread;
       const subDepth = Math.max(depth + dz, 1);
       const subExtent = visible(subDepth);
@@ -295,7 +367,9 @@ export class LightSpatialMapping {
         y: clampAbs(origin.y + Math.sin(angle) * radius * extent.halfHeight, subExtent.halfHeight * usable),
         z: -subDepth,
       };
-      const sizeScale = mix(LIGHT_MAPPING.subSizeMinimum, LIGHT_MAPPING.subSizeMaximum, h(11));
+      const sizeScale =
+        mix(LIGHT_MAPPING.subSizeMinimum, LIGHT_MAPPING.subSizeMaximum, h(11)) *
+        (outer ? LIGHT_MAPPING.outerSizeScale : 1);
       const intensityScale = mix(
         LIGHT_MAPPING.subIntensityMinimum,
         LIGHT_MAPPING.subIntensityMaximum,
@@ -329,11 +403,86 @@ export class LightSpatialMapping {
             decaySeconds: settings.decaySeconds * lifeScale,
           },
           trail,
-          shape: this.shape(snapshot, h),
+          // 遠くへ飛ぶものは細かいスパークに寄せる。
+          shape: outer
+            ? { kind: 'spark', elongation: 1, angle: 0, waviness: 0, normal: null }
+            : this.shape(snapshot, h),
+          expansion: { from: 1, to: 1 },
+        },
+      });
+    }
+
+    // 軸平面のフラッシュ。原点から XY / XZ / YZ 平面に沿って一気に開く。
+    const planes = Math.round(
+      mix(
+        LIGHT_MAPPING.planeCountMinimum,
+        LIGHT_MAPPING.planeCountMaximum,
+        clamp01(snapshot.onsetStrength),
+      ),
+    );
+    for (let i = 0; i < planes; i++) {
+      const h = (salt: number): number => hash01(...seed, 900 + i, salt);
+      // 3 軸平面のどれかを基本にして、seed で少し傾ける（完全な軸固定にしない）。
+      const axis = Math.floor(h(2) * 3) % 3;
+      const base = [
+        { x: 0, y: 0, z: 1 }, // XY 平面
+        { x: 0, y: 1, z: 0 }, // XZ 平面
+        { x: 1, y: 0, z: 0 }, // YZ 平面
+      ][axis]!;
+      const tilt = LIGHT_MAPPING.planeAxisDeviation;
+      const normal = normalise({
+        x: base.x + (h(4) * 2 - 1) * tilt,
+        y: base.y + (h(6) * 2 - 1) * tilt,
+        z: base.z + (h(8) * 2 - 1) * tilt,
+      });
+      const lifeScale = mix(
+        LIGHT_MAPPING.planeLifetimeMinimum,
+        LIGHT_MAPPING.planeLifetimeMaximum,
+        h(10),
+      );
+      lights.push({
+        delaySeconds: mix(0, LIGHT_MAPPING.subDelayMaximum * 0.5, h(12)),
+        traits: {
+          role: 'sub',
+          position: origin,
+          intensity:
+            mainIntensity *
+            mix(LIGHT_MAPPING.planeIntensityMinimum, LIGHT_MAPPING.planeIntensityMaximum, h(14)),
+          size: mainSize,
+          color: this.color(snapshot, settings, (h(16) * 2 - 1) * LIGHT_MAPPING.colorHueSpreadInBurst),
+          // 平面は動かない。開くことそのものが動き。
+          velocity: { x: 0, y: 0, z: 0 },
+          lifetime: {
+            attackSeconds: settings.attackSeconds * 0.5,
+            holdSeconds: settings.holdSeconds * lifeScale * 0.4,
+            decaySeconds: settings.decaySeconds * lifeScale,
+          },
+          trail: 0,
+          shape: { kind: 'plane', elongation: 1, angle: 0, waviness: 0, normal },
+          expansion: { from: LIGHT_MAPPING.planeScaleFrom, to: LIGHT_MAPPING.planeScaleTo },
         },
       });
     }
     return lights;
+  }
+
+  /**
+   * 原点付近の位置。**同一点には置かず、決定論の微小ジッターでわずかにずらす。**
+   * こうすると光が「ほぼ中心・少しずつずれて層になる」状態になり、
+   * 加算で重なった中心が複雑に見える。
+   */
+  private centerOrigin(snapshot: AudioEventSnapshot, visible: VisibleExtent): SpatialPosition {
+    const seed = [snapshot.audioSeed, snapshot.eventIndex, BAND_INDEX[snapshot.winningBand]];
+    const depth =
+      LIGHT_MAPPING.centerDepth +
+      (hash01(...seed, 61) * 2 - 1) * LIGHT_MAPPING.centerDepthJitter;
+    const extent = visible(Math.max(depth, 1));
+    const jitter = LIGHT_MAPPING.centerJitter;
+    return {
+      x: clampAbs((hash01(...seed, 63) * 2 - 1) * jitter, extent.halfWidth * 0.9),
+      y: clampAbs((hash01(...seed, 65) * 2 - 1) * jitter, extent.halfHeight * 0.9),
+      z: -Math.max(depth, 1),
+    };
   }
 
   /**
@@ -389,7 +538,14 @@ export class LightSpatialMapping {
             clamp01(snapshot.spectralFlatness),
           ) * (kind === 'arc' ? 1.6 : 1) * (0.6 + h(31) * 0.8);
 
-    return { kind, elongation, angle: h(37) * Math.PI, waviness };
+    // 向きは水平か垂直を基本にして、seed で少しだけ逸らす。
+    // 自由方向のままだと放射状の花火に見えて、層の重なりが読めなくなる。
+    const vertical = h(39) < 0.5;
+    const angle =
+      (vertical ? Math.PI / 2 : 0) +
+      (h(37) * 2 - 1) * LIGHT_MAPPING.needleAxisDeviation * Math.PI;
+
+    return { kind, elongation, angle, waviness, normal: null };
   }
 
   /**
@@ -553,3 +709,10 @@ export const bloomDrive = (): { strengthScale: number; thresholdOffset: number }
   strengthScale: 1,
   thresholdOffset: 0,
 });
+
+/** 単位ベクトルへ。長さが 0 のときは Z 軸へ倒す。 */
+const normalise = (v: { x: number; y: number; z: number }): { x: number; y: number; z: number } => {
+  const length = Math.hypot(v.x, v.y, v.z);
+  if (!(length > 1e-6)) return { x: 0, y: 0, z: 1 };
+  return { x: v.x / length, y: v.y / length, z: v.z / length };
+};

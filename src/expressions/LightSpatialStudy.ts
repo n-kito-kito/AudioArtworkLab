@@ -59,7 +59,7 @@ const SPATIAL_STUDY = {
    * 1 イベント = メイン 1 + サブ N のバーストになったので、2D の 32 では足りない。
    * 上限に達したら最も古い光から捨てる（ドローコールは 1 のまま）。
    */
-  maximumCores: 168,
+  maximumCores: 260,
   /** 固定カメラの垂直画角（度）。奥行きの見え方はこの値で決まる。 */
   fieldOfView: 50,
   nearPlane: 0.1,
@@ -75,7 +75,7 @@ const SPATIAL_STUDY = {
    * 軌跡 1 本ぶんの節の数。**3D の位置履歴**を固定長で持ち、同じ InstancedMesh の
    * 後ろ半分として 1 ドローで描く。増やすほど滑らかになるが描画量も増える。
    */
-  trailSegments: 8,
+  trailSegments: 6,
   /** 軌跡の節の明るさ（先端 → 末尾）。0 で完全に消える。 */
   trailIntensityAtTail: 0,
   /** 軌跡の節の大きさ（先端に対する末尾の倍率）。細くなるほど「光跡」に見える。 */
@@ -95,8 +95,12 @@ const SPATIAL_STUDY = {
      * 参照デモ（UnrealBloomPass の公式サンプル）のネオン感に寄せて引き上げてある。
      */
     haloStrength: 0.42,
-    /** 広く弱い散乱光の広がり。 */
-    scatterRadius: 6.5,
+    /**
+     * 広く弱い散乱光の広がり。
+     * **板の大きさ＝塗る面積**なので、ここを詰めると描画コストが二乗で効く。
+     * バーストで光の数が増えたぶん、以前より小さくして塗り面積を抑えてある。
+     */
+    scatterRadius: 3.8,
     /**
      * 同・強さ。0 で散乱なし。**霧ではなく、光の周りにだけ出る。**
      * 内部 Bloom が滲みを担うようになったので、散乱は控えめでよい。
@@ -110,7 +114,7 @@ const SPATIAL_STUDY = {
      * **四角い継ぎ目**として見えてしまう（2D Light Traces の fog で踏んだのと同じ罠）。
      * 余裕を持たせたうえで、縁で必ず 0 になる窓関数も掛けて二重に防ぐ。
      */
-    scatterSpanMargin: 1.7,
+    scatterSpanMargin: 1.5,
     /**
      * RGB の微小な空間分離。色収差のように、色ごとに滲みの半径をわずかに変える。
      * 0 で分離なし。大きくすると輪郭に色が付く。
@@ -251,8 +255,10 @@ interface SpatialCore {
   readonly size: number;
   /** 色の比率（明るさは含まない）。発生時に確定する。 */
   readonly color: { readonly r: number; readonly g: number; readonly b: number };
-  /** 形（種類・伸び・向き・うねり）。発生時に確定する。 */
+  /** 形（種類・伸び・向き・うねり・面の法線）。発生時に確定する。 */
   readonly shape: LightShape;
+  /** 大きさの時間変化。平面のフラッシュだけが大きく開く。 */
+  readonly expansion: { readonly from: number; readonly to: number };
   currentIntensity: number;
   readonly attackSeconds: number;
   readonly holdSeconds: number;
@@ -317,6 +323,25 @@ const clamp = (value: number, min: number, max: number): number =>
 
 const clamp01 = (value: number): number => clamp(value, 0, 1);
 
+/**
+ * 大きさの時間変化。平面のフラッシュは寿命の頭で一気に開き、
+ * 終わりに向かって緩む（外へ広がりながら消える）。
+ */
+const expansionAt = (core: {
+  age: number;
+  attackSeconds: number;
+  holdSeconds: number;
+  decaySeconds: number;
+  expansion: { from: number; to: number };
+}): number => {
+  const { from, to } = core.expansion;
+  if (from === to) return from;
+  const life = Math.max(core.attackSeconds + core.holdSeconds + core.decaySeconds, 1e-4);
+  const t = clamp01(core.age / life);
+  // 頭が速く、あとは緩やかに広がる。
+  return from + (to - from) * (1 - (1 - t) * (1 - t));
+};
+
 /** t = 0 で 1、t = 1 でちょうど 0 になる指数曲線（2D と同じ形）。 */
 const decayShape = (t: number): number => {
   const k = SPATIAL_STUDY.decayCurve;
@@ -368,13 +393,16 @@ export class LightSpatialStudy implements LabExpression {
   private readonly intensities = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
   private readonly sizes = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY);
   private readonly colors = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 3);
-  /** 形: x = 伸び / y = 向き(rad) / z = うねり / w = 種類(0 点 / 1 針 / 2 弧)。 */
+  /** 形: x = 伸び / y = 向き(rad) / z = うねり / w = 種類(0 点 / 1 針 / 2 弧 / 3 平面)。 */
   private readonly shapes = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 4);
+  /** 平面の法線（ワールド空間）。他の形では使わない。 */
+  private readonly normals = new Float32Array(LightSpatialStudy.INSTANCE_CAPACITY * 3);
   private offsetAttribute: THREE.InstancedBufferAttribute | null = null;
   private intensityAttribute: THREE.InstancedBufferAttribute | null = null;
   private sizeAttribute: THREE.InstancedBufferAttribute | null = null;
   private colorAttribute: THREE.InstancedBufferAttribute | null = null;
   private shapeAttribute: THREE.InstancedBufferAttribute | null = null;
+  private normalAttribute: THREE.InstancedBufferAttribute | null = null;
 
   /** 音イベントの検出。2D Core Study とまったく同じ検出器を使う。 */
   private readonly detector = new BandLightEventDetector();
@@ -405,6 +433,11 @@ export class LightSpatialStudy implements LabExpression {
   private lastEventCores = 0;
   private adaptiveThreshold = true;
   private adaptiveStrength = true;
+  /**
+   * 配置の流儀。既定は `center`（原点付近へ集めて光の層を重ねる）。
+   * `scatter` にすると従来の決定論配置に戻り、見比べられる。
+   */
+  private placementMode: 'center' | 'scatter' = 'center';
 
   constructor(effects: Effect[] = [], theme?: Theme) {
     this.effects = effects;
@@ -447,7 +480,10 @@ export class LightSpatialStudy implements LabExpression {
     this.shapeAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aSize', this.sizeAttribute);
     this.geometry.setAttribute('aColor', this.colorAttribute);
+    this.normalAttribute = new THREE.InstancedBufferAttribute(this.normals, 3);
+    this.normalAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aShape', this.shapeAttribute);
+    this.geometry.setAttribute('aNormal', this.normalAttribute);
     this.geometry.instanceCount = 0;
 
     this.material = new THREE.ShaderMaterial({
@@ -486,6 +522,7 @@ export class LightSpatialStudy implements LabExpression {
         attribute float aSize;
         attribute vec3 aColor;
         attribute vec4 aShape;
+        attribute vec3 aNormal;
         uniform float uSize;
         uniform float uSpan;
         uniform vec3 uContrast;
@@ -516,8 +553,20 @@ export class LightSpatialStudy implements LabExpression {
           float sa = sin(aShape.y);
           vec2 rotated = vec2(shaped.x * ca - shaped.y * sa, shaped.x * sa + shaped.y * ca);
 
-          vec4 viewPosition = modelViewMatrix * vec4(aOffset, 1.0);
-          viewPosition.xy += rotated * uSize * aSize * uSpan;
+          vec4 viewPosition;
+          if (aShape.w > 2.5) {
+            // 平面のフラッシュ: ビルボードではなく**ワールド空間で寝かせた面**。
+            // 法線から接線・従法線を組み、面に沿って広げる。
+            vec3 n = normalize(aNormal);
+            vec3 helper = abs(n.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+            vec3 tangent = normalize(cross(helper, n));
+            vec3 bitangent = cross(n, tangent);
+            vec3 world = aOffset + (tangent * shaped.x + bitangent * shaped.y) * uSize * aSize * uSpan;
+            viewPosition = modelViewMatrix * vec4(world, 1.0);
+          } else {
+            viewPosition = modelViewMatrix * vec4(aOffset, 1.0);
+            viewPosition.xy += rotated * uSize * aSize * uSpan;
+          }
           // 奥ほどわずかに沈ませる（距離のコントラスト差）。強くはしない。
           float depth = -viewPosition.z;
           float t = clamp((depth - uContrast.y) / max(uContrast.z - uContrast.y, 0.001), 0.0, 1.0);
@@ -553,6 +602,16 @@ export class LightSpatialStudy implements LabExpression {
           float bend = sin(vLocal.x * 1.7) * vShape.y * 0.22;
           vec2 axis = vec2(vLocal.x / elongation, vLocal.y + bend);
           float d2 = dot(axis, axis);
+          // 平面は「薄い膜」に見せたいので、中心から縁へゆるく落ちるだけにする。
+          // 芯を作らないので、重なっても白飛びせず層として読める。
+          if (vShape.z > 2.5) {
+            float r = sqrt(dot(vLocal, vLocal)) / max(uSpan, 0.0001);
+            float sheet = max(1.0 - r, 0.0);
+            // flat は GLSL ES 3.00 の予約語なので変数名には使えない。
+            vec3 sheetColor = vColor * sheet * sheet * max(vIntensity, 0.0) * vDistanceFade * uIntensity;
+            gl_FragColor = vec4(max(sheetColor, 0.0), 1.0);
+            return;
+          }
 
           // ① 明るい中心核。締まった芯。
           float core = glow(d2 * uCoreSharpness, 1.0 / max(uFalloff, 0.0001));
@@ -767,6 +826,7 @@ export class LightSpatialStudy implements LabExpression {
       size: traits.size,
       color: traits.color,
       shape: traits.shape,
+      expansion: traits.expansion,
       currentIntensity: 0,
       attackSeconds: traits.lifetime.attackSeconds,
       holdSeconds: traits.lifetime.holdSeconds,
@@ -801,6 +861,7 @@ export class LightSpatialStudy implements LabExpression {
       motionAmount: this.params.motionAmount,
       trailAmount: this.params.trailAmount,
       burstDensity: this.params.burstDensity,
+      placementMode: this.placementMode,
     };
   }
 
@@ -908,13 +969,18 @@ export class LightSpatialStudy implements LabExpression {
       this.shapes[slot * 4] = shape.elongation;
       this.shapes[slot * 4 + 1] = shape.angle;
       this.shapes[slot * 4 + 2] = shape.waviness;
-      this.shapes[slot * 4 + 3] = shape.kind === 'spark' ? 0 : shape.kind === 'needle' ? 1 : 2;
+      this.shapes[slot * 4 + 3] =
+        shape.kind === 'spark' ? 0 : shape.kind === 'needle' ? 1 : shape.kind === 'arc' ? 2 : 3;
+      this.normals[slot * 3] = shape.normal?.x ?? 0;
+      this.normals[slot * 3 + 1] = shape.normal?.y ?? 0;
+      this.normals[slot * 3 + 2] = shape.normal?.z ?? 1;
       slot += 1;
     };
 
     for (const core of this.cores) {
       // 大きさと色は発生時に確定した値。毎フレーム作り直さないのでちらつかない。
-      write(core.position.x, core.position.y, core.position.z, core.currentIntensity, core.size, core.color, core.shape);
+      write(core.position.x, core.position.y, core.position.z, core.currentIntensity,
+        core.size * expansionAt(core), core.color, core.shape);
     }
     // 軌跡は 3D の位置履歴そのもの（2D の残像合成ではない）。
     // 先端ほど明るく太く、末尾へ向かって細く暗くなる。
@@ -936,6 +1002,7 @@ export class LightSpatialStudy implements LabExpression {
     this.sizeAttribute.needsUpdate = true;
     this.colorAttribute.needsUpdate = true;
     this.shapeAttribute.needsUpdate = true;
+    this.normalAttribute!.needsUpdate = true;
   }
 
   // ---------------------------------------------------------------- update
@@ -1126,7 +1193,9 @@ export class LightSpatialStudy implements LabExpression {
         z: core.position.z,
         speed: Math.hypot(core.velocity.x, core.velocity.y, core.velocity.z),
         role: core.role,
-        shape: `${core.shape.kind}:${core.shape.elongation.toFixed(1)}`,
+        shape: core.shape.normal
+          ? `${core.shape.kind}:${core.shape.normal.x.toFixed(2)},${core.shape.normal.y.toFixed(2)},${core.shape.normal.z.toFixed(2)}`
+          : `${core.shape.kind}:${core.shape.elongation.toFixed(1)}`,
         size: core.size,
         color: { ...core.color },
         onsetStrength: core.onsetStrength,
@@ -1178,12 +1247,26 @@ export class LightSpatialStudy implements LabExpression {
       row('bloomRadius', 'Bloom radius'),
       row('exposure', 'Exposure'),
       row('intensity', 'Intensity'),
+      {
+        key: 'placementMode',
+        label: 'Placement',
+        type: 'select',
+        options: [
+          { value: 'center', label: 'Center' },
+          { value: 'scatter', label: 'Scatter' },
+        ],
+        value: this.placementMode,
+      },
       onOff('adaptiveThreshold', 'Adaptive threshold', this.adaptiveThreshold),
       onOff('adaptiveStrength', 'Adaptive strength', this.adaptiveStrength),
     ];
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    if (key === 'placementMode') {
+      this.placementMode = value === 'scatter' ? 'scatter' : 'center';
+      return;
+    }
     if (key === 'adaptiveThreshold' || key === 'adaptiveStrength') {
       const enabled = value === 'on' || value === 1;
       if (key === 'adaptiveThreshold') this.adaptiveThreshold = enabled;
@@ -1237,6 +1320,7 @@ export class LightSpatialStudy implements LabExpression {
     this.sizeAttribute = null;
     this.colorAttribute = null;
     this.shapeAttribute = null;
+    this.normalAttribute = null;
     this.camera = null;
     this.context = null;
   }
