@@ -93,8 +93,8 @@ const SPATIAL_STUDY = {
     cooldownMs: 60,
     relativeStrengthFloor: 1,
     /** 大きさ・色・動き・軌跡の効き。Phase を進めるごとに既定値を上げていく。 */
-    sizeAmount: 0,
-    colorAmount: 0,
+    sizeAmount: 0.85,
+    colorAmount: 0.8,
     motionAmount: 0,
     trailAmount: 0,
   },
@@ -144,6 +144,8 @@ export interface SpatialCoreSnapshot {
   readonly y: number;
   readonly z: number;
   readonly band: BandName;
+  readonly size: number;
+  readonly color: { readonly r: number; readonly g: number; readonly b: number };
   readonly onsetStrength: number;
   readonly peakIntensity: number;
   readonly currentIntensity: number;
@@ -204,8 +206,12 @@ export class LightSpatialStudy implements LabExpression {
   /** インスタンス属性。毎フレーム中身だけ書き換え、確保し直さない。 */
   private readonly offsets = new Float32Array(SPATIAL_STUDY.maximumCores * 3);
   private readonly intensities = new Float32Array(SPATIAL_STUDY.maximumCores);
+  private readonly sizes = new Float32Array(SPATIAL_STUDY.maximumCores);
+  private readonly colors = new Float32Array(SPATIAL_STUDY.maximumCores * 3);
   private offsetAttribute: THREE.InstancedBufferAttribute | null = null;
   private intensityAttribute: THREE.InstancedBufferAttribute | null = null;
+  private sizeAttribute: THREE.InstancedBufferAttribute | null = null;
+  private colorAttribute: THREE.InstancedBufferAttribute | null = null;
 
   /** 音イベントの検出。2D Core Study とまったく同じ検出器を使う。 */
   private readonly detector = new BandLightEventDetector();
@@ -262,8 +268,14 @@ export class LightSpatialStudy implements LabExpression {
     this.offsetAttribute.setUsage(THREE.DynamicDrawUsage);
     this.intensityAttribute = new THREE.InstancedBufferAttribute(this.intensities, 1);
     this.intensityAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.sizeAttribute = new THREE.InstancedBufferAttribute(this.sizes, 1);
+    this.sizeAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.colorAttribute = new THREE.InstancedBufferAttribute(this.colors, 3);
+    this.colorAttribute.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aOffset', this.offsetAttribute);
     this.geometry.setAttribute('aIntensity', this.intensityAttribute);
+    this.geometry.setAttribute('aSize', this.sizeAttribute);
+    this.geometry.setAttribute('aColor', this.colorAttribute);
     this.geometry.instanceCount = 0;
 
     this.material = new THREE.ShaderMaterial({
@@ -279,17 +291,21 @@ export class LightSpatialStudy implements LabExpression {
       vertexShader: /* glsl */ `
         attribute vec3 aOffset;
         attribute float aIntensity;
+        attribute float aSize;
+        attribute vec3 aColor;
         uniform float uSize;
         varying vec2 vLocal;
         varying float vIntensity;
+        varying vec3 vColor;
 
         void main() {
           vLocal = position.xy * 2.0;
           vIntensity = aIntensity;
+          vColor = aColor;
           // ビュー空間で板を広げるので、板は常にカメラを向く（ビルボード）。
           // 大きさはワールド単位のまま置くだけで、遠近は投影行列が付ける。
           vec4 viewPosition = modelViewMatrix * vec4(aOffset, 1.0);
-          viewPosition.xy += position.xy * uSize;
+          viewPosition.xy += position.xy * uSize * aSize;
           gl_Position = projectionMatrix * viewPosition;
         }
       `,
@@ -298,11 +314,14 @@ export class LightSpatialStudy implements LabExpression {
         uniform float uFalloff;
         varying vec2 vLocal;
         varying float vIntensity;
+        varying vec3 vColor;
 
         void main() {
           float d = dot(vLocal, vLocal);
+          // 明るさ（vIntensity）と色の比率（vColor）は最後まで別々に持つ。
+          // 音量が大きいだけで色が白へ飽和しないようにするための分離。
           float level = vIntensity * exp(-d * uFalloff);
-          gl_FragColor = vec4(vec3(max(level, 0.0)), 1.0);
+          gl_FragColor = vec4(vColor * max(level, 0.0), 1.0);
         }
       `,
     });
@@ -460,16 +479,24 @@ export class LightSpatialStudy implements LabExpression {
   /** インスタンス属性へ書き戻す。確保はせず、中身と instanceCount だけ更新する。 */
   private syncInstances(): void {
     if (!this.geometry || !this.offsetAttribute || !this.intensityAttribute) return;
+    if (!this.sizeAttribute || !this.colorAttribute) return;
     for (let i = 0; i < this.cores.length; i++) {
       const core = this.cores[i]!;
       this.offsets[i * 3] = core.position.x;
       this.offsets[i * 3 + 1] = core.position.y;
       this.offsets[i * 3 + 2] = core.position.z;
       this.intensities[i] = core.currentIntensity;
+      // 大きさと色は発生時に確定した値。毎フレーム作り直さないのでちらつかない。
+      this.sizes[i] = core.size;
+      this.colors[i * 3] = core.color.r;
+      this.colors[i * 3 + 1] = core.color.g;
+      this.colors[i * 3 + 2] = core.color.b;
     }
     this.geometry.instanceCount = this.cores.length;
     this.offsetAttribute.needsUpdate = true;
     this.intensityAttribute.needsUpdate = true;
+    this.sizeAttribute.needsUpdate = true;
+    this.colorAttribute.needsUpdate = true;
   }
 
   // ---------------------------------------------------------------- update
@@ -639,6 +666,8 @@ export class LightSpatialStudy implements LabExpression {
         y: core.position.y,
         z: core.position.z,
         band: core.band,
+        size: core.size,
+        color: { ...core.color },
         onsetStrength: core.onsetStrength,
         peakIntensity: core.peakIntensity,
         currentIntensity: core.currentIntensity,
@@ -726,6 +755,8 @@ export class LightSpatialStudy implements LabExpression {
     this.material = null;
     this.offsetAttribute = null;
     this.intensityAttribute = null;
+    this.sizeAttribute = null;
+    this.colorAttribute = null;
     this.camera = null;
     this.context = null;
   }
