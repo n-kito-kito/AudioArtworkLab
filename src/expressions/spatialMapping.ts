@@ -83,16 +83,28 @@ export const LIGHT_MAPPING = {
   sizeAtSilence: 0.72,
   sizeAtFullVolume: 1.55,
   /**
-   * 色: 帯域比率をそのまま RGB にすると 1 帯域だけの音が原色になりすぎる。
-   * 白へ寄せる下駄を入れて、比率は残しつつ「光」に見える範囲に収める。
+   * 色は**音の seed が決める個別の色相**で、帯域から直接は作らない。
+   *
+   * 「中心は必ず白」にはしない。白は**重なりで創発させる** —
+   * バーストの光が近くで交わったところが加算合成で自然に白へ寄る、という因果。
+   * 単体で白いのは、下の `colorWhiteAtExtreme` を超える極端に強い発光だけ。
    */
-  colorWhiteFloor: 0.42,
+  /** 彩度の範囲（seed 由来）。低いほど白っぽい光が混ざる。 */
+  colorSaturationMinimum: 0.35,
+  colorSaturationMaximum: 0.95,
+  /** centroid で彩度をどれだけ動かすか。明るい音ほど色が立つ。 */
+  colorSaturationFromCentroid: 0.28,
   /**
-   * 色: centroid が高いほど帯域比率の差を強調する（＝色が分離する）。
-   * 低い音ほど色の差が緩くなり、明るい音ほど色が立つ。
+   * 単体でも白へ寄り始める強さ。これを超えると彩度が落ちて白熱して見える。
+   * リファレンスの「白熱した交差点」は基本的に重なりで作るので、高めに置く。
    */
-  colorSharpnessAtLowCentroid: 0.75,
-  colorSharpnessAtHighCentroid: 1.9,
+  colorWhiteAtExtreme: 0.86,
+  /**
+   * バーストの中で色相をどれだけずらすか（分光の幅）。
+   * **ここが狭いと白が生まれない。** 似た色を足しても明るくなるだけで、
+   * 白は「違う色が交わったとき」にしか出ないため、色相環をそれなりに使う。
+   */
+  colorHueSpreadInBurst: 0.44,
   /** 速度: 帯域ごとの基準の速さ（ワールド単位 / 秒）。 */
   speedByBand: { bass: 0.55, mid: 1.15, treble: 2.1 },
   /** 速度: onsetStrength 0 → 1 でこの倍率を掛ける。 */
@@ -124,14 +136,17 @@ export const LIGHT_MAPPING = {
   /** サブが遅れて生まれる幅（秒）。この間に連鎖しているように見える。 */
   subDelayMinimum: 0.005,
   subDelayMaximum: 0.15,
-  /** サブがメインからどれだけ離れるか（可視範囲の半分に対する割合）。 */
-  subSpreadMinimum: 0.04,
-  subSpreadMaximum: 0.22,
+  /**
+   * サブがメインからどれだけ離れるか（可視範囲の半分に対する割合）。
+   * 近いほど交わって白が立ち、遠いほど破片として散る。両方が要るので幅を持たせる。
+   */
+  subSpreadMinimum: 0.02,
+  subSpreadMaximum: 0.13,
   /** サブの奥行きのばらつき（ワールド単位）。 */
   subDepthSpread: 1.8,
   /** サブの大きさ（メインに対する倍率）。**メインが最大**になるよう 1 未満に収める。 */
-  subSizeMinimum: 0.22,
-  subSizeMaximum: 0.68,
+  subSizeMinimum: 0.18,
+  subSizeMaximum: 0.72,
   /** サブの明るさ（メインに対する倍率）。 */
   subIntensityMinimum: 0.3,
   subIntensityMaximum: 0.85,
@@ -248,6 +263,8 @@ export class LightSpatialMapping {
         h(17),
       );
       const speedScale = mix(LIGHT_MAPPING.subSpeedMinimum, LIGHT_MAPPING.subSpeedMaximum, h(19));
+      // 分光: サブごとに色相を少しずらす。交わったところで色が混ざって白が立つ。
+      const hueOffset = (h(23) * 2 - 1) * LIGHT_MAPPING.colorHueSpreadInBurst;
       lights.push({
         delaySeconds: delay,
         traits: {
@@ -255,7 +272,7 @@ export class LightSpatialMapping {
           position,
           intensity: mainIntensity * intensityScale,
           size: mainSize * sizeScale,
-          color,
+          color: this.color(snapshot, settings, hueOffset),
           velocity: {
             x: mainVelocity.x * speedScale,
             y: mainVelocity.y * speedScale,
@@ -310,38 +327,40 @@ export class LightSpatialMapping {
   }
 
   /**
-   * 色。**帯域比率だけ**を表し、明るさは含めない。
+   * 色。**音の seed から決まる個別の色**で、帯域から直接は作らない。
    *
-   *   Bass → R / Mid → G / Treble → B
+   * 白は 1 つの光の中では作らない。バーストの光が近くで交わったところが
+   * 加算合成で白へ寄る、という**重なりの結果として創発**させる。
+   * 例外は極端に強い発光だけで、そのときは彩度が落ちて白熱して見える。
    *
-   * 比べてよいのは素の `bandFlux` だけ（適応後の strength は帯域ごとに
-   * 参照値が違うので比較できない）。最大成分で割って比率にしてから、
-   * 白い下駄を混ぜて「原色すぎる光」にならないようにする。
-   * centroid が高いほど比率の差を強調し、色が分離して見える。
+   * `hueOffset` はバーストの中での分光。同じ打撃から出た光を少しずつ違う色相に
+   * ずらすので、交差したところで色が混ざって白が立ちやすくなる。
    */
   private color(
     snapshot: AudioEventSnapshot,
     settings: LightMappingSettings,
+    hueOffset = 0,
   ): { r: number; g: number; b: number } {
-    const { bass, mid, treble } = snapshot.bandFlux;
-    const peak = Math.max(bass, mid, treble);
-    if (!(peak > 0)) return { r: 1, g: 1, b: 1 };
-
-    const sharpness = mix(
-      LIGHT_MAPPING.colorSharpnessAtLowCentroid,
-      LIGHT_MAPPING.colorSharpnessAtHighCentroid,
-      clamp01(snapshot.spectralCentroid),
+    const seed = [snapshot.audioSeed, snapshot.eventIndex, snapshot.spectralCentroid];
+    const hue = (hash01(...seed, 101) + hueOffset + 1) % 1;
+    const saturationSeed = mix(
+      LIGHT_MAPPING.colorSaturationMinimum,
+      LIGHT_MAPPING.colorSaturationMaximum,
+      hash01(...seed, 103),
     );
-    const shape = (value: number): number => {
-      const ratio = clamp01(value / peak);
-      // 指数で比率の差を伸縮させる。sharpness が大きいほど弱い帯域が落ちる。
-      const shaped = Math.pow(ratio, sharpness);
-      // 白い下駄。混ぜたあとも最大成分は 1 のまま。
-      const withFloor = LIGHT_MAPPING.colorWhiteFloor + shaped * (1 - LIGHT_MAPPING.colorWhiteFloor);
-      // 効きが 0 のときは白一色に戻す。
-      return mix(1, withFloor, clamp01(settings.colorAmount));
-    };
-    return { r: shape(bass), g: shape(mid), b: shape(treble) };
+    // 明るい音ほど色が立つ。ただし色相そのものは centroid で決めない。
+    const withCentroid = clamp01(
+      saturationSeed +
+        (clamp01(snapshot.spectralCentroid) - 0.5) * LIGHT_MAPPING.colorSaturationFromCentroid,
+    );
+    // 極端に強い発光だけは単体でも白へ寄る。
+    const extreme = clamp01(
+      (clamp01(snapshot.onsetStrength) - LIGHT_MAPPING.colorWhiteAtExtreme) /
+        Math.max(1 - LIGHT_MAPPING.colorWhiteAtExtreme, 0.01),
+    );
+    const saturation = withCentroid * (1 - extreme);
+    const rgb = hueToRgb(hue, mix(0, saturation, clamp01(settings.colorAmount)));
+    return rgb;
   }
 
   /**
@@ -401,3 +420,18 @@ export const trailSeconds = (trail: number): number =>
 
 const clampAbs = (value: number, limit: number): number =>
   Math.min(Math.max(value, -limit), limit);
+
+/**
+ * 色相（0..1）と彩度から RGB を作る。**最大成分は必ず 1**（明るさは含めない）。
+ * 彩度 0 で白、1 で純色。加算合成で重なったときに白へ寄るのはこの外側で起きる。
+ */
+const hueToRgb = (hue: number, saturation: number): { r: number; g: number; b: number } => {
+  const h = ((hue % 1) + 1) % 1;
+  const channel = (offset: number): number => {
+    const position = ((h + offset) % 1) * 6;
+    const value = Math.max(0, Math.min(1, Math.min(position, 4 - position, 1)));
+    // 彩度 0 で 1（白）、1 でその成分そのもの。
+    return 1 - clamp01(saturation) * (1 - value);
+  };
+  return { r: channel(0), g: channel(2 / 3), b: channel(1 / 3) };
+};
