@@ -51,10 +51,17 @@ const INSPECTOR = {
     ['treble', 'Flux Treble'],
     ['combined', 'Onset (flux)'],
   ],
+  /** 帯域別 Onset（観察モード）の並びと表示名。 */
+  bands: [
+    ['bass', 'Bass'],
+    ['mid', 'Mid'],
+    ['treble', 'Treble'],
+  ],
 } as const;
 
 type MeterKey = (typeof INSPECTOR.meters)[number][0];
 type FluxKey = (typeof INSPECTOR.fluxMeters)[number][0];
+type BandKey = (typeof INSPECTOR.bands)[number][0];
 
 export class AudioInspector {
   private readonly engine: FileAudioEngine;
@@ -72,6 +79,14 @@ export class AudioInspector {
   private readonly fluxLampRow = document.createElement('div');
   /** 合成フラックスのメーター上に立てる、いま効いている閾値の縦線。 */
   private readonly thresholdMarker = document.createElement('b');
+  /** 帯域ごとの閾値マーカー。各帯域の Gate は独立した閾値を持つ。 */
+  private readonly bandMarkers = new Map<BandKey, HTMLElement>();
+  private readonly bandLamps = new Map<BandKey, HTMLElement>();
+  private readonly bandReadouts = new Map<BandKey, HTMLElement>();
+  private readonly bandBlock = document.createElement('div');
+  private readonly bandTally = document.createElement('p');
+  private readonly previousBandFireCounts = new Map<BandKey, number>();
+  private readonly bandLitUntil = new Map<BandKey, number>();
   private readonly coreBlock = document.createElement('div');
   private readonly coreReadout = document.createElement('p');
   private animationId: number | null = null;
@@ -115,6 +130,12 @@ export class AudioInspector {
     fluxTitle.className = 'control-subheading';
     fluxTitle.textContent = 'Spectral flux (new)';
     this.coreBlock.append(fluxTitle, this.fluxRows, this.fluxLampRow);
+
+    // 帯域別 Onset は観察だけ。Core を生む合成 Gate と混同しないよう見出しで断る。
+    const bandTitle = document.createElement('h3');
+    bandTitle.className = 'control-subheading';
+    bandTitle.textContent = 'Band onsets (observe only)';
+    this.coreBlock.append(bandTitle, this.bandBlock);
 
     const title = document.createElement('h3');
     title.className = 'control-subheading';
@@ -228,6 +249,13 @@ export class AudioInspector {
         this.thresholdMarker.className = 'audio-inspector__threshold';
         bar.classList.add('has-threshold');
         bar.append(this.thresholdMarker);
+      } else {
+        // 帯域の行にも、その帯域の Gate が持つ独立した閾値を立てる。
+        const marker = document.createElement('b');
+        marker.className = 'audio-inspector__threshold';
+        bar.classList.add('has-threshold');
+        bar.append(marker);
+        this.bandMarkers.set(key, marker);
       }
     }
     this.fluxLampRow.className = 'audio-inspector__lamp';
@@ -235,6 +263,34 @@ export class AudioInspector {
     const label = document.createElement('span');
     label.textContent = 'Core fired (flux, new)';
     this.fluxLampRow.append(this.fluxLamp, label);
+    this.buildBandBlock();
+  }
+
+  /**
+   * 帯域別 Onset（観察モード）の表示。
+   * ここは Core を生まない計測なので、合成 Gate の行とは節を分けて置く。
+   */
+  private buildBandBlock(): void {
+    this.bandBlock.className = 'audio-inspector__bands';
+    for (const [key, label] of INSPECTOR.bands) {
+      const row = document.createElement('div');
+      row.className = 'audio-inspector__band-row';
+      const lamp = document.createElement('i');
+      lamp.className = 'audio-inspector__lamp-dot';
+      const name = document.createElement('span');
+      name.textContent = label;
+      const readout = document.createElement('output');
+      readout.textContent = '—';
+      row.append(lamp, name, readout);
+      this.bandBlock.append(row);
+      this.bandLamps.set(key, lamp);
+      this.bandReadouts.set(key, readout);
+      this.previousBandFireCounts.set(key, 0);
+      this.bandLitUntil.set(key, 0);
+    }
+    this.bandTally.className = 'audio-inspector__readout';
+    this.bandTally.textContent = 'no band events yet';
+    this.bandBlock.append(this.bandTally);
   }
 
   /** 排他の選択肢 1 つ（適応の on/off など）。 */
@@ -321,10 +377,20 @@ export class AudioInspector {
     const study = composition instanceof LightCoreStudy ? composition : null;
     const state = study?.getCoreStudyState() ?? null;
     if (state) {
+      // 回数は曲ごとに 0 へ戻る（無音でリセットされる）ので、増分だけを見る。
+      // 減ったフレームはリセットとみなし、点灯させずに追従する。
       if (state.fireCount > this.previousFireCount) {
         this.fluxLitUntil = now + INSPECTOR.onsetLampMs;
       }
       this.previousFireCount = state.fireCount;
+      // 帯域ランプも、その帯域の Gate が実際に撃った回数の増分で点ける。
+      for (const [key] of INSPECTOR.bands) {
+        const count = state.bands[key].fireCount;
+        if (count > (this.previousBandFireCounts.get(key) ?? 0)) {
+          this.bandLitUntil.set(key, now + INSPECTOR.onsetLampMs);
+        }
+        this.previousBandFireCounts.set(key, count);
+      }
     }
 
     if (!this.collapsed) {
@@ -349,6 +415,26 @@ export class AudioInspector {
         );
         this.thresholdMarker.classList.toggle('is-warming', state.thresholdWarmingUp);
         this.thresholdMarker.classList.toggle('is-fixed', !state.adaptiveThreshold);
+
+        // 帯域別 Onset（観察）。閾値・ランプ・直近 strength・累計をそれぞれ出す。
+        for (const [key] of INSPECTOR.bands) {
+          const band = state.bands[key];
+          const marker = this.bandMarkers.get(key)!;
+          marker.style.setProperty('--at', String(Math.min(Math.max(band.threshold, 0), 1)));
+          marker.classList.toggle('is-warming', band.warmingUp);
+          marker.classList.toggle('is-fixed', !state.adaptiveThreshold);
+          this.bandLamps
+            .get(key)!
+            .classList.toggle('is-lit', now < (this.bandLitUntil.get(key) ?? 0));
+          this.bandReadouts.get(key)!.textContent = band.warmingUp
+            ? `warming  ×${band.fireCount}`
+            : `str ${band.lastStrength.toFixed(2)}  ×${band.fireCount}`;
+        }
+        const c = state.coincidence;
+        this.bandTally.textContent =
+          `last event ${c.lastEvent || '—'}\n` +
+          `bass only ${c.bassOnly}  mid only ${c.midOnly}  treble only ${c.trebleOnly}\n` +
+          `two bands ${c.twoBands}  three bands ${c.threeBands}  total ${c.events}`;
         // 直近 Core と適応の状態。どの特徴量がどの見え方を決めたかを追えるようにする。
         const mode = state.adaptiveThreshold
           ? state.thresholdWarmingUp

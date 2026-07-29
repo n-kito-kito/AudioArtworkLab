@@ -2233,6 +2233,28 @@ textarea:focus-visible {
   );
 }
 
+/* 帯域別 Onset（観察モード）。ランプ・名前・直近 strength と累計を 1 行にまとめる。 */
+.audio-inspector__bands {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.audio-inspector__band-row {
+  display: grid;
+  grid-template-columns: 8px 46px 1fr;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.audio-inspector__band-row output {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 9px;
+  text-align: right;
+}
+
 .audio-inspector__lamp {
   display: flex;
   gap: 8px;

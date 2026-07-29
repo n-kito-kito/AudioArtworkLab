@@ -239,6 +239,35 @@ export interface BandFlux {
   readonly combined: number;
 }
 
+export type BandName = 'bass' | 'mid' | 'treble';
+
+/** 帯域 Gate 1 本ぶんの観察結果。 */
+export interface BandGateState {
+  /** いま効いている適応閾値。 */
+  readonly threshold: number;
+  readonly warmingUp: boolean;
+  /** 直近に発火したときの strength。まだ一度も発火していなければ 0。 */
+  readonly lastStrength: number;
+  /** 累計発火回数（単調増加）。 */
+  readonly fireCount: number;
+}
+
+/**
+ * 帯域別 Onset の同時発火の集計（観察用）。
+ * 「同じ計測フレームで何本立ったか」を数え、複数発光へ進むかどうかの材料にする。
+ */
+export interface BandCoincidence {
+  readonly bassOnly: number;
+  readonly midOnly: number;
+  readonly trebleOnly: number;
+  readonly twoBands: number;
+  readonly threeBands: number;
+  /** 直近に立った帯域の組み合わせ（例 'Bass + Mid'）。まだ無ければ空文字。 */
+  readonly lastEvent: string;
+  /** 何かしら立ったフレームの総数（＝上の 5 分類の合計）。 */
+  readonly events: number;
+}
+
 /** 開発・検証用の表現全体の状態。Inspector と `window.__lab` から読む。 */
 export interface CoreStudyState {
   readonly count: number;
@@ -260,6 +289,12 @@ export interface CoreStudyState {
   readonly adaptiveStrength: boolean;
   /** 発火した回数（単調増加）。Inspector のランプはこれの増分で点く。 */
   readonly fireCount: number;
+  /**
+   * 帯域別 Onset の観察結果（Bass / Mid / Treble を独立に判定したもの）。
+   * **Core の発生には接続していない。** 複数発光へ進むかどうかを決めるための計測。
+   */
+  readonly bands: Readonly<Record<BandName, BandGateState>>;
+  readonly coincidence: BandCoincidence;
   readonly cores: readonly CoreStudySnapshot[];
 }
 
@@ -279,6 +314,26 @@ const decayShape = (t: number): number => {
 };
 
 const NO_FLUX: BandFlux = { bass: 0, mid: 0, treble: 0, combined: 0 };
+
+/** 帯域の並び。表示と集計の順序をここ 1 箇所で決める。 */
+const BAND_NAMES: readonly BandName[] = ['bass', 'mid', 'treble'];
+
+/** 集計の表示名。'Bass + Mid' のようなラベルを作るのに使う。 */
+const BAND_LABELS: Readonly<Record<BandName, string>> = {
+  bass: 'Bass',
+  mid: 'Mid',
+  treble: 'Treble',
+};
+
+const EMPTY_COINCIDENCE: BandCoincidence = {
+  bassOnly: 0,
+  midOnly: 0,
+  trebleOnly: 0,
+  twoBands: 0,
+  threeBands: 0,
+  lastEvent: '',
+  events: 0,
+};
 
 /**
  * 帯域別スペクトルフラックス（測る側）。
@@ -620,6 +675,22 @@ export class LightCoreStudy implements LabExpression {
   /** 測る側と決める側。適応（方式 A）は決める側だけが持つ。 */
   private readonly flux = new BandFluxAnalyzer();
   private readonly gate = new OnsetGate();
+  /**
+   * 帯域ごとの Onset を独立に判定する Gate（**観察用**）。
+   *
+   * 合成 Gate（`gate`）が Core の発生を決める仕組みは一切変えていない。こちらは
+   * 「同じ打撃で Bass と Treble が両方立つのか、片方だけなのか」を数えるためだけに
+   * 並走させている。統計窓・山の履歴・閾値・クールダウン・累計はそれぞれが独立に持ち、
+   * 設定（窓・下限・感度・クールダウン）は 3 帯域とも合成 Gate と同じものを使う。
+   */
+  private readonly bandGates: Record<BandName, OnsetGate> = {
+    bass: new OnsetGate(),
+    mid: new OnsetGate(),
+    treble: new OnsetGate(),
+  };
+  private readonly bandFireCounts: Record<BandName, number> = { bass: 0, mid: 0, treble: 0 };
+  private readonly bandLastStrength: Record<BandName, number> = { bass: 0, mid: 0, treble: 0 };
+  private coincidence = { ...EMPTY_COINCIDENCE };
   /** 閾値の局所適応。切ると固定閾値（方式 B）に戻る。 */
   private adaptiveThreshold = true;
   /** strength の局所正規化。閾値の適応とは独立に切れる。 */
@@ -739,20 +810,80 @@ export class LightCoreStudy implements LabExpression {
         this.params.fluxGain,
       );
     }
-    const strength = this.gate.update({
-      value: this.flux.value.combined,
+    const measured = spectrum !== null && this.flux.updatedThisFrame;
+    const settings = {
       delta,
-      measured: spectrum !== null && this.flux.updatedThisFrame,
+      measured,
       fallbackThreshold: this.onsetThreshold(),
       sensitivity: this.params.onsetSensitivity,
       cooldownSeconds: this.params.cooldownMs / 1000,
       adaptiveThreshold: this.adaptiveThreshold,
       adaptiveStrength: this.adaptiveStrength,
-    });
+    };
+    // 観察用の帯域 Gate。合成 Gate とは別の状態で動き、Core の発生には触らない。
+    this.observeBands(settings);
+
+    const strength = this.gate.update({ value: this.flux.value.combined, ...settings });
     if (strength === null) return;
     this.fireCount += 1;
     // centroid は engine が対数で 0..1 に正規化済み。Hz の生値は使わない。
     this.spawn(strength, clamp01(audio.centroid ?? 0));
+  }
+
+  /**
+   * 帯域ごとの Onset を独立に判定して数えるだけ（**観察モード**）。
+   * ここから Core は生まれない。同じ計測フレームで何本立ったかを集計する。
+   */
+  private observeBands(settings: Omit<OnsetGateInput, 'value'>): void {
+    const fired: BandName[] = [];
+    for (const band of BAND_NAMES) {
+      const strength = this.bandGates[band].update({
+        value: this.flux.value[band],
+        ...settings,
+      });
+      if (strength === null) continue;
+      this.bandFireCounts[band] += 1;
+      this.bandLastStrength[band] = strength;
+      fired.push(band);
+    }
+    if (fired.length === 0) return;
+
+    const single =
+      fired.length === 1
+        ? ({ bass: 'bassOnly', mid: 'midOnly', treble: 'trebleOnly' } as const)[fired[0]!]
+        : null;
+    this.coincidence = {
+      ...this.coincidence,
+      bassOnly: this.coincidence.bassOnly + (single === 'bassOnly' ? 1 : 0),
+      midOnly: this.coincidence.midOnly + (single === 'midOnly' ? 1 : 0),
+      trebleOnly: this.coincidence.trebleOnly + (single === 'trebleOnly' ? 1 : 0),
+      twoBands: this.coincidence.twoBands + (fired.length === 2 ? 1 : 0),
+      threeBands: this.coincidence.threeBands + (fired.length === 3 ? 1 : 0),
+      lastEvent: fired.map((band) => BAND_LABELS[band]).join(' + '),
+      events: this.coincidence.events + 1,
+    };
+  }
+
+  /**
+   * 合成 Gate・帯域 Gate・集計をまとめて捨てる。
+   *
+   * 呼ばれるのは音が止まったとき（`active !== 1`）と dispose。音源の差し替えは
+   * `FileAudioEngine` の `load` / `loadUrl` / `startInput` / `stopInput` がいずれも
+   * 先に `pause()`・`stopInput()` を通るため、必ず `active = 0` のフレームを挟む。
+   * つまり 0↔1 の遷移だけ見ていれば、古い曲の統計が次の曲へ残ることはない。
+   */
+  private resetDetection(): void {
+    this.flux.reset();
+    this.gate.reset();
+    // 発火回数も 0 に戻す。集計とセットで「この曲での回数」を表すため、
+    // 片方だけ持ち越すと帯域ごとの回数と 5 分類の合計が合わなくなる。
+    this.fireCount = 0;
+    for (const band of BAND_NAMES) {
+      this.bandGates[band].reset();
+      this.bandFireCounts[band] = 0;
+      this.bandLastStrength[band] = 0;
+    }
+    this.coincidence = { ...EMPTY_COINCIDENCE };
   }
 
   /**
@@ -870,8 +1001,7 @@ export class LightCoreStudy implements LabExpression {
       // PRD D5: 音がなければ発生も余韻もない（無音＝黒画面が正常）。
       // フラックスの比較元も捨てる。再開時に「止まる前との差」で誤爆させないため。
       this.cores.length = 0;
-      this.flux.reset();
-      this.gate.reset();
+      this.resetDetection();
       this.syncCoreUniforms();
       this.pipeline?.update(audio, elapsed);
       return;
@@ -988,6 +1118,16 @@ export class LightCoreStudy implements LabExpression {
     );
   }
 
+  private bandState(band: BandName): BandGateState {
+    const gate = this.bandGates[band];
+    return {
+      threshold: gate.threshold,
+      warmingUp: gate.warmingUp,
+      lastStrength: this.bandLastStrength[band],
+      fireCount: this.bandFireCounts[band],
+    };
+  }
+
   /** 開発・検証用。Inspector と `window.__lab` から Core の内部状態を読む。 */
   getCoreStudyState(): CoreStudyState {
     return {
@@ -1004,6 +1144,12 @@ export class LightCoreStudy implements LabExpression {
       adaptiveThreshold: this.adaptiveThreshold,
       adaptiveStrength: this.adaptiveStrength,
       fireCount: this.fireCount,
+      bands: {
+        bass: this.bandState('bass'),
+        mid: this.bandState('mid'),
+        treble: this.bandState('treble'),
+      },
+      coincidence: { ...this.coincidence },
       cores: this.cores.map((core) => ({
         age: core.age,
         onsetStrength: core.onsetStrength,
@@ -1082,6 +1228,8 @@ export class LightCoreStudy implements LabExpression {
     this.geometry?.dispose();
     this.material?.dispose();
     this.cores.length = 0;
+    // 統計も捨てる。表現を作り直したときに古い曲の窓が残らないようにする。
+    this.resetDetection();
     this.pipeline = null;
     this.scene = null;
     this.geometry = null;
