@@ -13,6 +13,7 @@ import {
 } from './expressions/catalog';
 import type { LabExpression } from './expressions/Expression';
 import { AudioControls } from './ui/AudioControls';
+import { AudioInspector } from './ui/AudioInspector';
 import { LabControls } from './ui/LabControls';
 import { DebugPanel } from './ui/DebugPanel';
 import { applyUiVariant, parseUiVariant } from './ui/devUiVariants';
@@ -120,6 +121,7 @@ const switchExpression = (id: ExpressionId): void => {
   app.setComposition(next);
   composition = next;
   labControls.refresh(composition);
+  audioInspector.refresh();
   // 質感は版ごとに焼き込まれている。切替で TUNING が入れ替わるため追従させる。
   tuningPanel?.refresh();
   savePresetNow();
@@ -133,6 +135,7 @@ const applyPreset = (preset: LabPreset): void => {
   applyEffectStates(composition.getEffects(), preset.effects);
   composition.setEffectOrder(preset.effects.map((entry) => entry.name));
   labControls.refresh(composition);
+  audioInspector.refresh();
 };
 
 const exportPreset = (): void => {
@@ -196,6 +199,10 @@ const labControls = new LabControls(
 );
 // QualityMonitor（FPS・解像度セレクト）は説明できるまで載せない（MTG 2026-07-27。温存）。
 
+// 音の解析値を確かめるための開発用セクション（既定は閉じている）。
+// 左パネルの末尾に置くため、LabControls が Composition 節を append した後に作る。
+const audioInspector = new AudioInspector(shell.leftTop, audioEngine, () => composition);
+
 // 開発用の UI レイアウト試作（?ui=1|2|3）。Expression / 反応の調整 / Effect の
 // 主従を画面に出せるか見比べるための仮組み。パラメータなしでは何もしない。
 // LabControls の DOM を移動させるため、必ずその生成後に呼ぶこと。
@@ -227,6 +234,7 @@ const dispose = (): void => {
   window.clearInterval(autosaveTimer);
   savePresetNow();
   audioControls.dispose();
+  audioInspector.dispose();
   recordingController.dispose();
   outputWindow.dispose();
   tuningPanel?.dispose();

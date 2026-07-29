@@ -4,6 +4,7 @@ import { applyTuning } from '../engine/tuning';
 import { Cymatics } from '../fields/Cymatics';
 import { CymaticsV2 } from '../fields/CymaticsV2';
 import { CymaticsPlate } from './CymaticsPlate';
+import { LightCoreStudy } from './LightCoreStudy';
 import { LightTraces } from './LightTraces';
 import { ModularPatternField } from './ModularPatternField';
 import { ReactiveGeometry } from './ReactiveGeometry';
@@ -21,6 +22,7 @@ export type ExpressionId =
   | 'cymatics-v2'
   | 'modular-v1'
   | 'light-traces-v1'
+  | 'light-core-study-v1'
   | 'reactive-geometry-v1';
 
 export interface ExpressionVersion {
@@ -82,6 +84,13 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
     label: 'Light Traces',
     versions: [{ id: 'light-traces-v1', label: 'V1' }],
   },
+  // 検証用の実験表現。音の立ち上がりと光の因果関係だけを見るための計測器で、
+  // Light Traces 本体とはコードも状態も共有しない。
+  {
+    id: 'light-core-study',
+    label: 'Light Traces — Core Study',
+    versions: [{ id: 'light-core-study-v1', label: 'V1' }],
+  },
   {
     id: 'reactive-geometry',
     label: 'Reactive Geometry',
@@ -116,6 +125,7 @@ export function createExpression(
   // サイマティクス以外の表現は TUNING を使わない（質感の定数は表現ごとに持つ）。
   if (id === 'modular-v1') return new ModularPatternField(effects, theme);
   if (id === 'light-traces-v1') return new LightTraces(effects, theme);
+  if (id === 'light-core-study-v1') return new LightCoreStudy(effects, theme);
   if (id === 'reactive-geometry-v1') return new ReactiveGeometry(effects, theme);
   applyTuning(id);
   const field = id === 'cymatics-v2' ? new CymaticsV2() : new Cymatics();

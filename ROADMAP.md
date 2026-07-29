@@ -217,6 +217,14 @@ RecordingController・QualityMonitor は再接続済み。
         一部または全部が消える。固定周期を持たない。
         表現つまみの仕組みを select（Mode / Line Type / Shape Type）と action（Clear / New Variation）へ拡張した
   - [ ] Reactive Geometry の詰め — Preset 未保存・消滅遷移中の線のにじみ・線種ごとの密度バランス
+  - [x] 検証: Light Traces — Core Study（`light-core-study-v1`）— 音と光の因果関係だけを見るための
+        実験表現。黒背景 + 白い Core のみで、位置は常に中央・サイズ固定・動くのは明るさだけ。
+        onset の立ち上がりエッジ + 閾値 + クールダウンで発火し、Attack / Hold / Decay を
+        秒で管理する（フレームレート非依存）。定数は `CORE_STUDY` に集約。
+        既存の Light Traces とはコードも状態も共有しない
+  - [x] 検証: Audio Feature Inspector（`src/ui/AudioInspector.ts`）— 左パネルの開閉セクション（既定は閉）。
+        Volume / Bass / Mid / Treble / Onset Strength のメーターと、検出の瞬間だけ点く Onset ランプ。
+        Core Study 選択中は開発用スライダーと直近 Core の値も出す
 - [ ] G5 リアルタイム入力（VJ）とパフォーマンス最適化
 
 ## 共通の完了条件

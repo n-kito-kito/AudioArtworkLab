@@ -2166,6 +2166,79 @@ textarea:focus-visible {
   word-break: break-all;
 }
 
+/* ---- Audio Feature Inspector（src/ui/AudioInspector.ts）---- */
+/* 左パネルの折りたたみセクション。既定は閉じているので、
+   .panel-section.is-collapsed の既存ルールが中身を隠す。 */
+
+.audio-inspector__rows {
+  display: grid;
+  gap: 7px;
+}
+
+.audio-inspector__row {
+  display: grid;
+  grid-template-columns: 78px 1fr 30px;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.audio-inspector__row i {
+  position: relative;
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  background: #292631;
+}
+
+.audio-inspector__row i::after {
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  content: '';
+  transform: scaleX(var(--level, 0));
+  transform-origin: left;
+}
+
+.audio-inspector__row output {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 9px;
+  text-align: right;
+}
+
+.audio-inspector__lamp {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+/* 連続メーターではなく、検出の瞬間だけ点くランプ。 */
+.audio-inspector__lamp-dot {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: #292631;
+}
+
+.audio-inspector__lamp-dot.is-lit {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.audio-inspector__readout {
+  margin: 12px 0 0;
+  color: #b5b5b5;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 9px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
 /* ---- 開発用 UI 試作（?ui=1|2|3）---- */
 /* 思想上の主従（Expression > 反応の調整 > Effect）を画面の目立ち方に反映できるか
    見比べるための仮組み。src/ui/devUiVariants.ts から body[data-ui-variant] が
