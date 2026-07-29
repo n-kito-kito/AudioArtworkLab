@@ -2236,6 +2236,8 @@ textarea:focus-visible {
   font-family: 'SFMono-Regular', Consolas, monospace;
   font-size: 9px;
   line-height: 1.6;
+  /* 直近 Core の値は 1 行 1 項目で出す（改行をそのまま活かす）。 */
+  white-space: pre-line;
   word-break: break-all;
 }
 

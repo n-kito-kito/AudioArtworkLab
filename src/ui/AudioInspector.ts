@@ -230,10 +230,13 @@ export class AudioInspector {
       const composition = this.getComposition();
       if (composition instanceof LightCoreStudy) {
         const state = composition.getCoreStudyState();
+        // 直近 Core の 4 つ。どの特徴量がどの見え方を決めたかを 1 行で追えるようにする。
         this.coreReadout.textContent =
-          `cores ${state.count}  ` +
-          `last onsetStrength ${state.lastOnsetStrength.toFixed(2)}  ` +
-          `peakIntensity ${state.lastPeakIntensity.toFixed(2)}`;
+          `cores ${state.count}\n` +
+          `spectral centroid ${state.lastSpectralCentroid.toFixed(2)}\n` +
+          `x position ${state.lastX.toFixed(2)}\n` +
+          `onset strength ${state.lastOnsetStrength.toFixed(2)}\n` +
+          `peak intensity ${state.lastPeakIntensity.toFixed(2)}`;
       }
     }
 

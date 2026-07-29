@@ -17,7 +17,7 @@ import type { ExpressionParam, LabExpression } from './Expression';
  * 目と数値の両方で確かめること。そのため構成を可能な限り削ってある:
  *
  *   - 黒背景 + 白い Core だけ。RGB 分離・Beam・Trail・Fog・Haze・破片は持たない。
- *   - Core の位置は常に画面中央。サイズは固定。**動くのは明るさだけ**。
+ *   - Core は生まれた場所から動かない。サイズも固定。**時間で動くのは明るさだけ**。
  *   - 余韻は Decay のみ。残像バッファ（フィードバック）を持たない。
  *
  * 既存の Light Traces（`LightTraces.ts`）とはコードを一切共有しない。あちらは
@@ -32,14 +32,18 @@ import type { ExpressionParam, LabExpression } from './Expression';
  *   ② Core の一生（Attack → Hold → Decay）
  *        すべて秒で管理し、経過時間 delta から進めるのでフレームレートに依存しない。
  *        Decay が終わった Core は配列から取り除き、参照を残さない。
- *   ③ 描画
+ *   ③ 配置（スペクトル重心 → 横位置）
+ *        発生の瞬間の centroid だけで X が決まり、その Core が消えるまで動かない。
+ *        音が明るくなっても、既に生まれた光は追従しない。
+ *   ④ 描画
  *        フルスクリーンクアッド 1 枚のシェーダーで、uniform 配列の Core を
  *        柔らかい円形スプラットとして加算する。Bloom なしで見える明るさにする。
  *
- * 音との対応:
- *   onset  → 発生するかどうか（立ち上がりエッジのみ。鳴り続けても増えない）
+ * 音との対応（役割を 1 対 1 に保つ。1 つの特徴量が 2 つの見え方を動かさない）:
+ *   onset          → 発生するかどうか（立ち上がりエッジのみ。鳴り続けても増えない）
  *   onset の大きさ → その Core 自身の明るさ（Exposure や Bloom には触らない）
- *   無音（active !== 1）は黒・発生ゼロ（PRD D5）。
+ *   centroid       → その Core の横位置（明るさ・サイズ・寿命には触らない）
+ *   縦位置は常に中央。無音（active !== 1）は黒・発生ゼロ（PRD D5）。
  *
  * 乱数は使わない（Math.random() 禁止。そもそも恣意的な要素を置いていない）。
  */
@@ -63,6 +67,12 @@ const CORE_STUDY = {
   minimumVolume: 0.06,
   /** 発火後のクールダウン（秒）。1 つの立ち上がりで何度も撃たないための最短間隔。 */
   cooldownSeconds: 0.06,
+  /**
+   * 横位置の余白（板の幅に対する割合）。centroid の 0..1 をこの内側だけに写すので、
+   * 一番低い音でも一番高い音でも Core が画面の端で切れない。
+   * 0.15 なら X は板の 15%〜85% に収まり、両端に半径 2 個ぶんの余白が残る。
+   */
+  horizontalMargin: 0.15,
   /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
   maximumDelta: 0.05,
   /** Decay の曲がり。大きいほど頭で速く落ちる。0 に近づくほど直線に近い。 */
@@ -97,6 +107,14 @@ interface Core {
   age: number;
   /** トリガした瞬間の onset 値（0..1）。 */
   readonly onsetStrength: number;
+  /** トリガした瞬間の centroid（0..1。engine が対数で正規化済み）。 */
+  readonly spectralCentroid: number;
+  /**
+   * 横位置。板の幅に対する割合（0 = 左端 / 0.5 = 中央 / 1 = 右端）で持つ。
+   * 板の実寸ではなく割合なので、画角を変えても余白の見え方が保たれる。
+   * 発生時に決まり、寿命の間ずっと動かない。
+   */
+  readonly x: number;
   /** この Core が Hold で到達する明るさ。 */
   readonly peakIntensity: number;
   /** 現在の明るさ。シェーダーへ渡るのはこれだけ。 */
@@ -113,6 +131,9 @@ interface Core {
 export interface CoreStudySnapshot {
   readonly age: number;
   readonly onsetStrength: number;
+  readonly spectralCentroid: number;
+  /** 板の幅に対する割合（0..1）。 */
+  readonly x: number;
   readonly peakIntensity: number;
   readonly currentIntensity: number;
   readonly phase: CorePhase;
@@ -122,6 +143,8 @@ export interface CoreStudySnapshot {
 export interface CoreStudyState {
   readonly count: number;
   readonly lastOnsetStrength: number;
+  readonly lastSpectralCentroid: number;
+  readonly lastX: number;
   readonly lastPeakIntensity: number;
   readonly cores: readonly CoreStudySnapshot[];
 }
@@ -172,6 +195,8 @@ export class LightCoreStudy implements LabExpression {
   private previousOnset = 0;
   private cooldown = 0;
   private lastOnsetStrength = 0;
+  private lastSpectralCentroid = 0;
+  private lastX = 0.5;
   private lastPeakIntensity = 0;
 
   constructor(effects: Effect[] = [], theme?: Theme) {
@@ -275,21 +300,35 @@ export class LightCoreStudy implements LabExpression {
     if (volume < CORE_STUDY.minimumVolume) return;
     if (this.cooldown > 0) return;
     this.cooldown = CORE_STUDY.cooldownSeconds;
-    this.spawn(onset);
+    // centroid は engine が対数で 0..1 に正規化済み。Hz の生値は使わない。
+    this.spawn(onset, clamp01(audio.centroid ?? 0));
   }
 
   /**
-   * Core を 1 個生む。位置は常に中央、サイズは固定で、
-   * 音が決めるのは「発生するか」と「その Core 自身の明るさ」だけ。
+   * スペクトル重心 0..1 を横位置（板の幅に対する割合）へ写す。
+   * 低い（暗い）音ほど左、高い（明るい）音ほど右。両端には余白を残す。
    */
-  private spawn(strength: number): void {
+  private centroidToX(centroid: number): number {
+    const margin = clamp(CORE_STUDY.horizontalMargin, 0, 0.49);
+    return margin + clamp01(centroid) * (1 - 2 * margin);
+  }
+
+  /**
+   * Core を 1 個生む。サイズは固定・縦位置は中央で、音が決めるのは
+   * 「発生するか」（onset）・「その Core 自身の明るさ」（onset の大きさ）・
+   * 「横位置」（centroid）の 3 つだけ。互いに混ぜない。
+   */
+  private spawn(strength: number, centroid: number): void {
     if (this.cores.length >= CORE_STUDY.maximumCores) this.cores.shift();
     const minimum = clamp01(this.params.minimumIntensity);
     const maximum = Math.max(clamp01(this.params.maximumIntensity), minimum);
     const peakIntensity = minimum + strength * (maximum - minimum);
+    const x = this.centroidToX(centroid);
     this.cores.push({
       age: 0,
       onsetStrength: strength,
+      spectralCentroid: centroid,
+      x,
       peakIntensity,
       currentIntensity: 0,
       phase: 'attack',
@@ -299,6 +338,8 @@ export class LightCoreStudy implements LabExpression {
       decaySeconds: this.params.decayMs / 1000,
     });
     this.lastOnsetStrength = strength;
+    this.lastSpectralCentroid = centroid;
+    this.lastX = x;
     this.lastPeakIntensity = peakIntensity;
   }
 
@@ -347,10 +388,13 @@ export class LightCoreStudy implements LabExpression {
 
   private syncCoreUniforms(): void {
     if (!this.material) return;
+    // 割合で持っている X を板座標へ直す。板の実寸は画角で変わるので毎フレーム掛け直し、
+    // 画角を切り替えても余白の見え方が変わらないようにする。
+    const halfWidth = this.plateExtents().x;
     for (let i = 0; i < this.cores.length; i++) {
       const core = this.cores[i]!;
-      // 位置は常に板の中央。動かすのは明るさだけ。
-      this.coreData[i * 3] = 0;
+      // 横は centroid が決めた位置に固定。縦は常に中央。時間で動くのは明るさだけ。
+      this.coreData[i * 3] = (core.x - 0.5) * 2 * halfWidth;
       this.coreData[i * 3 + 1] = 0;
       this.coreData[i * 3 + 2] = core.currentIntensity;
     }
@@ -492,10 +536,14 @@ export class LightCoreStudy implements LabExpression {
     return {
       count: this.cores.length,
       lastOnsetStrength: this.lastOnsetStrength,
+      lastSpectralCentroid: this.lastSpectralCentroid,
+      lastX: this.lastX,
       lastPeakIntensity: this.lastPeakIntensity,
       cores: this.cores.map((core) => ({
         age: core.age,
         onsetStrength: core.onsetStrength,
+        spectralCentroid: core.spectralCentroid,
+        x: core.x,
         peakIntensity: core.peakIntensity,
         currentIntensity: core.currentIntensity,
         phase: core.phase,
