@@ -29,17 +29,17 @@ import {
  * 確かめる計測器。音の検出は 2D とまったく同じ `BandLightEventDetector` を通す。
  * 2D は回帰確認用にそのまま残してあり、こちらが置き換えるものではない。
  *
- * 今回入れないもの: Core の移動 / Trail / Beam / Fog / Haze / RGB 分離 /
- * Bloom の焼き込み / 被写界深度 / カメラアニメーション。
- * **静止した Core が違う奥行きに在るだけで遠近が読める状態**までを見る。
+ * 段階を踏んで足してきた奥行きの手掛かり: 遠近法（サイズ）→ 移動と軌跡 →
+ * 光学的質感 → **視差（カメラのゆっくりした平行移動）と、光にだけ照らされる床のグリッド**。
+ * どの手掛かりも独立に切って比較できる（1 つずつ足して確かめる方針）。
  *
- * カメラは固定。原点から −Z を見るだけで、回転も移動もユーザー操作もしない。
+ * まだ入れないもの: Beam / Fog / Haze / Bloom の焼き込み / 被写界深度 /
+ * 音に反応するカメラワーク。
+ *
+ * カメラはユーザー操作を持たない。動きは経過時間だけの関数の微小な平行移動で、
+ * **音へは結ばない**（動きの有無で音 → 光の対応が変わらないようにする）。
  * Core はカメラを向く板ポリを 1 つの InstancedMesh で描く（1 ドロー）。
  * 光源（PointLight）は 1 つも使わない。
- *
- * 距離による減衰は今回は入れない。**遠近法だけで奥行きが読めるか**を見たいので、
- * 手前ほど明るいといった補助は足さず、同じワールドサイズの板が遠いほど小さく写る
- * ことだけで判断する。
  */
 
 /**
@@ -108,6 +108,22 @@ const SPATIAL_STUDY = {
     contrastFarDepth: 17,
     /** 画面全体の露出。核・滲み・散乱をすべて通したあとに最後に掛ける。 */
     exposure: 1,
+  },
+  /**
+   * カメラのゆっくりした動き。**視差**（近い Core と遠い Core で見かけの流れが違う）を
+   * 足して、静止では出ない奥行きの手掛かりを作る。音へは結ばない。
+   *
+   * 振幅は `edgeMargin × 最近接距離での可視半径`（≈ 0.1 × 2.1 = 0.21）を超えないこと。
+   * 位置生成は「カメラ原点」を前提に画面内へ収めているので、それより大きく動くと
+   * 端の Core が切れる。周期は互いに素な秒数にして、経路が繰り返して見えないようにする。
+   */
+  cameraDrift: {
+    amplitudeX: 0.18,
+    amplitudeY: 0.13,
+    periodXSeconds: 41,
+    periodYSeconds: 59,
+    /** 視線を固定する奥行き。この距離の点を見続けながら平行移動する。 */
+    focusDepth: 9,
   },
   /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
   maximumDelta: 0.05,
@@ -319,6 +335,8 @@ export class LightSpatialStudy implements LabExpression {
   private lastEventCores = 0;
   private adaptiveThreshold = true;
   private adaptiveStrength = true;
+  /** カメラのゆっくりした動き（視差）。切ると原点固定へ戻る。 */
+  private cameraDriftEnabled = true;
 
   constructor(effects: Effect[] = [], theme?: Theme) {
     this.effects = effects;
@@ -335,7 +353,8 @@ export class LightSpatialStudy implements LabExpression {
       SPATIAL_STUDY.nearPlane,
       SPATIAL_STUDY.farPlane,
     );
-    // 固定カメラ。原点から −Z を見るだけで、以降まったく動かさない。
+    // 初期姿勢は原点から −Z。以降は applyCameraDrift が毎フレーム姿勢を決める
+    // （ドリフトを切っているときはこの姿勢へ戻る）。
     this.camera.position.set(0, 0, 0);
     this.camera.lookAt(0, 0, -1);
 
@@ -727,6 +746,7 @@ export class LightSpatialStudy implements LabExpression {
         ? 0
         : clamp(elapsed - this.previousElapsed, 0, SPATIAL_STUDY.maximumDelta);
     this.previousElapsed = elapsed;
+    this.applyCameraDrift(elapsed);
 
     if (!active) {
       // PRD D5: 音がなければ発生も余韻もない（無音＝黒画面が正常）。
@@ -741,6 +761,24 @@ export class LightSpatialStudy implements LabExpression {
     this.advanceCores(delta);
     this.syncInstances();
     this.pipeline?.update(audio, elapsed);
+  }
+
+  /**
+   * カメラの平行移動。経過時間だけの純粋な関数で、音の状態にはいっさい依らない。
+   * 視線は奥の 1 点へ固定したままなので、近い Core ほど大きく流れて視差が出る。
+   */
+  private applyCameraDrift(elapsed: number): void {
+    if (!this.camera) return;
+    if (!this.cameraDriftEnabled) {
+      this.camera.position.set(0, 0, 0);
+      this.camera.lookAt(0, 0, -1);
+      return;
+    }
+    const drift = SPATIAL_STUDY.cameraDrift;
+    const x = Math.sin((elapsed * Math.PI * 2) / drift.periodXSeconds) * drift.amplitudeX;
+    const y = Math.sin((elapsed * Math.PI * 2) / drift.periodYSeconds) * drift.amplitudeY;
+    this.camera.position.set(x, y, 0);
+    this.camera.lookAt(0, 0, -drift.focusDepth);
   }
 
   private resetDetection(): void {
@@ -928,16 +966,18 @@ export class LightSpatialStudy implements LabExpression {
       row('motionAmount', 'Motion amount'),
       row('trailAmount', 'Trail'),
       row('trailWidthAmount', 'Trail width'),
+      onOff('cameraDrift', 'Camera drift', this.cameraDriftEnabled),
       onOff('adaptiveThreshold', 'Adaptive threshold', this.adaptiveThreshold),
       onOff('adaptiveStrength', 'Adaptive strength', this.adaptiveStrength),
     ];
   }
 
   setExpressionParam(key: string, value: number | string): void {
-    if (key === 'adaptiveThreshold' || key === 'adaptiveStrength') {
+    if (key === 'adaptiveThreshold' || key === 'adaptiveStrength' || key === 'cameraDrift') {
       const enabled = value === 'on' || value === 1;
       if (key === 'adaptiveThreshold') this.adaptiveThreshold = enabled;
-      else this.adaptiveStrength = enabled;
+      else if (key === 'adaptiveStrength') this.adaptiveStrength = enabled;
+      else this.cameraDriftEnabled = enabled;
       return;
     }
     const numeric = typeof value === 'number' ? value : Number(value);
