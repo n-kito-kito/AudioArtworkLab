@@ -891,24 +891,15 @@ RecordingController・QualityMonitor は再接続済み。
         （三角 22・最大 11 層）/ 1 フレーム p50 0.0〜0.1ms・p90 0.1〜0.2ms /
         コンソールエラー 0 / 既存表現は無影響（Element Lab V1 Core / Composite・
         Reactive Lab Composite・Spatial Study・Cymatics V1・Modular V1）
-  - [x] Light Element Lab 2 — **探索が終わった開発つまみの撤去（PRD D17）**。
-        21 本あった開発つまみのうち、**構造として確定したもの 9 本だけ**を外した。
-        値は既定のまま焼き込んであり、`setExpressionParam` の受け口は残してあるので、
-        戻すときは `getExpressionParams` へ 1 項目足すだけでよい。
-        **撤去**: `Strobe rate`（24fps で確定。コマ送りの狙いそのもの）/
-        `Arms (Manual)`（方向は打撃のシードが決めると確定。Manual は 0 固定）/
-        `Haze layer (dev A/B)`（膜はリグの一部として確定・常時 on）/
-        `Red` `Green` `Blue`（チャンネルは等倍で確定・1.0 固定）/
-        `Offset direction`（中心からの放射で確定）/ `Global tint (H)`（常時 on で確定）/
-        `Depth probe`（奥行きの式の計測が終わったので撤去・0 固定）。
-        **温存**: 好みの最終判断が残るもの — 場の濃さ（`Sustain gamma` / `Field gain`）、
-        発光の閾値（`Core threshold` / `Fan threshold`）、H の粘り
-        （`Hue confirm` / `Hue hold`）、`Strobe` の on/off（切り分け用）、
-        静止画スタディの入力一式（`Global hue H` / `Skeleton level` / `Core pulse` /
-        `Fragment energy` / `Fragment seed` / `Fan gate` / `Core shape`）、
-        チャンネルの質感（`Channel offset` / `Channel decorrelation` / `Intensity`）。
-        撤去したつまみの既定値はどれも変えていないので、
-        **Manual の静止画スタディは全 7 Version で画素ハッシュ不変**（実測で一致）
+  - [x] Light Element Lab 2 — **撤去した開発つまみを全部戻す（方針修正 2026-07-30 夜）**。
+        メンター MTG の設計指導により、**「ツールを 1 つの見え方に最適化しない。
+        接続は調整可能に保ち、好みの見え方はプリセットとして実現する」**へ方針が変わった。
+        **変数の数がそのまま「出せる絵の幅」になる**ので、探索が終わって値が確定したものでも
+        つまみ自体は残す（確定したのは**既定値**であって、動かせないという意味ではない）。
+        いったん撤去した 9 本 — `Strobe rate` / `Arms (Manual)` / `Haze layer (dev A/B)` /
+        `Red` `Green` `Blue` / `Offset direction` / `Global tint (H)` / `Depth probe` —
+        を `getExpressionParams` へ戻した。**既定値は実楽曲での通し計測で決めた値のまま**で、
+        受け口（`setExpressionParam`）も変えていないので**見え方は 1 画素も変わらない**
   - [ ] Light Element Lab 2 — 音由来の seed → `seed`（断片・カーテンの散らばり）は未配線。
         Bass / Mid / Treble → R / G / B の発色駆動、オフセット量と非相関量を
         どの特徴に結ぶかは未決
