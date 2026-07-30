@@ -1,3 +1,5 @@
+import type { AudioFeatures } from './audioFeatures';
+
 export interface AudioParameters {
   active?: number;
   amplitude?: number;
@@ -37,5 +39,12 @@ export interface AudioEngine {
   getWaveform(): Float32Array;
   /** スペクトル全体。固有モードの励起計算に使う。未対応エンジンは省略可。 */
   getSpectrum?(): SpectrumFrame | null;
+  /**
+   * **観察用の音響特徴**（設計フェーズ①の道具）。未対応エンジンは省略可。
+   *
+   * `AudioParameters` を拡張せず別口にしてあるのは、**既存の 10 特徴に
+   * 1 ビットも触れないため**である。表現・描画・`TUNING` はこれを読まない。
+   */
+  getFeatures?(): AudioFeatures | null;
   dispose(): void;
 }

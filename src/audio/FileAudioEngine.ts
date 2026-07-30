@@ -1,4 +1,5 @@
 import type { AudioEngine, AudioParameters } from './AudioEngine';
+import { AudioFeatureAnalyzer, SILENT_FEATURES, type AudioFeatures } from './audioFeatures';
 
 const FFT_SIZE = 2048;
 const BASS_RANGE = [20, 250] as const;
@@ -37,6 +38,15 @@ export class FileAudioEngine implements AudioEngine {
   };
   private lastAnalysisTime = 0;
   private cachedParameters: AudioParameters | null = null;
+  /**
+   * **観察用の特徴（設計フェーズ①の道具）。**
+   * 表現からは読まない別口で、計算は下の解析ブロックと同じ 1 フレーム 1 回。
+   * 表示は Inspector と `?audio=1` の 2 か所あるが、**解析はこの 1 つを共有する**。
+   */
+  private readonly features = new AudioFeatureAnalyzer();
+  private cachedFeatures: AudioFeatures = SILENT_FEATURES;
+  /** 特徴の窓に使う連続時計（秒）。既存の判定には一切使わない。 */
+  private featureClock = 0;
 
   constructor() {
     this.audio.preload = 'auto';
@@ -208,7 +218,9 @@ export class FileAudioEngine implements AudioEngine {
     // L3: オンセットの立ち上がりエッジで、その瞬間のスペクトル形状をハッシュする。
     // エッジ検出により、音が立ち上がり続けている間に何度も引き直さない。
     const rising = rise > this.beatSensitivity && volume > 0.12;
-    if (rising && !this.wasRising) this.seed = this.hashSpectrum();
+    // 観察用の特徴が使う立ち上がりエッジ。**判定そのものは変えず、結果を読むだけ。**
+    const onsetEdge = rising && !this.wasRising;
+    if (onsetEdge) this.seed = this.hashSpectrum();
     this.wasRising = rising;
     this.previousVolume = volume;
 
@@ -232,6 +244,22 @@ export class FileAudioEngine implements AudioEngine {
       sustain: this.sustain,
       seed: this.seed,
     };
+
+    // ---- 観察用の特徴（**ここから下は既存の 10 特徴に一切触れない**）----
+    // 上で作った値と、既にあるオンセットの立ち上がりエッジを読むだけ。
+    // `rising && !wasRising` は上で消費済みなので、同じ判定をここで作り直す代わりに
+    // 直前の値を使う（`this.wasRising` は上で更新されている）。
+    this.featureClock += delta;
+    this.cachedFeatures = this.features.update(
+      this.frequencyData,
+      this.timeData,
+      this.context.sampleRate / 2,
+      volume,
+      onsetEdge,
+      this.featureClock,
+      delta,
+    );
+
     return this.cachedParameters;
   }
 
@@ -261,6 +289,14 @@ export class FileAudioEngine implements AudioEngine {
   getSpectrum(): { magnitudes: Uint8Array; nyquist: number } | null {
     if (!this.frequencyData || !this.context) return null;
     return { magnitudes: this.frequencyData, nyquist: this.context.sampleRate / 2 };
+  }
+
+  /**
+   * **観察用の特徴。** 表現・描画・`TUNING` からは読まない。
+   * 解析は `getParameters()` と同じフレームで 1 回だけ走り、ここはその結果を返すだけ。
+   */
+  getFeatures(): AudioFeatures {
+    return this.cachedFeatures;
   }
 
   getWaveform(): Float32Array {
@@ -300,6 +336,9 @@ export class FileAudioEngine implements AudioEngine {
     this.sourceLoaded = false;
     this.cachedParameters = null;
     this.lastAnalysisTime = 0;
+    this.features.reset();
+    this.cachedFeatures = SILENT_FEATURES;
+    this.featureClock = 0;
     this.onset = 0;
     this.sustain = 0;
     this.seed = 0;
