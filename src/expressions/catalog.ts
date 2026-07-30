@@ -6,6 +6,7 @@ import { CymaticsV2 } from '../fields/CymaticsV2';
 import { CymaticsPlate } from './CymaticsPlate';
 import { LightCoreStudy } from './LightCoreStudy';
 import { LightElementLab, type LightElementMode } from './LightElementLab';
+import { LightElementLab2, type LightElement2Mode } from './LightElementLab2';
 import { LightReactiveLab, type ReactiveMode } from './LightReactiveLab';
 import { LightSpatialStudy } from './LightSpatialStudy';
 import { LightTraces } from './LightTraces';
@@ -35,6 +36,11 @@ export type ExpressionId =
   | 'light-element-depth-v1'
   | 'light-element-envelope-v1'
   | 'light-element-composite-v1'
+  | 'light-element2-core-v1'
+  | 'light-element2-sheet-v1'
+  | 'light-element2-haze-v1'
+  | 'light-element2-ray-v1'
+  | 'light-element2-all-v1'
   | 'light-reactive-trigger-v1'
   | 'light-reactive-texture-v1'
   | 'light-reactive-variation-v1'
@@ -130,6 +136,20 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
       { id: 'light-element-composite-v1', label: 'Composite' },
     ],
   },
+  // 色の作り方だけを差し替えた 2 台目の実験室（V1 は無改変で温存する）。
+  // 1 つの光を R/G/B の 3 チャンネルへ分け、わずかにずらして重ねる（CRT 的構造）。
+  // 音へは繋がず、要素ごとに静止画で見え方だけを検証する。
+  {
+    id: 'light-element-lab-2',
+    label: 'Light Element Lab 2',
+    versions: [
+      { id: 'light-element2-core-v1', label: 'Core' },
+      { id: 'light-element2-sheet-v1', label: 'Sheet' },
+      { id: 'light-element2-haze-v1', label: 'Haze' },
+      { id: 'light-element2-ray-v1', label: 'Ray' },
+      { id: 'light-element2-all-v1', label: 'All' },
+    ],
+  },
   // 静的な Light Element Lab の光学を、音イベントへ反応する表現へ進めた実験室。
   // Trigger → Texture → Variation → Composite の順に、接続する音の関係を増やす。
   {
@@ -162,6 +182,14 @@ const LIGHT_ELEMENT_MODES: Partial<Record<ExpressionId, LightElementMode>> = {
   'light-element-depth-v1': 'depth',
   'light-element-envelope-v1': 'envelope',
   'light-element-composite-v1': 'composite',
+};
+
+const LIGHT_ELEMENT2_MODES: Partial<Record<ExpressionId, LightElement2Mode>> = {
+  'light-element2-core-v1': 'core',
+  'light-element2-sheet-v1': 'sheet',
+  'light-element2-haze-v1': 'haze',
+  'light-element2-ray-v1': 'ray',
+  'light-element2-all-v1': 'all',
 };
 
 const LIGHT_REACTIVE_MODES: Partial<Record<ExpressionId, ReactiveMode>> = {
@@ -198,6 +226,8 @@ export function createExpression(
   if (id === 'light-spatial-study-v1') return new LightSpatialStudy(effects, theme);
   const lightElementMode = LIGHT_ELEMENT_MODES[id];
   if (lightElementMode) return new LightElementLab(id, lightElementMode, effects, theme);
+  const lightElement2Mode = LIGHT_ELEMENT2_MODES[id];
+  if (lightElement2Mode) return new LightElementLab2(id, lightElement2Mode, effects, theme);
   const reactiveMode = LIGHT_REACTIVE_MODES[id];
   if (reactiveMode) return new LightReactiveLab(id, reactiveMode, effects, theme);
   if (id === 'reactive-geometry-v1') return new ReactiveGeometry(effects, theme);

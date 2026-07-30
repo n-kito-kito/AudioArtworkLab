@@ -1,6 +1,7 @@
 import type { FileAudioEngine } from '../audio/FileAudioEngine';
 import type { LabExpression } from '../expressions/Expression';
 import { LightCoreStudy } from '../expressions/LightCoreStudy';
+import { LightElementLab2 } from '../expressions/LightElementLab2';
 import { LightSpatialStudy } from '../expressions/LightSpatialStudy';
 
 /**
@@ -131,9 +132,12 @@ export class AudioInspector {
     this.coreBlock.replaceChildren();
     const composition = this.getComposition();
     const spatial = composition instanceof LightSpatialStudy;
-    if (!(composition instanceof LightCoreStudy) && !spatial) return;
+    // Light Element Lab 2 は音へ繋がない静止画の検証なので、
+    // 音のメーター類は出さず、その表現の開発つまみだけをこの節に置く。
+    const element2 = composition instanceof LightElementLab2;
+    if (!(composition instanceof LightCoreStudy) && !spatial && !element2) return;
 
-    if (!spatial) {
+    if (!spatial && !element2) {
       // 新方式のフラックスは、上に並んだ engine の onset とすぐ見比べられる位置に置く。
       const fluxTitle = document.createElement('h3');
       fluxTitle.className = 'control-subheading';
@@ -149,7 +153,11 @@ export class AudioInspector {
 
     const title = document.createElement('h3');
     title.className = 'control-subheading';
-    title.textContent = spatial ? 'Spatial Study (dev)' : 'Core Study (dev)';
+    title.textContent = element2
+      ? 'Light Element Lab 2 (dev)'
+      : spatial
+        ? 'Spatial Study (dev)'
+        : 'Core Study (dev)';
     this.coreBlock.append(title);
 
     for (const parameter of composition.getExpressionParams()) {
@@ -169,6 +177,8 @@ export class AudioInspector {
         ),
       );
     }
+    // 音を読まない表現には Core の読み出しも音源ボタンも意味がないので出さない。
+    if (element2) return;
     this.coreReadout.textContent = 'last core —';
     this.coreBlock.append(this.coreReadout, this.buildDemoButton());
   }
