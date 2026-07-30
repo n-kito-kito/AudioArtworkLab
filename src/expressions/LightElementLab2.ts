@@ -978,6 +978,30 @@ export class LightElementLab2 implements LabExpression {
     };
   }
 
+  /**
+   * 開発つまみ（AudioInspector の dev ブロック）。**本番 UI には出さない**（PRD D17）。
+   *
+   * ---
+   * ## 焼き込みで撤去したもの（2026-07-30・実楽曲での通し確認のあと）
+   *
+   * 探索が終わって**構造として確定した**ものだけを外した。値は既定のまま焼き込んであり、
+   * `setExpressionParam` の受け口は残してあるので、戻すならここへ 1 項目足すだけでよい。
+   *
+   * - `Strobe rate` … 24fps で確定（コマ送りの狙いそのもの）
+   * - `Arms (Manual)` … 方向は打撃のシードが決めると確定（Manual は 0 固定）
+   * - `Haze layer (dev A/B)` … 膜はリグの一部として確定（常時 on）
+   * - `Red` / `Green` / `Blue` … チャンネルは等倍で確定（1.0 固定）
+   * - `Offset direction` … 中心からの放射で確定
+   * - `Global tint (H)` … 常時 on で確定（層は独立の色を持たない）
+   * - `Depth probe` … 奥行きの式の計測が終わったので撤去（0 固定）
+   *
+   * ## 残したもの
+   *
+   * **好みの最終判断が残るもの**は残す — 場の濃さ（`Sustain gamma` / `Field gain`）、
+   * 発光の閾値（`Core threshold` / `Fan threshold`）、H の粘り
+   * （`Hue confirm` / `Hue hold`）、静止画スタディの入力一式、
+   * チャンネルの質感（`Channel offset` / `Channel decorrelation` / `Intensity`）。
+   */
   getExpressionParams(): ExpressionParam[] {
     const row = (key: Lab2ParamKey, label: string): ExpressionParam => ({
       key,
@@ -1005,14 +1029,6 @@ export class LightElementLab2 implements LabExpression {
           { value: 'off', label: 'Off (continuous)' },
         ],
         value: this.strobeEnabled ? 'on' : 'off',
-      },
-      {
-        key: 'strobeRate',
-        label: 'Strobe rate (fps)',
-        min: 6,
-        max: 60,
-        step: 1,
-        value: this.strobeRate,
       },
       // ---- 場の濃さと発光の閾値（Audio のみ）----
       {
@@ -1074,24 +1090,6 @@ export class LightElementLab2 implements LabExpression {
         ],
         value: String(this.coreShape),
       },
-      {
-        key: 'manualArms',
-        label: 'Arms (Manual)',
-        type: 'select',
-        options: [
-          { value: '0', label: 'None' },
-          { value: '1', label: 'Up' },
-          { value: '2', label: 'Right' },
-          { value: '4', label: 'Down' },
-          { value: '8', label: 'Left' },
-          { value: '3', label: 'Up + Right' },
-          { value: '12', label: 'Down + Left' },
-          { value: '10', label: 'Left + Right' },
-          { value: '5', label: 'Up + Down' },
-          { value: '15', label: 'All' },
-        ],
-        value: String(this.manualArmMask),
-      },
       // ---- 音が注ぎ込むもの（Audio では未配線のものだけつまみが効く）----
       row('huePhase', 'Global hue H'),
       row('skeletonLevel', 'Skeleton level'),
@@ -1108,45 +1106,10 @@ export class LightElementLab2 implements LabExpression {
         ],
         value: this.fanGateOpen ? 'open' : 'closed',
       },
-      {
-        key: 'hazeVisible',
-        label: 'Haze layer (dev A/B)',
-        type: 'select',
-        options: [
-          { value: 'on', label: 'On' },
-          { value: 'off', label: 'Off' },
-        ],
-        value: this.hazeVisible ? 'on' : 'off',
-      },
       // ---- チャンネル構造（色の作り方そのもの）----
-      row('redGain', 'Red'),
-      row('greenGain', 'Green'),
-      row('blueGain', 'Blue'),
       row('channelOffset', 'Channel offset'),
-      {
-        key: 'offsetMode',
-        label: 'Offset direction',
-        type: 'select',
-        options: [
-          { value: 'radial', label: 'Radial from centre' },
-          { value: 'axis', label: 'Along element axis' },
-        ],
-        value: this.offsetMode,
-      },
       row('decorrelation', 'Channel decorrelation'),
       row('intensity', 'Intensity'),
-      {
-        key: 'globalTint',
-        label: 'Global tint (H)',
-        type: 'select',
-        options: [
-          { value: 'on', label: 'On (one wavelength)' },
-          { value: 'off', label: 'Off (channels only)' },
-        ],
-        value: this.globalTint ? 'on' : 'off',
-      },
-      // ---- 計測用 ----
-      row('depthProbe', 'Depth probe (0 = off)'),
     ];
   }
 
