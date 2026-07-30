@@ -57,16 +57,48 @@ import {
 /** この変換の定数。**対応の数値はすべてここに集める。** */
 const DRIVE = {
   /**
+   * **持続の濃さ（ガンマ）。** 音量をそのまま基礎輝度にすると画面が暗すぎた。
+   *
+   * 実楽曲での実測（通し計測 2026-07-30）では、正規化後の音量の中央値は
+   * 0.17〜0.55 にしかならない。静止画スタディ（つまみ 1.0）を目標にしている場に
+   * 0.2 を入れれば、当然そこまで届かない。実際に黒が 94〜96% で張り付き、
+   * 膜（天井 0.11）はほとんど立ち上がらなかった。
+   *
+   * そこで**音量を持ち上げる曲線**を 1 本だけ通す。1 未満で暗い側が持ち上がり、
+   * 大きい側は 1 で頭打ちのまま（＝天井は変えない）。
+   * 0.25 で音量 0.2 → 0.67 / 0.5 → 0.84 になり、**無音は 0 のまま**である。
+   * 開発つまみ `Sustain gamma` から動かせる（本番 UI には出さない）。
+   */
+  sustainGamma: 0.25,
+  /**
+   * **場の利得（Audio 専用）。** ガンマで音量を持ち上げても、実楽曲の 1 フレームは
+   * 静止画スタディ（黒 0.71）に遠く及ばず黒 0.93 で止まった。原因は構造的で、
+   * **ストロボが毎ティック各グループの層を半分しか見せない**こと、そして
+   * コア・扇・断片が設計どおり瞬間的にしか出ないことである。
+   *
+   * そこで持続の場（膜・カーテン・骨格）だけ 1 を超えて注げるようにした。
+   * **天井は変えていない**ので白が増えるのではなく、天井に届く**面積**が広がる。
+   * Manual はつまみが 0〜1 なのでここを通らず、静止画スタディは 1 画素も変わらない。
+   * 実測（実楽曲 2 曲・利得 1.0 / 1.6 / 2.2 / 2.8）では黒の中央値が
+   * 0.93 / 0.90 / 0.88 / **0.86** と下がり、平均輝度は 1.2 → 3.1 まで上がる。
+   * それでも静止画スタディの平均輝度 10.9 の 1/3 以下で、白画素の面積も
+   * 0.5% 未満のまま中央に留まる（＝濁らない）。**2.8 を既定とする。**
+   * 開発つまみ `Field gain` から動かせる。
+   */
+  fieldGain: 2.8,
+  /**
    * **コアを出す打撃の閾値（既定）。** これ未満の打撃ではコアを出さない。
    * 弱い打撃でも毎回光ると「常に光っている」ように見えて、
    * 強打の頂点が頂点に見えなくなる。
    *
-   * 0.55 では落ちる打撃が多すぎて閃きが疎になったので **0.38 まで下げた**。
+   * 0.55 では落ちる打撃が多すぎたので 0.38 へ、さらに実楽曲の通し計測で
+   * **0.30 まで下げた**（実楽曲の打撃の強さの中央値は 0.24〜0.40 しかなく、
+   * 0.38 では静かな曲でコアが 12% しか出なかった）。
    * 強い側を強調する曲線（`coreCurveExponent`）はそのままなので、
    * 「弱い打撃も光るが、頂点は強打だけ」という階層は保たれる。
    * 開発つまみ `Core threshold` から動かせる（本番 UI には出さない）。
    */
-  coreStrengthGate: 0.38,
+  coreStrengthGate: 0.3,
   /**
    * 閾値を越えたぶんを **強い側へ寄せる曲線**の指数（> 1 で強調）。
    * ぎりぎり越えた打撃は控えめ、満点の打撃だけが白熱の頂点へ届く。
@@ -153,7 +185,7 @@ const DRIVE = {
   /** **確認時間**（秒）。候補がこれだけ続かないと切り替えない。開発つまみ `Hue confirm`。 */
   hueConfirmSeconds: 1,
   /** **最短保持**（秒）。いまの H をこれだけ保つまで次へ移らない。開発つまみ `Hue hold`。 */
-  hueHoldSeconds: 6,
+  hueHoldSeconds: 9,
 
   /**
    * **断片の誕生（Step 3）。** 1 イベントで何枚生まれるか。
@@ -166,9 +198,13 @@ const DRIVE = {
   /**
    * 断片の寿命（ティック）。強い打撃ほど長く残る。
    * **フェードはしない** — 生きているあいだ on/off を交互に繰り返し、最後のティックで消える。
+   *
+   * 実楽曲の通し計測で、同時に生きている断片の中央値が **0 枚**（＝半分の時間は
+   * 周縁に何もない）だったので、下限を 1 → 2 ティックへ上げた。
+   * 上限は 4 ティックのままなので、強打の断片が長くなったわけではない。
    */
-  fragmentLifeBase: 1,
-  fragmentLifeFromStrength: 3,
+  fragmentLifeBase: 2,
+  fragmentLifeFromStrength: 2,
   fragmentLifeMaximum: 4,
   /**
    * 同時に生きていられる断片の上限。**上限に達したら新規を抑制する**
@@ -197,6 +233,9 @@ const DRIVE = {
 export const OPTICS_THRESHOLDS = {
   core: DRIVE.coreStrengthGate,
   fan: DRIVE.fanStrengthGate,
+  /** 持続の濃さと場の利得。開発つまみ `Sustain gamma` / `Field gain` の初期値。 */
+  sustainGamma: DRIVE.sustainGamma,
+  fieldGain: DRIVE.fieldGain,
   /** H の切替の粘り（Step 5）。開発つまみ `Hue confirm` / `Hue hold` の初期値。 */
   hueConfirm: DRIVE.hueConfirmSeconds,
   hueHold: DRIVE.hueHoldSeconds,
@@ -364,6 +403,10 @@ export class OpticsAudioDrive {
   /** 閾値（開発つまみ）。既定は `DRIVE` の値で、本番 UI には出さない。 */
   private coreGate: number = DRIVE.coreStrengthGate;
   private fanGate: number = DRIVE.fanStrengthGate;
+  /** 持続の濃さ（開発つまみ）。小さいほど暗い側が持ち上がる。 */
+  private sustainGamma: number = DRIVE.sustainGamma;
+  /** 場の利得（開発つまみ）。ストロボで半分になる面積を補う。 */
+  private fieldGain: number = DRIVE.fieldGain;
 
   // ---- 音色 → グローバル波長 H（Step 5）----
   /**
@@ -410,6 +453,16 @@ export class OpticsAudioDrive {
   /** 扇を開く打撃の閾値（開発つまみ）。**コアより高く保つのが本来の階層。** */
   setFanThreshold(value: number): void {
     this.fanGate = clamp01(value);
+  }
+
+  /** 持続の濃さ（開発つまみ）。1 で音量そのまま、小さいほど場が濃くなる。 */
+  setSustainGamma(value: number): void {
+    this.sustainGamma = Math.min(Math.max(value, 0.1), 1);
+  }
+
+  /** 場の利得（開発つまみ）。天井は変わらないので、増えるのは面積だけ。 */
+  setFieldGain(value: number): void {
+    this.fieldGain = Math.min(Math.max(value, 0.5), 3);
   }
 
   /** H の確認時間（秒・開発つまみ）。短くすると音色の揺れで色が動きやすくなる。 */
@@ -495,7 +548,10 @@ export class OpticsAudioDrive {
     this.frameCount += 1;
 
     // ---- 持続（Step 1）: 音量を 3 つの時定数で受ける（状態の量。連続で回す）----
-    this.source = playing ? clamp01(audio.volume ?? 0) : 0;
+    // **持続の濃さ。** 正規化後の音量はそのままでは低すぎて場が立ち上がらないので、
+    // 曲線 1 本で暗い側を持ち上げる（無音は 0 のまま・天井は 1 のまま）。
+    const loudness = playing ? clamp01(audio.volume ?? 0) : 0;
+    this.source = loudness > 0 ? Math.pow(loudness, this.sustainGamma) : 0;
     this.skeleton = smooth(this.skeleton, this.source, deltaSeconds, RESPONSE_SECONDS.skeleton);
     this.curtain = smooth(this.curtain, this.source, deltaSeconds, RESPONSE_SECONDS.curtain);
     this.haze = smooth(this.haze, this.source, deltaSeconds, RESPONSE_SECONDS.haze);
@@ -893,9 +949,10 @@ export class OpticsAudioDrive {
   toDrive(manual: OpticsDrive): OpticsDrive {
     const pulse = this.publishedCorePulse();
     return {
-      skeletonLevel: this.heldSkeleton,
-      curtainLevel: this.heldCurtain,
-      hazeLevel: this.heldHaze,
+      // 場は利得を掛けて 1 を超えることがある（ストロボで半分になる面積の補償）。
+      skeletonLevel: this.heldSkeleton * this.fieldGain,
+      curtainLevel: this.heldCurtain * this.fieldGain,
+      hazeLevel: this.heldHaze * this.fieldGain,
       corePulse: pulse,
       // 断片は spawn 側で作るので、つまみ由来の energy は使わない。
       fragmentEnergy: 0,

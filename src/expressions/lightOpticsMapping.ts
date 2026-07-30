@@ -378,6 +378,19 @@ const clamp = (value: number, min: number, max: number): number =>
 
 const clamp01 = (value: number): number => clamp(value, 0, 1);
 
+/**
+ * **持続の場（膜・カーテン・骨格）の上限。**
+ *
+ * 静止画スタディ（Manual）はつまみが 0〜1 なので、この上限には決して触れない
+ * ＝ Manual の見え方は 1 画素も変わらない。
+ *
+ * 1 を超えられるようにしてあるのは **Audio のため**である。ストロボは毎ティック
+ * 各グループの層を半分だけ見せるので、同じ level でも 1 フレームに写る面積は
+ * 静止画の半分になる。**天井（`OPTICS.hazeCeiling` など）はそのまま**なので、
+ * ここを上げても白が増えるのではなく、天井に届く**面積**が広がるだけである。
+ */
+const fieldLevel = (value: number): number => clamp(value, 0, 3);
+
 const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 /**
@@ -485,7 +498,7 @@ const strobed = (
  * **画面の縁で黒へ落ちるフォールオフ**が保険になっている。どちらも外さないこと。
  */
 const buildHaze = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLayerTraits[] => {
-  const level = clamp01(drive.hazeLevel);
+  const level = fieldLevel(drive.hazeLevel);
   if (level <= 0) return [];
   // リグでもっとも遠い面（断片の最奥 −12.6 より奥）。奥行きの式でさらに 0.33 倍に落ちる。
   const z = -13.6;
@@ -548,7 +561,7 @@ const buildCurtains = (
   drive: OpticsDrive,
   viewport: OpticsViewport,
 ): OpticalLayerTraits[] => {
-  const level = clamp01(drive.curtainLevel);
+  const level = fieldLevel(drive.curtainLevel);
   if (level <= 0) return [];
   const seed = Math.round(drive.seed);
   const out: OpticalLayerTraits[] = [];
@@ -646,7 +659,7 @@ const buildCurtains = (
  * 音が変えるのは基礎輝度だけ（`skeletonLevel`）。回転も移動もしない。
  */
 const buildSkeleton = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLayerTraits[] => {
-  const level = clamp01(drive.skeletonLevel);
+  const level = fieldLevel(drive.skeletonLevel);
   if (level <= 0) return [];
   const z = -6;
   const extent = visibleHalfExtent(z, viewport);

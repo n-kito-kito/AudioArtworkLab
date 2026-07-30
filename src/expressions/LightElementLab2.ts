@@ -187,6 +187,16 @@ export class LightElementLab2 implements LabExpression {
    */
   private hueConfirm: number = OPTICS_THRESHOLDS.hueConfirm;
   private hueHold: number = OPTICS_THRESHOLDS.hueHold;
+  /**
+   * **持続の濃さ（開発つまみ・Audio のみ）。** 音量 → 基礎輝度の曲線。
+   * 小さいほど暗い側が持ち上がって場が濃くなる（1 で音量そのまま）。
+   */
+  private sustainGamma: number = OPTICS_THRESHOLDS.sustainGamma;
+  /**
+   * **場の利得（開発つまみ・Audio のみ）。** ストロボで半分になる面積を補う。
+   * 天井は変わらないので、上げても白は増えず、天井に届く面積が広がるだけ。
+   */
+  private fieldGain: number = OPTICS_THRESHOLDS.fieldGain;
   /** ドライブの供給元。既定は Manual（静止画スタディの見え方を変えないため）。 */
   private driveMode: DriveMode = 'manual';
   /** 音 → ドライブの変換。対応の記述はこのアダプタ 1 つに集約する。 */
@@ -1004,7 +1014,23 @@ export class LightElementLab2 implements LabExpression {
         step: 1,
         value: this.strobeRate,
       },
-      // ---- 発光の閾値（Audio のみ。弱打 = 無 / 中打 = コア + アーム / 強打 = + 扇）----
+      // ---- 場の濃さと発光の閾値（Audio のみ）----
+      {
+        key: 'sustainGamma',
+        label: 'Sustain gamma',
+        min: 0.1,
+        max: 1,
+        step: 0.01,
+        value: this.sustainGamma,
+      },
+      {
+        key: 'fieldGain',
+        label: 'Field gain',
+        min: 0.5,
+        max: 3,
+        step: 0.05,
+        value: this.fieldGain,
+      },
       {
         key: 'coreThreshold',
         label: 'Core threshold',
@@ -1176,6 +1202,20 @@ export class LightElementLab2 implements LabExpression {
         this.fanThreshold = clamp(gate, 0, 1);
         this.audioDrive.setFanThreshold(this.fanThreshold);
       }
+      return;
+    }
+    if (key === 'sustainGamma') {
+      const gamma = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(gamma)) return;
+      this.sustainGamma = clamp(gamma, 0.1, 1);
+      this.audioDrive.setSustainGamma(this.sustainGamma);
+      return;
+    }
+    if (key === 'fieldGain') {
+      const gain = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(gain)) return;
+      this.fieldGain = clamp(gain, 0.5, 3);
+      this.audioDrive.setFieldGain(this.fieldGain);
       return;
     }
     if (key === 'hueConfirm' || key === 'hueHold') {
