@@ -15,6 +15,7 @@ import type { LabExpression } from './expressions/Expression';
 import { AudioControls } from './ui/AudioControls';
 import { AudioInspector } from './ui/AudioInspector';
 import { LabControls } from './ui/LabControls';
+import { AudioLabPage } from './ui/AudioLabPage';
 import { DebugPanel } from './ui/DebugPanel';
 import { applyUiVariant, parseUiVariant } from './ui/devUiVariants';
 import { TuningPanel } from './ui/TuningPanel';
@@ -222,6 +223,18 @@ const debugPanel =
   import.meta.env.DEV && new URLSearchParams(location.search).get('debug') === '1'
     ? new DebugPanel(shell.root, () => composition, audioEngine)
     : null;
+
+// 解析専用の開発ページ（?audio=1）。**表現は描かず**、音の特徴だけを大きく出す。
+// ?tune=1 と同じ扱いで DEV 限定なので、本番ビルドには入らない。
+const audioLabPage =
+  import.meta.env.DEV && new URLSearchParams(location.search).get('audio') === '1'
+    ? new AudioLabPage(shell.root, audioEngine)
+    : null;
+// 観察のための画面なので、表現は描かせない（1 ドローも出さない）。
+if (audioLabPage) {
+  shell.root.classList.add('is-audio-lab');
+  composition.setGeneratorsVisible(false);
+}
 let disposed = false;
 
 // 確認用音源を既定で読み込む。無ければ何もしない（起動は妨げない）。
@@ -238,6 +251,7 @@ const dispose = (): void => {
   recordingController.dispose();
   outputWindow.dispose();
   tuningPanel?.dispose();
+  audioLabPage?.dispose();
   debugPanel?.dispose();
   disposeUiVariant?.();
   labControls.dispose();

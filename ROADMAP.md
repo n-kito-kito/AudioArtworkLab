@@ -951,6 +951,45 @@ RecordingController・QualityMonitor は再接続済み。
         共通の検証: 決定論（同じ台本 3 回で完全一致）/ **Manual の静止画スタディは
         全 7 Version で画素ハッシュ不変** / 画角 3 種すべて Draw Call 1（三角 22・最大 11 層）/
         1 フレーム p50 0.0〜0.1ms・p90 0.1〜0.2ms / コンソールエラー 0
+  - [x] **音から取れる特徴を「表示だけ」増やす（設計フェーズ① の道具）**。
+        どの特徴を何に繋ぐかを決める前に、**実曲を流して値と聴感の対応を観察する**ための道具。
+        **表現・描画・`TUNING` へは 1 本も繋いでいない**（接続は次のフェーズ）。
+        **追加した特徴**（既存 FFT・波形から派生する安いものだけ。BPM・chroma・MFCC は入れない）:
+        `rolloff`（エネルギー 85% の上限周波数・Hz 併記）/ `spread`（重心まわりの標準偏差・Hz 併記）/
+        `tilt`（500Hz 以下と 2kHz 以上の比。**0.5 が中立**）/ `crest`（ピーク ÷ RMS のパンチ感・生比併記）/
+        `onsetRate`（直近 1 秒のイベント数・生の個数併記）/ `envelopeFast`（50ms）・`envelopeSlow`（2s）と
+        その差 `envelopeDelta`（**0.5 が中立**で上が盛り上がり・下が引き）/
+        **7 帯域の対数分割エネルギー** — Sub(20–60) / Bass(60–250) / Low-mid(250–500) / Mid(500–2k) /
+        High-mid(2–4k) / Presence(4–6k) / Air(6–16k)。
+        **公開形式**: `AudioParameters` を**拡張しない**。`getSpectrum()` と同じ流儀で
+        `AudioEngine.getFeatures()` という**別口**にした（既存の写像はこの型を知らないので、
+        **既存 10 特徴に値が混ざる余地がない**）。値は既存に合わせて全部 0〜1 で、
+        符号のある量は 0.5 中立に写し、生の値は別フィールドで併記する。
+        **解析は `FileAudioEngine` の既存解析ブロックと同じ 1 フレーム 1 回**（`AudioFeatureAnalyzer`）。
+        FFT 2 周 + 波形 1 周だけで、表示が 2 か所あっても解析は 1 つを共有する。
+        **表示 2 か所**: ① Audio Inspector の折りたたみ `Observation features (dev)`
+        ② **解析専用ページ `?audio=1`** — 表現を描かず（`setGeneratorsVisible(false)`）、
+        7 帯域と全特徴を大きく並べる。どちらも同じ `AudioFeatureView` を使う。
+        DEV ガードは `?audio=1` のページだけに掛けた（`?tune=1` と同じ扱い）。
+        Inspector 側の折りたたみは**既存 Inspector の流儀に合わせて掛けていない**
+        — この Inspector 自体が「常にあるが畳んである開発用セクション」で、
+        中身だけ DEV 限定にすると流儀が割れるため。
+        実測: 実曲（InALifelongSleep 30 秒）で全特徴が意味のある範囲に散る —
+        rolloff 1.2k〜4.3kHz / spread 0.07〜0.36 / tilt 0.011〜0.764（中央 0.392 = やや低域寄り）/
+        crest ×2.25〜×3.4 / onset 0〜7 回毎秒 / 7 帯域は sub 0.58 → air 0.02 と素直に落ちる /
+        **負荷**: `getParameters()` 1 回あたり **平均 0.340ms → 0.431ms（+0.091ms）**、
+        中央値 0.3 → 0.4ms。60fps の 16.7ms に対して **+0.55%** で、フレーム時間は
+        p50 0.1ms・p90 0.2ms のまま（計測は同じ曲・同じ区間 862 フレーム）/
+        `?audio=1` では表現の **Draw Call が 0**（三角 0）で、描いていないことを実測で確認
+        **既存出力が 1 バイトも変わらないこと**: 差分は「`rising && !this.wasRising` を
+        名前付き定数に出しただけ」で、10 特徴の代入は 1 行も触れていない。実測でも
+        **Audio モードの決定論トレース**（ティック・コア・アーム・扇・H・断片・痕跡・チャンネルの
+        31,234 文字）が**変更前後で完全一致**（ハッシュ `a475dad6`）/
+        **Manual の静止画スタディは全 7 Version で画素ハッシュ不変** /
+        既存表現も不変（Element Lab V1 Core / Composite・Reactive Lab Composite・
+        Spatial Study・Cymatics V1・Modular V1）/ 画角 3 種すべて Draw Call 1（三角 22）/
+        コンソールエラー 0 / **本番ビルドに `?audio=1` は入らない**
+        （`AudioLabPage` / `audio-lab` / `観察専用` の出現数はいずれも 0。`?tune=1` と同じ扱い）
   - [ ] Light Element Lab 2 — 音由来の seed → `seed`（断片・カーテンの散らばり）は未配線。
         Bass / Mid / Treble → R / G / B の発色駆動、オフセット量と非相関量を
         どの特徴に結ぶかは未決

@@ -1,4 +1,5 @@
 import type { FileAudioEngine } from '../audio/FileAudioEngine';
+import { AudioFeatureView } from './AudioFeatureView';
 import type { LabExpression } from '../expressions/Expression';
 import { LightCoreStudy } from '../expressions/LightCoreStudy';
 import { LightElementLab2 } from '../expressions/LightElementLab2';
@@ -97,6 +98,15 @@ export class AudioInspector {
   private readonly bandLitUntil = new Map<BandKey, number>();
   private readonly coreBlock = document.createElement('div');
   private readonly coreReadout = document.createElement('p');
+  /**
+   * **観察用の特徴（設計フェーズ①）。** 既存のメーターの下に折りたたみで足す。
+   * 表示だけで、見え方へは 1 本も繋がっていない。
+   * 解析は engine が 1 フレーム 1 回やった結果を読むだけ（`?audio=1` と共有）。
+   */
+  private readonly featureBlock = document.createElement('div');
+  private readonly featureToggle = document.createElement('button');
+  private readonly featureView = new AudioFeatureView('compact');
+  private featuresCollapsed = true;
   private animationId: number | null = null;
   private collapsed = true;
   private previousOnset = 0;
@@ -117,7 +127,12 @@ export class AudioInspector {
     this.root.append(this.buildHeading(), this.body);
 
     this.body.className = 'audio-inspector__body';
-    this.body.append(this.buildMeters(), this.buildOnsetLamp(), this.coreBlock);
+    this.body.append(
+      this.buildMeters(),
+      this.buildOnsetLamp(),
+      this.coreBlock,
+      this.buildFeatureSection(),
+    );
     this.coreBlock.className = 'audio-inspector__core';
     this.coreReadout.className = 'audio-inspector__readout';
     this.buildFluxMeters();
@@ -267,6 +282,37 @@ export class AudioInspector {
     return group;
   }
 
+  /**
+   * 観察用の特徴の折りたたみ。**既存 Inspector の流儀に合わせて** DEV ガードは付けない
+   * （この Inspector 自体が「常にあるが畳んである開発用セクション」なので、
+   * 中身だけ DEV 限定にすると流儀が割れる）。専用ページのほうは DEV 限定である。
+   */
+  private buildFeatureSection(): HTMLElement {
+    this.featureBlock.className = 'audio-inspector__features is-collapsed';
+    const heading = document.createElement('h3');
+    heading.className = 'control-subheading';
+    const title = document.createElement('span');
+    title.textContent = 'Observation features (dev)';
+    this.featureToggle.type = 'button';
+    this.featureToggle.className = 'ui-button section-collapse';
+    this.featureToggle.setAttribute('aria-label', 'Toggle observation features');
+    this.featureToggle.setAttribute('aria-expanded', 'false');
+    const chevron = document.createElement('i');
+    chevron.className = 'ph ph-caret-down';
+    const chevronLabel = document.createElement('span');
+    chevronLabel.textContent = 'Toggle';
+    this.featureToggle.append(chevron, chevronLabel);
+    this.featureToggle.addEventListener('click', () => {
+      this.featuresCollapsed = !this.featuresCollapsed;
+      this.featureBlock.classList.toggle('is-collapsed', this.featuresCollapsed);
+      this.featureToggle.classList.toggle('is-rotated', !this.featuresCollapsed);
+      this.featureToggle.setAttribute('aria-expanded', String(!this.featuresCollapsed));
+    });
+    heading.append(title, this.featureToggle);
+    this.featureBlock.append(heading, this.featureView.root);
+    return this.featureBlock;
+  }
+
   private buildOnsetLamp(): HTMLElement {
     const row = document.createElement('div');
     row.className = 'audio-inspector__lamp';
@@ -409,6 +455,10 @@ export class AudioInspector {
    */
   private readonly update = (): void => {
     const parameters = this.engine.getParameters();
+    // 畳んでいる間は書き込まない（見えない DOM を毎フレーム触らない）。
+    if (!this.collapsed && !this.featuresCollapsed) {
+      this.featureView.update(this.engine.getFeatures());
+    }
     const active = parameters.active === 1;
     const onset = Math.min(Math.max(parameters.onset ?? 0, 0), 1);
     const volume = Math.min(Math.max(parameters.volume ?? 0, 0), 1);

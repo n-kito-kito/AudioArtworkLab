@@ -2438,3 +2438,114 @@ body[data-ui-variant='3'] .dev-hud__toggles {
   flex: 0 0 auto;
   gap: 6px;
 }
+
+
+/* ---- 観察用の音響特徴（Inspector の折りたたみ / ?audio=1）---------------- */
+
+.audio-inspector__features.is-collapsed .audio-features {
+  display: none;
+}
+
+.audio-inspector__features h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.audio-features__row {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, 9rem) 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.1rem 0;
+  font-size: 0.72rem;
+}
+
+.audio-features__row i {
+  position: relative;
+  display: block;
+  height: 0.4rem;
+  border-radius: 0.2rem;
+  background: rgb(255 255 255 / 8%);
+  overflow: hidden;
+}
+
+.audio-features__row i::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--fill, 0%);
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+.audio-features__row output {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+  min-width: 5.5rem;
+  text-align: right;
+}
+
+.audio-features__bands .audio-features__row i::after {
+  opacity: 1;
+}
+
+/* ---- 解析専用の開発ページ（?audio=1）------------------------------------ */
+
+.is-audio-lab .app-stage,
+.is-audio-lab .stage {
+  visibility: hidden;
+}
+
+.audio-lab {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  overflow: auto;
+  padding: 2rem clamp(1rem, 4vw, 4rem);
+  background: rgb(8 8 10);
+  color: rgb(238 238 242);
+}
+
+.audio-lab__heading {
+  margin-bottom: 1.5rem;
+}
+
+.audio-lab__heading h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: 0.02em;
+}
+
+.audio-lab__heading p {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  opacity: 0.6;
+}
+
+.audio-lab__clock {
+  display: block;
+  margin-top: 0.5rem;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+  opacity: 0.75;
+}
+
+.audio-features--large {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+  gap: 2rem;
+  max-width: 78rem;
+}
+
+.audio-features--large .audio-features__row {
+  grid-template-columns: minmax(9rem, 13rem) 1fr auto;
+  font-size: 0.86rem;
+  padding: 0.28rem 0;
+}
+
+.audio-features--large .audio-features__row i {
+  height: 0.7rem;
+  border-radius: 0.35rem;
+}
