@@ -40,6 +40,7 @@ import { loadPrismAtlas, type PrismAtlas, type PrismTile } from './prismAtlas';
  */
 
 const GROUP_LABELS: Readonly<Record<OpticalGroup, string>> = {
+  haze: 'Haze',
   skeleton: 'Skeleton',
   core: 'Core',
   fragment: 'Fragment',
@@ -132,6 +133,11 @@ export class LightElementLab2 implements LabExpression {
   private globalTint = true;
   /** 扇の閾値ゲートの代役（静止画では手動トグル）。 */
   private fanGateOpen = true;
+  /**
+   * 膜を出すか。**音入力ではなく開発用の表示トグル**で、
+   * 膜あり・なしを往復して黒の面積と濁りを比べるために置いてある。
+   */
+  private hazeVisible = true;
 
   private layers: readonly OpticalLayerTraits[] = [];
 
@@ -234,9 +240,12 @@ export class LightElementLab2 implements LabExpression {
 
   /** 光学系を組み直す。見え方の判断は `lightOpticsMapping.ts` の中だけで起きる。 */
   private rebuildRig(): void {
-    this.layers = buildOpticalRig(this.group, this.drive(), {
+    const rig = buildOpticalRig(this.group, this.drive(), {
       aspectRatio: this.aspectRatio,
-    }).slice(0, LAB2.maximumLayers);
+    });
+    // 膜の表示トグルは開発用の A/B なので、対応そのものではなくここで間引く。
+    const visible = this.hazeVisible ? rig : rig.filter((entry) => entry.kind !== 'haze');
+    this.layers = visible.slice(0, LAB2.maximumLayers);
     this.writeLayers();
   }
 
@@ -356,7 +365,6 @@ export class LightElementLab2 implements LabExpression {
         const float TAU = 6.28318530718;
         const float DECORRELATION_SCALE = ${LAB2.decorrelationScale.toFixed(4)};
         const float SOFT_SAMPLE_RADIUS = ${OPTICS.softSampleRadius.toFixed(4)};
-        const float NON_CORE_CEILING = ${OPTICS.nonCoreCeiling.toFixed(4)};
         const float TINT_DEPTH = ${OPTICS.tintDepth.toFixed(4)};
 
         float labLuminance(vec3 color) {
@@ -424,6 +432,22 @@ export class LightElementLab2 implements LabExpression {
         float elementMask(vec2 p, float channel) {
           float kind = vTone.z;
           float soft = vDepth.y;
+
+          // ---- 膜: 画面全体をまとめる大面積の霞。明るさの階層のいちばん下 ----
+          if (kind > 3.5) {
+            float r = length(p);
+            // **画面の縁で必ず黒へ落とす窓。** 板は画面より大きく取ってあるので、
+            // ここが 0 になる半径は画面の内側にある。加算合成で縁が浮かない保険。
+            float window = 1.0 - smoothstep(vShape.y, vShape.z, r);
+            if (window <= 0.0) return 0.0;
+            float body = exp(-r * r * vShape.x);
+            // 低周波のムラ。ベタの放射グラデーションにはしない。
+            float mottle =
+              0.62 + 0.38 * sin(p.x * 2.7 + p.y * 1.9) * cos(p.y * 3.3 - p.x * 1.4);
+            // 細かい粒。素材と合わせて「媒質」に見せる。
+            float grain = 0.9 + 0.1 * sin(dot(p, vec2(97.3, 61.7)));
+            return window * body * mottle * grain * (0.3 + atlasLight(p, channel) * 0.9);
+          }
 
           // ---- 扇: コアからの放射状光条。閾値ゲートが開いたときだけ描かれる ----
           if (kind > 2.5) {
@@ -506,19 +530,22 @@ export class LightElementLab2 implements LabExpression {
           // H が動くと全要素が一斉にスペクトル上をスライドする。
           // 分光は白へ少し寄せる。光は「染まった白」であって絵の具ではないので、
           // ここを浅くしておくとチャンネル分離の縁の色が波長の下から見えてくる。
+          // 膜だけは彩度をさらに落とす（媒質が独立の色を持つと全体の色相ルールが崩れる）。
+          float tintDepth = TINT_DEPTH * (vTone.z > 3.5 ? vShape.w : 1.0);
           vec3 tint = uTint > 0.5
             ? mix(
                 vec3(1.0),
                 spectrum(uHue + vTone.x + gradientAt(p, vDepth.w) * vTone.y),
-                TINT_DEPTH
+                tintDepth
               )
             : vec3(1.0);
 
           // vTone.w = 層の明るさ / vDepth.x = 奥行きの減光（1 本の式の片側）。
           vec3 color = channels * tint * vTone.w * vDepth.x * uIntensity;
 
-          // **白の予算制。** コア以外はここで頭を押さえるので、単独では白へ届かない。
-          if (vDepth.z < 0.5) color = min(color, vec3(NON_CORE_CEILING));
+          // **明るさの階層の天井。** コアだけが 1.0（白へ届く）で、
+          // 骨格・断片・扇は 0.30、膜は 0.11。層は自分の段より上へは出られない。
+          color = min(color, vec3(vDepth.z));
 
           gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
         }
@@ -567,7 +594,8 @@ export class LightElementLab2 implements LabExpression {
       this.axes[index * 4 + 3] = -entry.position[1] / Math.max(entry.half[1], 1e-6);
       this.depths[index * 4] = cue.dim;
       this.depths[index * 4 + 1] = cue.soft;
-      this.depths[index * 4 + 2] = entry.whiteAllowed ? 1 : 0;
+      // 明るさの階層の天井（コア 1.0 / 骨格・断片・扇 0.30 / 膜 0.11）。
+      this.depths[index * 4 + 2] = entry.ceiling;
       this.depths[index * 4 + 3] = entry.gradientForm;
       this.channels[index * 4] = entry.channel[0];
       this.channels[index * 4 + 1] = entry.channel[1];
@@ -769,6 +797,16 @@ export class LightElementLab2 implements LabExpression {
         ],
         value: this.fanGateOpen ? 'open' : 'closed',
       },
+      {
+        key: 'hazeVisible',
+        label: 'Haze layer (dev A/B)',
+        type: 'select',
+        options: [
+          { value: 'on', label: 'On' },
+          { value: 'off', label: 'Off' },
+        ],
+        value: this.hazeVisible ? 'on' : 'off',
+      },
       // ---- チャンネル構造（色の作り方そのもの）----
       row('redGain', 'Red'),
       row('greenGain', 'Green'),
@@ -812,6 +850,11 @@ export class LightElementLab2 implements LabExpression {
     }
     if (key === 'fanGate') {
       this.fanGateOpen = value !== 'closed';
+      this.rebuildRig();
+      return;
+    }
+    if (key === 'hazeVisible') {
+      this.hazeVisible = value !== 'off';
       this.rebuildRig();
       return;
     }

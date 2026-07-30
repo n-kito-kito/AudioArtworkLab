@@ -37,6 +37,7 @@ export type ExpressionId =
   | 'light-element-depth-v1'
   | 'light-element-envelope-v1'
   | 'light-element-composite-v1'
+  | 'light-element2-haze-v1'
   | 'light-element2-skeleton-v1'
   | 'light-element2-core-v1'
   | 'light-element2-fragment-v1'
@@ -145,6 +146,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
     id: 'light-element-lab-2',
     label: 'Light Element Lab 2',
     versions: [
+      { id: 'light-element2-haze-v1', label: 'Haze' },
       { id: 'light-element2-skeleton-v1', label: 'Skeleton' },
       { id: 'light-element2-core-v1', label: 'Core' },
       { id: 'light-element2-fragment-v1', label: 'Fragment' },
@@ -187,6 +189,7 @@ const LIGHT_ELEMENT_MODES: Partial<Record<ExpressionId, LightElementMode>> = {
 };
 
 const LIGHT_ELEMENT2_GROUPS: Partial<Record<ExpressionId, OpticalGroup>> = {
+  'light-element2-haze-v1': 'haze',
   'light-element2-skeleton-v1': 'skeleton',
   'light-element2-core-v1': 'core',
   'light-element2-fragment-v1': 'fragment',

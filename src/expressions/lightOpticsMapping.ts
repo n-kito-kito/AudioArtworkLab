@@ -29,10 +29,10 @@
  */
 
 /** 描画側のフラグメント分岐と 1 対 1 で対応する形の種別。 */
-export type OpticalKind = 'core' | 'beam' | 'veil' | 'fan';
+export type OpticalKind = 'core' | 'beam' | 'veil' | 'fan' | 'haze';
 
-/** Version ボタンと 1 対 1。4 層をそれぞれ単独で確かめるための単位。 */
-export type OpticalGroup = 'skeleton' | 'core' | 'fragment' | 'fan' | 'all';
+/** Version ボタンと 1 対 1。各層をそれぞれ単独で確かめるための単位。 */
+export type OpticalGroup = 'haze' | 'skeleton' | 'core' | 'fragment' | 'fan' | 'all';
 
 /** 種別 → シェーダーへ渡す番号。 */
 export const KIND_INDEX: Readonly<Record<OpticalKind, number>> = {
@@ -40,7 +40,27 @@ export const KIND_INDEX: Readonly<Record<OpticalKind, number>> = {
   beam: 1,
   veil: 2,
   fan: 3,
+  haze: 4,
 };
+
+/**
+ * **速度の階層。** 膜がいちばんゆっくり呼吸し、断片がいちばん速い。
+ * 静止画の段階では駆動しないので定数として置くだけで、
+ * 次フェーズで音を平滑化するときの時定数（秒）になる。
+ *
+ * **膜は骨格と同じ入力**（`skeletonLevel` = 音量の持続）を、骨格よりさらに遅い
+ * 時定数で受ける。膜のための音入力は作らない（onset・帯域イベントにも反応させない）。
+ */
+export const RESPONSE_SECONDS = {
+  /** 膜 — 最遅。場そのものの明るさなので、曲の区間くらいの速さでしか動かない。 */
+  haze: 2.6,
+  /** 骨格 — 音量の持続にゆっくり追従する。 */
+  skeleton: 0.9,
+  /** コア脈動 — onset で跳ねて引く。 */
+  core: 0.12,
+  /** 断片 — 帯域イベントで生まれて消える。最速。 */
+  fragment: 0.05,
+} as const;
 
 /**
  * 音が注ぎ込むもの。**これ以外に見え方を変える入力はない。**
@@ -96,7 +116,11 @@ export interface OpticalLayerTraits {
   /** 勾配の形式（0 横 / 1 放射 / 2 縦 / 3 角度）。 */
   readonly gradientForm: number;
   readonly intensity: number;
-  /** 種別ごとの形の値（beam: 幅・ハロー / veil: 縁 / fan: 基準角・広がり・本数・到達）。 */
+  /**
+   * 種別ごとの形の値。
+   * beam: 幅・ハロー / veil: 縁 / fan: 基準角・広がり・本数・到達 /
+   * haze: 減衰・縁の始まり・縁の終わり・分光の深さ倍率
+   */
   readonly shape: readonly [number, number, number, number];
   /** 「軸沿い」モードでのチャンネル分離方向（単位ベクトル・ローカル平面）。 */
   readonly axis: readonly [number, number];
@@ -105,6 +129,12 @@ export interface OpticalLayerTraits {
    * false の層は描画側で天井に当てられ、単独では白画素を 1 つも作れない。
    */
   readonly whiteAllowed: boolean;
+  /**
+   * **明るさの天井（この層の 1 画素が取りうる上限）。**
+   * 明るさの階層そのもの: コア 1.0（白へ届く）> 骨格・断片・扇 0.30 > 膜 0.11。
+   * 加算合成で大面積を足すと黒が浮くので、膜はここを特に厳しくしてある。
+   */
+  readonly ceiling: number;
   /**
    * **チャンネル分離の下限と倍率。** 白の予算を持たない層は下限を持ち、
    * つまみを 0 にしても 3 チャンネルが重なりきらない。
@@ -129,6 +159,12 @@ export const OPTICS = {
    * 3 枚ぶん足しても 250/255 に届かない値にしてある（0.30 × 3 = 0.90）。
    */
   nonCoreCeiling: 0.3,
+  /**
+   * **膜の天井。** 明るさの階層の最下段で、コア（1.0）の 1/9。
+   * 膜は画面規模の大面積なので、ここを緩めると加算合成で黒が浮いて乳白色に濁る。
+   * **迷ったら暗いほうへ倒すこと。**
+   */
+  hazeCeiling: 0.11,
   /** 断片の枚数。 */
   fragmentCount: 6,
   /** アトラスを平均で読む半径（鈍りが 1 のとき。クロップ座標）。 */
@@ -202,9 +238,68 @@ const layer = (
   shape: [0, 0, 0, 0],
   axis: [1, 0],
   whiteAllowed: false,
+  ceiling: OPTICS.nonCoreCeiling,
   channel: [1, 1, 0, 0],
   ...base,
 });
+
+/**
+ * **⓪ 膜。** 画面全体をまとめる大面積・低輝度の霞。**リグでいちばん遠く、いちばん暗い。**
+ * 役割は 3 つ — ① 明るさの階層の床（黒と中輝度の間を埋める）② 光が散乱する媒質の存在感
+ * ③ 最遠の奥行き層。要素が黒に浮いて孤立するのを防ぐためだけに置く。
+ *
+ * **音入力は増やさない。** 骨格と同じ `skeletonLevel` を受け、
+ * 速度だけが違う（`RESPONSE_SECONDS.haze` が最遅）。onset にも帯域イベントにも反応しない。
+ *
+ * 加算合成で大面積を足すと黒が浮くので、天井（`OPTICS.hazeCeiling`）と
+ * **画面の縁で黒へ落ちるフォールオフ**が保険になっている。どちらも外さないこと。
+ */
+const buildHaze = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLayerTraits[] => {
+  const level = clamp01(drive.skeletonLevel);
+  if (level <= 0) return [];
+  // リグでもっとも遠い面（断片の最奥 −12.6 より奥）。奥行きの式でさらに 0.33 倍に落ちる。
+  const z = -13.6;
+  const extent = visibleHalfExtent(z, viewport);
+  return [
+    // コア中心の大きな放射グロー。板は画面の 1.25 倍で、縁の窓は画面の内側で 0 になる。
+    layer({
+      kind: 'haze',
+      position: [0, 0, z],
+      half: [extent.halfWidth * 1.25, extent.halfHeight * 1.25],
+      preferredRoles: ['wide-haze', 'curved-wavefront'],
+      fallbackTile: 4,
+      crop: [0.5, 0.5, 0.92, 0.92],
+      hueDelta: 0.015,
+      // 彩度は低め。膜が独立の色を持たないよう、勾配も分光の深さも小さく取る。
+      hueSpan: 0.05,
+      gradientForm: 1,
+      intensity: 0.16 * level,
+      // [減衰, 縁の始まり, 縁の終わり, 分光の深さ倍率]
+      shape: [2.2, 0.34, 0.76, 0.55],
+      axis: [1, 0],
+      ceiling: OPTICS.hazeCeiling,
+      channel: [1.2, 1.5, 0.04, 0.35],
+    }),
+    // 交差（コアの高さ）に横たわる水平の帯。板は画面の 1.4 倍幅。
+    layer({
+      kind: 'haze',
+      position: [0, 0, z],
+      half: [extent.halfWidth * 1.4, extent.halfHeight * 0.44],
+      preferredRoles: ['wide-caustic', 'wide-haze'],
+      fallbackTile: 6,
+      crop: [0.5, 0.5, 0.95, 0.6],
+      uvAngle: 0.4,
+      hueDelta: -0.02,
+      hueSpan: 0.06,
+      gradientForm: 0,
+      intensity: 0.12 * level,
+      shape: [1.5, 0.28, 0.7, 0.5],
+      axis: [0, 1],
+      ceiling: OPTICS.hazeCeiling,
+      channel: [1.2, 1.5, 0.04, 0.35],
+    }),
+  ];
+};
 
 /**
  * **① 骨格。** 縦の細い線 + 横の帯 + 中央の十字。位置は中央軸に固定で、
@@ -282,6 +377,7 @@ const buildCore = (drive: OpticsDrive): OpticalLayerTraits[] => {
       // 大きくしすぎると白が塊になるので、白は芯の項に持たせて広い項は抑える。
       intensity: mix(0.4, 1.55, pulse),
       whiteAllowed: true,
+      ceiling: 1,
       channel: [1, 1, 0, 0],
     }),
   ];
@@ -382,8 +478,9 @@ export const buildOpticalRig = (
   viewport: OpticsViewport,
 ): OpticalLayerTraits[] => {
   const layers: OpticalLayerTraits[] = [];
-  if (group === 'skeleton' || group === 'all') layers.push(...buildSkeleton(drive, viewport));
   // 奥のものから順に積む（加算合成なので順序は見え方を変えないが、意図を残す）。
+  if (group === 'haze' || group === 'all') layers.push(...buildHaze(drive, viewport));
+  if (group === 'skeleton' || group === 'all') layers.push(...buildSkeleton(drive, viewport));
   if (group === 'fragment' || group === 'all') layers.push(...buildFragments(drive, viewport));
   if (group === 'fan' || group === 'all') layers.push(...buildFan(drive));
   if (group === 'core' || group === 'all') layers.push(...buildCore(drive));
