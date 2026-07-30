@@ -16,6 +16,7 @@ import {
   type OpticalLayerTraits,
   type OpticsDrive,
 } from './lightOpticsMapping';
+import { OpticsAudioDrive, type OpticsDriveLevels } from './opticsAudioDrive';
 import { loadPrismAtlas, type PrismAtlas, type PrismTile } from './prismAtlas';
 
 /**
@@ -100,6 +101,13 @@ type Lab2ParamKey = keyof typeof LAB2.defaults;
 /** 分離方向の決め方。 */
 type OffsetMode = 'radial' | 'axis';
 
+/**
+ * ドライブの供給元。
+ * `manual` は開発つまみがそのまま `OpticsDrive` になる（静止画スタディ）。
+ * `audio` は `OpticsAudioDrive` が音から作る（段階的に配線していく）。
+ */
+type DriveMode = 'manual' | 'audio';
+
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
@@ -117,6 +125,9 @@ export interface LightElementLab2State {
   }[];
   /** 形状族を持つ層（断片・カーテン）の内訳。検証で分布を数えるために出す。 */
   readonly families: readonly { readonly kind: string; readonly family: string }[];
+  /** ドライブの供給元と、音から平滑された 3 層の基礎輝度。 */
+  readonly driveMode: DriveMode;
+  readonly levels: OpticsDriveLevels;
 }
 
 export class LightElementLab2 implements LabExpression {
@@ -143,6 +154,12 @@ export class LightElementLab2 implements LabExpression {
    * 膜あり・なしを往復して黒の面積と濁りを比べるために置いてある。
    */
   private hazeVisible = true;
+  /** ドライブの供給元。既定は Manual（静止画スタディの見え方を変えないため）。 */
+  private driveMode: DriveMode = 'manual';
+  /** 音 → ドライブの変換。対応の記述はこのアダプタ 1 つに集約する。 */
+  private readonly audioDrive = new OpticsAudioDrive();
+  /** 前フレームの時計。dt ベースの平滑に使う（フレームレート非依存）。 */
+  private previousElapsed = -1;
 
   private layers: readonly OpticalLayerTraits[] = [];
 
@@ -200,6 +217,10 @@ export class LightElementLab2 implements LabExpression {
     this.placeholder.colorSpace = THREE.SRGBColorSpace;
     this.placeholder.needsUpdate = true;
 
+    // 表現を開き直したら前の曲の余韻は持ち越さない。
+    this.audioDrive.reset();
+    this.previousElapsed = -1;
+
     this.buildMesh();
     this.rebuildRig();
 
@@ -230,10 +251,15 @@ export class LightElementLab2 implements LabExpression {
     });
   }
 
-  /** 音が注ぎ込むもの。静止画では開発つまみが直接与える（次フェーズの配線口）。 */
-  private drive(): OpticsDrive {
+  /**
+   * 開発つまみがそのまま作るドライブ（Manual）。
+   * 骨格・カーテン・膜は同じつまみを受けるので、静止画では 3 層が揃って動く。
+   */
+  private manualDrive(): OpticsDrive {
     return {
       skeletonLevel: this.params.skeletonLevel,
+      curtainLevel: this.params.skeletonLevel,
+      hazeLevel: this.params.skeletonLevel,
       corePulse: this.params.corePulse,
       fragmentEnergy: this.params.fragmentEnergy,
       fanGate: this.fanGateOpen ? 1 : 0,
@@ -241,6 +267,12 @@ export class LightElementLab2 implements LabExpression {
       seed: this.params.fragmentSeed,
       depthProbe: this.params.depthProbe,
     };
+  }
+
+  /** いま採用するドライブ。供給元を切り替えるだけで、リグ側は何も変わらない。 */
+  private drive(): OpticsDrive {
+    const manual = this.manualDrive();
+    return this.driveMode === 'audio' ? this.audioDrive.toDrive(manual) : manual;
   }
 
   /** 光学系を組み直す。見え方の判断は `lightOpticsMapping.ts` の中だけで起きる。 */
@@ -682,8 +714,18 @@ export class LightElementLab2 implements LabExpression {
   // ---------------------------------------------------------------- 毎フレーム
 
   update(elapsed: number): void {
-    // 静止画のスタディなので、時間で変わるものは 1 つも持たない。
-    // ここで流すのはつまみの値と Effect チェーンだけである。
+    // Manual は静止画のスタディなので、時間で変わるものを 1 つも持たない。
+    // Audio のときだけ、音を受けて 3 層の基礎輝度が動く。
+    if (this.driveMode === 'audio') {
+      // dt はこの時計の差分。タブ復帰の巨大な delta は切る。
+      const delta =
+        this.previousElapsed < 0 ? 0 : Math.min(Math.max(elapsed - this.previousElapsed, 0), 0.25);
+      const audio = this.context?.audioEngine.getParameters() ?? {};
+      this.audioDrive.update(audio, delta);
+      this.rebuildRig();
+    }
+    this.previousElapsed = elapsed;
+
     const material = this.material;
     if (material) {
       material.uniforms.uIntensity!.value = this.params.intensity;
@@ -816,8 +858,12 @@ export class LightElementLab2 implements LabExpression {
 
   getPhase(): string {
     const hue = this.params.huePhase.toFixed(2);
-    const pulse = this.params.corePulse.toFixed(2);
-    return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / pulse ${pulse} / layers ${this.layers.length}`;
+    const levels = this.audioDrive.levels();
+    const drive =
+      this.driveMode === 'audio'
+        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)}`
+        : `manual pulse ${this.params.corePulse.toFixed(2)}`;
+    return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
   }
 
   /** 開発・検証用。`window.__lab` と Inspector から読む。 */
@@ -841,6 +887,8 @@ export class LightElementLab2 implements LabExpression {
               ? (FRAGMENT_FAMILIES[entry.shape[1]] ?? 'unknown')
               : (CURTAIN_FAMILIES[entry.shape[0]] ?? 'unknown'),
         })),
+      driveMode: this.driveMode,
+      levels: this.audioDrive.levels(),
     };
   }
 
@@ -852,7 +900,17 @@ export class LightElementLab2 implements LabExpression {
       value: this.params[key],
     });
     return [
-      // ---- 音が注ぎ込むもの（次フェーズはここへ音が入る）----
+      {
+        key: 'driveMode',
+        label: 'Drive',
+        type: 'select',
+        options: [
+          { value: 'manual', label: 'Manual (static study)' },
+          { value: 'audio', label: 'Audio' },
+        ],
+        value: this.driveMode,
+      },
+      // ---- 音が注ぎ込むもの（Audio では未配線のものだけつまみが効く）----
       row('huePhase', 'Global hue H'),
       row('skeletonLevel', 'Skeleton level'),
       row('corePulse', 'Core pulse'),
@@ -911,6 +969,17 @@ export class LightElementLab2 implements LabExpression {
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    if (key === 'driveMode') {
+      const next: DriveMode = value === 'audio' ? 'audio' : 'manual';
+      if (next !== this.driveMode) {
+        // 切り替えた瞬間に前のモードの余韻が残らないようにする。
+        this.audioDrive.reset();
+        this.previousElapsed = -1;
+        this.driveMode = next;
+        this.rebuildRig();
+      }
+      return;
+    }
     if (key === 'offsetMode') {
       this.offsetMode = value === 'axis' ? 'axis' : 'radial';
       return;

@@ -93,8 +93,18 @@ export const RESPONSE_SECONDS = {
  * 値はすべて 0〜1（`seed` を除く）。
  */
 export interface OpticsDrive {
-  /** 音量（持続）→ 骨格の基礎輝度。0 で骨格ごと消える（無音 = 黒）。 */
+  /**
+   * 音量（持続）→ 骨格の基礎輝度。0 で骨格ごと消える（無音 = 黒）。
+   *
+   * **骨格・カーテン・膜は同じソース（音量の持続）を受ける。** 別のフィールドに
+   * 分けてあるのは **時定数だけが違う**からで（`RESPONSE_SECONDS`）、
+   * 音の入力を 3 つへ増やしたわけではない。
+   */
   readonly skeletonLevel: number;
+  /** 同じソースをカーテンの時定数で受けた値。 */
+  readonly curtainLevel: number;
+  /** 同じソースを膜の時定数で受けた値。**いちばん遅く、最後まで残って消える。** */
+  readonly hazeLevel: number;
   /** onset 強度 → コアの脈動。1 で白熱の頂点。 */
   readonly corePulse: number;
   /** 帯域イベント → 断片の量と明るさ。 */
@@ -289,7 +299,7 @@ const layer = (
  * **画面の縁で黒へ落ちるフォールオフ**が保険になっている。どちらも外さないこと。
  */
 const buildHaze = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLayerTraits[] => {
-  const level = clamp01(drive.skeletonLevel);
+  const level = clamp01(drive.hazeLevel);
   if (level <= 0) return [];
   // リグでもっとも遠い面（断片の最奥 −12.6 より奥）。奥行きの式でさらに 0.33 倍に落ちる。
   const z = -13.6;
@@ -352,7 +362,7 @@ const buildCurtains = (
   drive: OpticsDrive,
   viewport: OpticsViewport,
 ): OpticalLayerTraits[] => {
-  const level = clamp01(drive.skeletonLevel);
+  const level = clamp01(drive.curtainLevel);
   if (level <= 0) return [];
   const seed = Math.round(drive.seed);
   const out: OpticalLayerTraits[] = [];
