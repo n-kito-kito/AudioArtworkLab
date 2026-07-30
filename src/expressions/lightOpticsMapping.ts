@@ -117,7 +117,43 @@ export interface FragmentSpawn {
   readonly strength: number;
   /** 発火帯域。控えめな寄せにだけ使う。 */
   readonly band: string;
+  /**
+   * **痕跡場が引き寄せる先**（正規化座標。`null` で引き寄せなし）。
+   * 過去に断片が消えた場所へ次の断片が寄っていく（蓄積）。
+   * Manual の静止画スタディはこれを持たないので、従来どおりの散らばりになる。
+   */
+  readonly aim?: readonly [number, number] | null;
+  /** 引き寄せの強さ（0..1）。0 で完全に従来どおり。 */
+  readonly pull?: number;
 }
+
+/**
+ * **断片 1 枚の正規化位置。**
+ *
+ * 「どこに出るか」を **1 か所だけ**で決める。組み立て側（`makeFragment`）と
+ * 痕跡場を持つ側（`OpticsAudioDrive`）が同じ式を通るので、
+ * **場へ書き込む位置と実際に描かれる位置がずれない。**
+ *
+ * 引き寄せがゼロなら、周縁の円環へ散らす従来の式そのままである。
+ */
+export const fragmentPlacement = (
+  seed: number,
+  index: number,
+  lift: number,
+  aim: readonly [number, number] | null | undefined,
+  pull: number,
+): { readonly nx: number; readonly ny: number } => {
+  const a = hash01(seed, index * 7 + 1);
+  const c = hash01(seed, index * 7 + 3);
+  // 周縁に散らす。中央軸は骨格のものなので、半径の下限を置いて避ける。
+  const angle = a * TAU;
+  const radius = 0.44 + c * 0.52;
+  const nx = Math.cos(angle) * radius;
+  const ny = Math.sin(angle) * radius + lift;
+  const amount = clamp01(pull);
+  if (!aim || amount <= 0) return { nx, ny };
+  return { nx: mix(nx, aim[0], amount), ny: mix(ny, aim[1], amount) };
+};
 
 /**
  * **コアの形状族。** 打撃ごとに seed が選ぶので「毎回同じコア」にならない。
@@ -833,6 +869,8 @@ const makeFragment = (
   intensityScale: number,
   bias: { readonly size: number; readonly lift: number; readonly family: number },
   viewport: OpticsViewport,
+  aim?: readonly [number, number] | null,
+  pull = 0,
 ): OpticalLayerTraits => {
   const a = hash01(seed, index * 7 + 1);
   const b = hash01(seed, index * 7 + 2);
@@ -849,9 +887,8 @@ const makeFragment = (
     FRAGMENT_FAMILIES.length;
   const z = -(5.2 + b * 7.4);
   const extent = visibleHalfExtent(z, viewport);
-  // 周縁に散らす。中央軸は骨格のものなので、半径の下限を置いて避ける。
-  const angle = a * TAU;
-  const radius = 0.44 + c * 0.52;
+  // 位置は共有の式から。痕跡場が引き寄せるときだけ、寄せた先へずれる。
+  const place = fragmentPlacement(seed, index, bias.lift, aim, pull);
   const size = (0.2 + d * 0.4) * (Math.abs(z) / 6) * bias.size;
   // 族ごとの縦横比。伸びは板が持つので、輪郭の式は正方の p 空間で書ける。
   const stretch =
@@ -862,11 +899,7 @@ const makeFragment = (
         : 0.85 + h * 0.5; // shard / chip はほぼ等方
   return layer({
     kind: 'veil',
-    position: [
-      Math.cos(angle) * extent.halfWidth * radius,
-      Math.sin(angle) * extent.halfHeight * radius + extent.halfHeight * bias.lift,
-      z,
-    ],
+    position: [place.nx * extent.halfWidth, place.ny * extent.halfHeight, z],
     half: [size * stretch, size / Math.sqrt(stretch)],
     spin: e * TAU,
     preferredRoles: ['wide-caustic', 'wide-haze', 'layered-sheets'],
@@ -901,6 +934,15 @@ const BAND_BIAS: Readonly<
 
 const NEUTRAL_BIAS = { size: 1, lift: 0, family: 0 } as const;
 
+/**
+ * 発火帯域の寄せを外へ見せる。**痕跡場が「実際に描かれた位置」を知るため**で、
+ * 場へ書き込む位置と描く位置がずれないよう、寄せの表は 1 つしか持たない。
+ */
+export const fragmentBandBias = (
+  band: string,
+): { readonly size: number; readonly lift: number; readonly family: number } =>
+  BAND_BIAS[band] ?? NEUTRAL_BIAS;
+
 const buildFragments = (
   drive: OpticsDrive,
   viewport: OpticsViewport,
@@ -920,6 +962,8 @@ const buildFragments = (
         0.62 + 0.5 * clamp01(spawn.strength),
         bias,
         viewport,
+        spawn.aim,
+        spawn.pull ?? 0,
       );
     });
   }

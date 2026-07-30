@@ -5,6 +5,9 @@ import {
   CORE_SHAPES,
   RESPONSE_SECONDS,
   STROBE,
+  fragmentBandBias,
+  fragmentPlacement,
+  hash01,
   type FragmentSpawn,
   type OpticsDrive,
 } from './lightOpticsMapping';
@@ -137,6 +140,30 @@ const DRIVE = {
    */
   fanMinimumFrames: 2,
 
+  // ---- 断片の痕跡場（蓄積）----
+  /**
+   * **痕跡場の解像度。** 粗くてよい。ここは「どこで断片が消えたか」の記憶であって
+   * 描く絵ではないので、細かくすると筋にならず点の集まりになる。
+   */
+  traceColumns: 32,
+  traceRows: 18,
+  /** 場が覆う正規化座標の半径（断片の散らばりは ±1 前後に収まる）。 */
+  traceExtent: 1.25,
+  /**
+   * **半減期（秒）。** 痕跡はゆっくり消える。短いと蓄積にならず、
+   * 長すぎると前の区間の筋がいつまでも残る。
+   */
+  traceHalfLife: 18,
+  /** 断片 1 枚が死ぬときに置く量（強さと大きさに比例する係数）。 */
+  traceDeposit: 1,
+  /** 1 セルが持てる量の上限。**長時間再生でも場が飽和しない**ための頭打ち。 */
+  traceCeiling: 6,
+  /**
+   * 引き寄せの最大の強さ（`Trace amount` が 1・その痕跡が場の最大のとき）。
+   * 1 にすると全部が同じ点へ重なるので、いちばん強くても 8 割までにしておく。
+   */
+  tracePullMaximum: 0.8,
+
   // ---- 音色 → グローバル波長 H（Step 5）----
   /**
    * **H の候補状態の数。** H は 0〜1 の連続量として動かさず、
@@ -236,6 +263,8 @@ export const OPTICS_THRESHOLDS = {
   /** 持続の濃さと場の利得。開発つまみ `Sustain gamma` / `Field gain` の初期値。 */
   sustainGamma: DRIVE.sustainGamma,
   fieldGain: DRIVE.fieldGain,
+  /** 痕跡場の効き。開発つまみ `Trace amount` の初期値。 */
+  traceAmount: 0.5,
   /** H の切替の粘り（Step 5）。開発つまみ `Hue confirm` / `Hue hold` の初期値。 */
   hueConfirm: DRIVE.hueConfirmSeconds,
   hueHold: DRIVE.hueHoldSeconds,
@@ -293,6 +322,13 @@ export interface OpticsDriveLevels {
   readonly hueHeld: number;
   /** H が切り替わった回数。 */
   readonly hueSwitches: number;
+  /** 痕跡場の最大値・総量・0 でないセルの数。堆積と減衰を見るために出す。 */
+  readonly tracePeak: number;
+  readonly traceTotal: number;
+  readonly traceCells: number;
+  /** 置いた総量と、引き寄せが効いた断片の数。 */
+  readonly traceDeposits: number;
+  readonly traceAimed: number;
 }
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -385,6 +421,23 @@ export class OpticsAudioDrive {
   private fragmentBirths = 0;
   private fragmentSuppressed = 0;
 
+  // ---- 断片の痕跡場（蓄積）----
+  /**
+   * **痕跡場。** 断片が消えた場所に量が積もり、ゆっくり減衰する。
+   * 次の断片はここへ引き寄せられるので、**過去が次の絵に効く**（写像だけでは出ない筋）。
+   *
+   * **場はイベント履歴の純関数**である（`Math.random()` を使わず、置く位置も引く候補も
+   * すべて音のシードから決まる）ので、同じ音源・同じ操作なら同じ場になる ＝ 決定論は保つ。
+   */
+  private readonly trace = new Float32Array(DRIVE.traceColumns * DRIVE.traceRows);
+  /** 場の最大値。引き寄せの強さを正規化するために持つ（これも減衰する）。 */
+  private tracePeak = 0;
+  /** 置いた総量と、引き寄せが効いた断片の数。検証で読む。 */
+  private traceDeposits = 0;
+  private traceAimed = 0;
+  /** 引き寄せの強さ（開発つまみ `Trace amount`）。**0 で完全に従来どおり。** */
+  private traceAmount = 0.5;
+
   /**
    * **④ 扇。** コアより高い閾値を越えた強打だけで開く。
    * コア・アームと同じ規律で、打撃のティックで即出現し、数ティックで消える。
@@ -465,6 +518,11 @@ export class OpticsAudioDrive {
     this.fieldGain = Math.min(Math.max(value, 0.5), 3);
   }
 
+  /** 痕跡場の効き（開発つまみ）。**0 で蓄積を切る**（従来と 1 画素も変わらない）。 */
+  setTraceAmount(value: number): void {
+    this.traceAmount = clamp01(value);
+  }
+
   /** H の確認時間（秒・開発つまみ）。短くすると音色の揺れで色が動きやすくなる。 */
   setHueConfirm(seconds: number): void {
     this.hueConfirmSeconds = Math.max(seconds, 0);
@@ -509,6 +567,10 @@ export class OpticsAudioDrive {
     this.pendingFragments.length = 0;
     this.fragmentBirths = 0;
     this.fragmentSuppressed = 0;
+    this.trace.fill(0);
+    this.tracePeak = 0;
+    this.traceDeposits = 0;
+    this.traceAimed = 0;
     this.heldFanPower = 0;
     this.heldFanSeed = 0;
     this.fanTicksLeft = 0;
@@ -558,6 +620,8 @@ export class OpticsAudioDrive {
 
     // ---- 音色 → H（Step 5）: 状態機械を回す。切替の適用はティック境界 ----
     this.updateHue(audio, playing, deltaSeconds);
+    // 痕跡場はゆっくり減衰する。無音でも回すので、止まれば筋も薄れていく。
+    this.decayTrace(deltaSeconds);
 
     if (this.coreFramesLeft > 0) this.coreFramesLeft -= 1;
     if (this.armFramesLeft > 0) this.armFramesLeft -= 1;
@@ -678,6 +742,99 @@ export class OpticsAudioDrive {
     }
 
     if (this.publishedFanPower() > 0) this.fanVisibleFrames += 1;
+  }
+
+  // ---------------------------------------------------------------- 痕跡場
+
+  /** 正規化座標 → セル番号（範囲外は端へ丸める）。 */
+  private traceCell(nx: number, ny: number): number {
+    const e = DRIVE.traceExtent;
+    const cx = Math.min(
+      Math.max(Math.floor(((nx + e) / (2 * e)) * DRIVE.traceColumns), 0),
+      DRIVE.traceColumns - 1,
+    );
+    const cy = Math.min(
+      Math.max(Math.floor(((ny + e) / (2 * e)) * DRIVE.traceRows), 0),
+      DRIVE.traceRows - 1,
+    );
+    return cy * DRIVE.traceColumns + cx;
+  }
+
+  /** セル番号 → そのセルの中心（正規化座標）。引き寄せ先はここになる。 */
+  private traceCentre(cell: number): [number, number] {
+    const e = DRIVE.traceExtent;
+    const cx = cell % DRIVE.traceColumns;
+    const cy = Math.floor(cell / DRIVE.traceColumns);
+    return [
+      ((cx + 0.5) / DRIVE.traceColumns) * 2 * e - e,
+      ((cy + 0.5) / DRIVE.traceRows) * 2 * e - e,
+    ];
+  }
+
+  /**
+   * **場をゆっくり減衰させる。** 半減期は定数で、フレームレートには依らない。
+   * 置く量に上限があり、減衰が指数なので**いくら長く再生しても飽和しない**
+   * （平衡値は「毎秒置く量 × 半減期 / ln2」で頭打ちになる）。
+   */
+  private decayTrace(deltaSeconds: number): void {
+    if (deltaSeconds <= 0) return;
+    const keep = Math.pow(0.5, deltaSeconds / DRIVE.traceHalfLife);
+    for (let i = 0; i < this.trace.length; i++) this.trace[i]! *= keep;
+    this.tracePeak *= keep;
+  }
+
+  /**
+   * **断片が消えた場所に痕跡を置く。** 量は打撃の強さと断片の大きさに比例する。
+   * 上限で頭打ちにするので、同じ場所へ何度置いても際限なく濃くはならない。
+   */
+  private depositTrace(spawn: FragmentSpawn): void {
+    const bias = fragmentBandBias(spawn.band);
+    const place = fragmentPlacement(spawn.seed, spawn.slot, bias.lift, spawn.aim, spawn.pull ?? 0);
+    const cell = this.traceCell(place.nx, place.ny);
+    const amount = DRIVE.traceDeposit * (0.35 + clamp01(spawn.strength)) * bias.size;
+    const next = Math.min(this.trace[cell]! + amount, DRIVE.traceCeiling);
+    this.trace[cell] = next;
+    if (next > this.tracePeak) this.tracePeak = next;
+    this.traceDeposits += amount;
+  }
+
+  /**
+   * **次の断片を引き寄せる先。**
+   *
+   * 候補をいくつか**音のシードから**引き（`Math.random()` は使わない）、
+   * そのうち痕跡がいちばん濃いセルを選ぶ。場が空なら濃さ 0 なので
+   * 引き寄せも 0 になり、**自然に従来の散らばりへ落ちる**。
+   */
+  private traceAim(
+    seed: number,
+    slot: number,
+  ): { readonly aim: [number, number] | null; readonly pull: number } {
+    if (this.traceAmount <= 0 || this.tracePeak <= 0) return { aim: null, pull: 0 };
+    // 場の量に**比例して**セルを引く。空のセルは重み 0 なので決して選ばれない。
+    // 一様に候補を撒くやり方だと、薄い場では候補がほぼ空セルに落ちて引き寄せが効かない。
+    let total = 0;
+    for (let i = 0; i < this.trace.length; i++) total += this.trace[i]!;
+    if (total <= 0) return { aim: null, pull: 0 };
+    const target = hash01(seed + 4441, slot * 31 + 1) * total;
+    let running = 0;
+    let cell = -1;
+    for (let i = 0; i < this.trace.length; i++) {
+      running += this.trace[i]!;
+      if (running >= target) {
+        cell = i;
+        break;
+      }
+    }
+    if (cell < 0) cell = this.trace.length - 1;
+    const weight = this.trace[cell]!;
+    if (weight <= 0) return { aim: null, pull: 0 };
+    // 濃さは場の最大値で正規化する。薄い痕跡には弱くしか引かれない。
+    // 平方根で中くらいの濃さを持ち上げる（線形だと薄い場でほとんど効かなかった）。
+    const pull =
+      this.traceAmount * DRIVE.tracePullMaximum * Math.sqrt(clamp01(weight / this.tracePeak));
+    if (pull <= 0) return { aim: null, pull: 0 };
+    this.traceAimed += 1;
+    return { aim: this.traceCentre(cell), pull };
   }
 
   /**
@@ -810,7 +967,12 @@ export class OpticsAudioDrive {
         continue;
       }
       // **生まれるのは次のティックの頭。** 出入りをティック境界だけに揃える。
-      this.pendingFragments.push({ spawn: { seed, slot, strength, band }, life });
+      // **痕跡場が次の位置を引き寄せる。** 場が空なら引き寄せ 0 ＝ 従来の散らばり。
+      const aimed = this.traceAim(seed, slot);
+      this.pendingFragments.push({
+        spawn: { seed, slot, strength, band, aim: aimed.aim, pull: aimed.pull },
+        life,
+      });
     }
   }
 
@@ -854,7 +1016,11 @@ export class OpticsAudioDrive {
     for (let read = 0; read < this.liveFragments.length; read++) {
       const entry = this.liveFragments[read]!;
       entry.age += 1;
-      if (entry.age >= entry.life) continue;
+      if (entry.age >= entry.life) {
+        // **消える場所に痕跡を置く。** ここが蓄積の書き込み口。
+        this.depositTrace(entry.spawn);
+        continue;
+      }
       this.liveFragments[write] = entry;
       write += 1;
     }
@@ -912,7 +1078,31 @@ export class OpticsAudioDrive {
       hueConfirmed: this.hueConfirmed,
       hueHeld: this.hueHeld,
       hueSwitches: this.hueSwitches,
+      tracePeak: this.tracePeak,
+      traceTotal: this.traceTotal(),
+      traceCells: this.traceLiveCells(),
+      traceDeposits: this.traceDeposits,
+      traceAimed: this.traceAimed,
     };
+  }
+
+  /** 場の総量。飽和していないかを見るために読む。 */
+  private traceTotal(): number {
+    let total = 0;
+    for (let i = 0; i < this.trace.length; i++) total += this.trace[i]!;
+    return total;
+  }
+
+  /** 痕跡が残っているセルの数。筋がどれだけ広がっているか。 */
+  private traceLiveCells(): number {
+    let n = 0;
+    for (let i = 0; i < this.trace.length; i++) if (this.trace[i]! > 0.01) n += 1;
+    return n;
+  }
+
+  /** 場の中身を読み出す（開発・検証用）。**書き換えないこと。** */
+  traceField(): { readonly columns: number; readonly rows: number; readonly cells: Float32Array } {
+    return { columns: DRIVE.traceColumns, rows: DRIVE.traceRows, cells: this.trace };
   }
 
   /** コアが出ているのは、打撃のティックのあいだだけ。 */

@@ -197,6 +197,12 @@ export class LightElementLab2 implements LabExpression {
    * 天井は変わらないので、上げても白は増えず、天井に届く面積が広がるだけ。
    */
   private fieldGain: number = OPTICS_THRESHOLDS.fieldGain;
+  /**
+   * **痕跡場の効き（開発つまみ・Audio のみ）。**
+   * 断片が消えた場所に痕跡が積もり、次の断片がそこへ引き寄せられる（蓄積）。
+   * **0 で蓄積を切る**＝写像だけの従来の見え方に戻る。
+   */
+  private traceAmount: number = OPTICS_THRESHOLDS.traceAmount;
   /** ドライブの供給元。既定は Manual（静止画スタディの見え方を変えないため）。 */
   private driveMode: DriveMode = 'manual';
   /** 音 → ドライブの変換。対応の記述はこのアダプタ 1 つに集約する。 */
@@ -1047,6 +1053,14 @@ export class LightElementLab2 implements LabExpression {
         value: this.fieldGain,
       },
       {
+        key: 'traceAmount',
+        label: 'Trace amount',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: this.traceAmount,
+      },
+      {
         key: 'coreThreshold',
         label: 'Core threshold',
         min: 0,
@@ -1224,6 +1238,13 @@ export class LightElementLab2 implements LabExpression {
       if (!Number.isFinite(gamma)) return;
       this.sustainGamma = clamp(gamma, 0.1, 1);
       this.audioDrive.setSustainGamma(this.sustainGamma);
+      return;
+    }
+    if (key === 'traceAmount') {
+      const amount = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(amount)) return;
+      this.traceAmount = clamp(amount, 0, 1);
+      this.audioDrive.setTraceAmount(this.traceAmount);
       return;
     }
     if (key === 'fieldGain') {
