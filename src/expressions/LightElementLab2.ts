@@ -715,13 +715,16 @@ export class LightElementLab2 implements LabExpression {
 
   update(elapsed: number): void {
     // Manual は静止画のスタディなので、時間で変わるものを 1 つも持たない。
-    // Audio のときだけ、音を受けて 3 層の基礎輝度が動く。
+    // Audio のときだけ、音を受けて基礎輝度と脈動が動く。
     if (this.driveMode === 'audio') {
       // dt はこの時計の差分。タブ復帰の巨大な delta は切る。
       const delta =
         this.previousElapsed < 0 ? 0 : Math.min(Math.max(elapsed - this.previousElapsed, 0), 0.25);
-      const audio = this.context?.audioEngine.getParameters() ?? {};
-      this.audioDrive.update(audio, delta);
+      const engine = this.context?.audioEngine;
+      const audio = engine?.getParameters() ?? {};
+      // 打撃の検出はスペクトルを見る。無いエンジンでも持続だけは動く。
+      const spectrum = engine?.getSpectrum?.() ?? null;
+      this.audioDrive.update(audio, spectrum, elapsed, delta);
       this.rebuildRig();
     }
     this.previousElapsed = elapsed;
@@ -861,7 +864,7 @@ export class LightElementLab2 implements LabExpression {
     const levels = this.audioDrive.levels();
     const drive =
       this.driveMode === 'audio'
-        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)}`
+        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}`
         : `manual pulse ${this.params.corePulse.toFixed(2)}`;
     return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
   }
