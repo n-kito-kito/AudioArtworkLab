@@ -37,7 +37,12 @@ import {
  *   形・位置・縦横比・欠け・傾きは**イベント固有の音シード**だけから決まる。
  *   寿命はティックで数え（1〜4）、生きているあいだ on / off を交互に繰り返して
  *   最後のティックで消える。**フェードはしない。**
- * - **Step 4（未配線）** 強 onset の閾値 → `fanGate`。放射の扇。
+ * - **Step 4（実装済み）** 強 onset の閾値 → `fanGate`。放射の扇。
+ *   **コアより高い閾値**を越えた強打だけが扇を開く。階層は
+ *   **弱打 = 無 / 中打 = コア + アーム / 強打 = コア + アーム + 扇**。
+ *   打撃ティックで即出現し、2〜4 ティックの寿命のあいだ on / off を交互に繰り返して、
+ *   最後のティックで**フェードせずに**消える。広がり・強さは打撃の強さに追従し、
+ *   向きと角度幅には打撃のシード由来の個体差が入る（下向き基本は動かさない）。
  * - **Step 5（未配線）** 音色の持続値 → `huePhase`。**補間せずイベント的に切り替える。**
  *   同じく音由来のシード → `seed`（断片・カーテンの散らばり）。
  *
@@ -48,11 +53,16 @@ import {
 /** この変換の定数。**対応の数値はすべてここに集める。** */
 const DRIVE = {
   /**
-   * **コアを出す打撃の閾値。** これ未満の打撃ではコアを出さない。
+   * **コアを出す打撃の閾値（既定）。** これ未満の打撃ではコアを出さない。
    * 弱い打撃でも毎回光ると「常に光っている」ように見えて、
    * 強打の頂点が頂点に見えなくなる。
+   *
+   * 0.55 では落ちる打撃が多すぎて閃きが疎になったので **0.38 まで下げた**。
+   * 強い側を強調する曲線（`coreCurveExponent`）はそのままなので、
+   * 「弱い打撃も光るが、頂点は強打だけ」という階層は保たれる。
+   * 開発つまみ `Core threshold` から動かせる（本番 UI には出さない）。
    */
-  coreStrengthGate: 0.55,
+  coreStrengthGate: 0.38,
   /**
    * 閾値を越えたぶんを **強い側へ寄せる曲線**の指数（> 1 で強調）。
    * ぎりぎり越えた打撃は控えめ、満点の打撃だけが白熱の頂点へ届く。
@@ -65,6 +75,31 @@ const DRIVE = {
    * 1 フレームで消えないようにするだけの保険。
    */
   coreMinimumFrames: 2,
+
+  /**
+   * **扇を開く打撃の閾値（既定）。コアよりはっきり高い。**
+   * 階層は 弱打 = 無 / 中打 = コア + アーム / **強打 = コア + アーム + 扇**。
+   * 扇が開きっぱなしになると「常に開いている」ように見えて頂点が消えるので、
+   * ここは下げないこと。開発つまみ `Fan threshold` から動かせる。
+   */
+  fanStrengthGate: 0.75,
+  /** 閾値を越えたぶんを強い側へ寄せる曲線の指数（> 1 で強調）。 */
+  fanCurveExponent: 1.3,
+  /** 閾値をぎりぎり越えた強打での扇の強さ。 */
+  fanMinimumPower: 0.55,
+  /**
+   * 扇の寿命（ティック）。強打ほど長い。
+   * 生きているあいだは on / off を交互に繰り返すので、**表示は寿命の半分**である。
+   */
+  fanLifeBase: 2,
+  fanLifeFromStrength: 2,
+  /**
+   * **誕生直後の on を保つ実フレーム数の下限。**
+   * ティックの終わり際に来た打撃でも 1 フレームで消えないようにする保険だが、
+   * ここを満たすまで**歳を取らせない**（＝消灯を次のティック境界まで延ばす）ので、
+   * 扇の出入りは必ずティック境界だけで起きる。
+   */
+  fanMinimumFrames: 2,
 
   /**
    * **断片の誕生（Step 3）。** 1 イベントで何枚生まれるか。
@@ -101,6 +136,15 @@ const DRIVE = {
   },
 } as const;
 
+/**
+ * **発光の閾値の既定値。** 開発つまみの初期値はここから取る（二重定義しない）。
+ * `core < fan` の階層が、弱打 = 無 / 中打 = コア + アーム / 強打 = + 扇 を作る。
+ */
+export const OPTICS_THRESHOLDS = {
+  core: DRIVE.coreStrengthGate,
+  fan: DRIVE.fanStrengthGate,
+} as const;
+
 /** 平滑された各層のドライブ。開発・検証用に外へ見せる。 */
 export interface OpticsDriveLevels {
   readonly skeleton: number;
@@ -129,6 +173,18 @@ export interface OpticsDriveLevels {
   /** 誕生した断片の総数と、上限で抑制された数。 */
   readonly fragmentBirths: number;
   readonly fragmentSuppressed: number;
+  /** 扇の強さ（0..1）。閾値を越えた強打の数ティックだけ立つ。 */
+  readonly fanPower: number;
+  /** 扇が開いた回数（＝閾値を越えた強打の数）。 */
+  readonly fanCount: number;
+  /** 扇を表示していたフレーム数と、総フレーム数。**表示時間割合の実測用。** */
+  readonly fanVisibleFrames: number;
+  readonly frameCount: number;
+  /** 直近の扇の個体差シード（−1 は出ていない）。 */
+  readonly fanSeed: number;
+  /** いま効いている閾値（開発つまみの確認用）。 */
+  readonly coreThreshold: number;
+  readonly fanThreshold: number;
 }
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -211,10 +267,39 @@ export class OpticsAudioDrive {
   private fragmentBirths = 0;
   private fragmentSuppressed = 0;
 
+  /**
+   * **④ 扇。** コアより高い閾値を越えた強打だけで開く。
+   * コア・アームと同じ規律で、打撃のティックで即出現し、数ティックで消える。
+   * 生きているあいだは on / off を交互に繰り返すので、開きっぱなしにはならない。
+   */
+  private heldFanPower = 0;
+  private heldFanSeed = 0;
+  private fanTicksLeft = 0;
+  /** 誕生直後の on を保つ残りフレーム数（0 になるまで歳を取らない）。 */
+  private fanHoldFrames = 0;
+  private fanAge = 0;
+  private fanCount = 0;
+  private fanVisibleFrames = 0;
+  private frameCount = 0;
+
+  /** 閾値（開発つまみ）。既定は `DRIVE` の値で、本番 UI には出さない。 */
+  private coreGate: number = DRIVE.coreStrengthGate;
+  private fanGate: number = DRIVE.fanStrengthGate;
+
   /** ストロボの入り切りと速度（開発つまみ）。A/B 比較のために外から触れる。 */
   setStrobe(enabled: boolean, rate: number): void {
     this.strobeEnabled = enabled;
     this.strobeRate = Math.max(rate, 1);
+  }
+
+  /** コアを出す打撃の閾値（開発つまみ）。 */
+  setCoreThreshold(value: number): void {
+    this.coreGate = clamp01(value);
+  }
+
+  /** 扇を開く打撃の閾値（開発つまみ）。**コアより高く保つのが本来の階層。** */
+  setFanThreshold(value: number): void {
+    this.fanGate = clamp01(value);
   }
 
   /** 表現を開き直したときに呼ぶ。前の曲の余韻も統計も持ち越さない。 */
@@ -246,6 +331,14 @@ export class OpticsAudioDrive {
     this.pendingFragments.length = 0;
     this.fragmentBirths = 0;
     this.fragmentSuppressed = 0;
+    this.heldFanPower = 0;
+    this.heldFanSeed = 0;
+    this.fanTicksLeft = 0;
+    this.fanHoldFrames = 0;
+    this.fanAge = 0;
+    this.fanCount = 0;
+    this.fanVisibleFrames = 0;
+    this.frameCount = 0;
   }
 
   /**
@@ -265,6 +358,7 @@ export class OpticsAudioDrive {
     deltaSeconds: number,
   ): void {
     const playing = audio.active === 1;
+    this.frameCount += 1;
 
     // ---- 持続（Step 1）: 音量を 3 つの時定数で受ける（状態の量。連続で回す）----
     this.source = playing ? clamp01(audio.volume ?? 0) : 0;
@@ -274,6 +368,7 @@ export class OpticsAudioDrive {
 
     if (this.coreFramesLeft > 0) this.coreFramesLeft -= 1;
     if (this.armFramesLeft > 0) this.armFramesLeft -= 1;
+    if (this.fanHoldFrames > 0) this.fanHoldFrames -= 1;
 
     // ---- 光学クロック: ティックを跨いだら表示状態を再サンプルする ----
     if (this.strobeEnabled) {
@@ -302,6 +397,10 @@ export class OpticsAudioDrive {
       this.heldArmMask = 0;
       this.armTicksLeft = 0;
       this.armFramesLeft = 0;
+      // 無音では扇も閉じる（無音 = 黒）。
+      this.heldFanPower = 0;
+      this.fanTicksLeft = 0;
+      this.fanHoldFrames = 0;
       // 無音では断片も生まれず、生きているものも消える（無音 = 黒）。
       this.liveFragments.length = 0;
       this.pendingFragments.length = 0;
@@ -336,8 +435,8 @@ export class OpticsAudioDrive {
         clamp01(event.snapshot.novelty), event.band);
 
       // **強い音のときだけ光る。** 閾値未満はコアを出さない。
-      if (strength < DRIVE.coreStrengthGate) continue;
-      const above = (strength - DRIVE.coreStrengthGate) / (1 - DRIVE.coreStrengthGate);
+      if (strength < this.coreGate) continue;
+      const above = (strength - this.coreGate) / Math.max(1 - this.coreGate, 1e-6);
       const pulse =
         DRIVE.coreMinimumPulse +
         (1 - DRIVE.coreMinimumPulse) * Math.pow(clamp01(above), DRIVE.coreCurveExponent);
@@ -361,7 +460,31 @@ export class OpticsAudioDrive {
       // 強い打撃だけ 1 ティック長く残す。
       this.armTicksLeft = pulse > 0.75 ? 2 : 1;
       this.armFramesLeft = DRIVE.coreMinimumFrames;
+
+      // ---- 扇（Step 4）: **コアより高い閾値を越えた強打だけ** ----
+      // 階層は 弱打 = 無 / 中打 = コア + アーム / 強打 = コア + アーム + 扇。
+      if (strength < this.fanGate) continue;
+      const fanAbove = clamp01((strength - this.fanGate) / Math.max(1 - this.fanGate, 1e-6));
+      const power =
+        DRIVE.fanMinimumPower +
+        (1 - DRIVE.fanMinimumPower) * Math.pow(fanAbove, DRIVE.fanCurveExponent);
+      // **打撃ティックで即出現する。** 値はこの瞬間に確定し、以後は動かない。
+      this.heldFanPower = Math.max(this.heldFanPower, power);
+      // 向き・角度幅の個体差の元。打撃の音のシードと通し番号だけから決まる（決定論）。
+      this.heldFanSeed =
+        (Math.round(clamp01(event.snapshot.audioSeed) * 60013) + event.eventIndex * 4099) &
+        0x7fffffff;
+      // 寿命は 2〜4 ティック（強打ほど長い）。on/off を交互に繰り返すので表示はその半分。
+      this.fanTicksLeft = Math.min(
+        Math.max(Math.round(DRIVE.fanLifeBase + fanAbove * DRIVE.fanLifeFromStrength), 2),
+        DRIVE.fanLifeBase + DRIVE.fanLifeFromStrength,
+      );
+      this.fanAge = 0;
+      this.fanHoldFrames = DRIVE.fanMinimumFrames;
+      this.fanCount += 1;
     }
+
+    if (this.publishedFanPower() > 0) this.fanVisibleFrames += 1;
   }
 
   /**
@@ -425,6 +548,19 @@ export class OpticsAudioDrive {
     } else {
       this.heldArmMask = 0;
     }
+    // 扇も寿命をティックで数える。**生きているあいだ on / off を交互に繰り返し、
+    // 最後のティックでフェードせずに消える。**
+    // 誕生直後の on が実フレーム下限に届いていないあいだは歳を取らせない。
+    // これで扇の出入りは必ずティック境界だけで起きる（打撃での出現だけが例外）。
+    if (this.fanTicksLeft > 0) {
+      if (this.fanHoldFrames <= 0) {
+        this.fanAge += 1;
+        this.fanTicksLeft -= 1;
+        if (this.fanTicksLeft <= 0) this.heldFanPower = 0;
+      }
+    } else {
+      this.heldFanPower = 0;
+    }
     // 断片の寿命はティックで数える。**寿命が尽きたらフェードせずに消える。**
     let write = 0;
     for (let read = 0; read < this.liveFragments.length; read++) {
@@ -474,6 +610,13 @@ export class OpticsAudioDrive {
       visibleFragments: this.visibleFragments().length,
       fragmentBirths: this.fragmentBirths,
       fragmentSuppressed: this.fragmentSuppressed,
+      fanPower: this.publishedFanPower(),
+      fanCount: this.fanCount,
+      fanVisibleFrames: this.fanVisibleFrames,
+      frameCount: this.frameCount,
+      fanSeed: this.publishedFanPower() > 0 ? this.heldFanSeed : -1,
+      coreThreshold: this.coreGate,
+      fanThreshold: this.fanGate,
     };
   }
 
@@ -485,6 +628,18 @@ export class OpticsAudioDrive {
   /** アームもコアと同じ規律で、打撃のティックのあいだだけ出る。 */
   private publishedArmMask(): number {
     return this.armTicksLeft > 0 || this.armFramesLeft > 0 ? this.heldArmMask : 0;
+  }
+
+  /**
+   * 扇が開いているのは、寿命の中の **on のティックだけ**。
+   * 誕生ティック（`fanAge = 0`）で点き、次のティックで消え、また点く。
+   * 誕生直後の on は `fanHoldFrames` が尽きるまで歳を取らないので、
+   * 実フレーム下限は満たしつつ、消灯はティック境界に揃う。
+   */
+  private publishedFanPower(): number {
+    if (this.fanTicksLeft <= 0) return 0;
+    if (!this.strobeEnabled) return this.heldFanPower;
+    return this.fanAge % STROBE.period < STROBE.onTicks ? this.heldFanPower : 0;
   }
 
   /**
@@ -506,8 +661,9 @@ export class OpticsAudioDrive {
       // 断片は spawn 側で作るので、つまみ由来の energy は使わない。
       fragmentEnergy: 0,
       fragments: this.visibleFragments(),
-      // Step 4 で配線する。それまでは 0（＝その層は出ない）。
-      fanGate: 0,
+      // 強打だけが開く扇（Step 4）。強さも個体差も打撃の瞬間に確定する。
+      fanGate: this.publishedFanPower(),
+      fanSeed: this.heldFanSeed,
       // Step 5 で配線する。それまでは開発つまみの値をそのまま使う。
       huePhase: manual.huePhase,
       seed: manual.seed,

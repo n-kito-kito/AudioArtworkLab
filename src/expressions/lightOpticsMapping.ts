@@ -177,7 +177,7 @@ const STROBE_KEY = {
   curtain: 2000,
   skeleton: 3000,
   fragment: 4000,
-  fan: 5000,
+  // 扇は 1 枚しかなく、出し入れは `OpticsAudioDrive` が寿命と一緒に決めるので鍵を持たない。
 } as const;
 
 /**
@@ -228,8 +228,14 @@ export interface OpticsDrive {
    * 寿命と on/off の判定は `OpticsAudioDrive` が済ませてある（光は連続量として動かさない）。
    */
   readonly fragments: readonly FragmentSpawn[];
-  /** 強 onset の閾値ゲート → 放射の扇。0 で出ない。 */
+  /** 強 onset の閾値ゲート → 放射の扇。0 で出ない。1 で最大の広がりと強さ。 */
   readonly fanGate: number;
+  /**
+   * **扇 1 回ごとの個体差の元**（整数）。**−1 は素の扇**で、
+   * 静止画スタディ（Manual）の見え方をそのまま保つ。
+   * 0 以上では向き・角度幅・本数が打撃のシードで少しだけ振れる。
+   */
+  readonly fanSeed: number;
   /** 音色の持続値 → グローバル波長 H（0〜1 の位相）。**補間せずイベント的に切り替わる。** */
   readonly huePhase: number;
   /** 断片の散らばりを決めるシード（整数）。 */
@@ -922,20 +928,40 @@ const buildFragments = (
 };
 
 /**
- * **④ 扇。** コアからの放射状光条。閾値ゲート（`fanGate`）が開いたときだけ出る。
- * 中心は骨格と同じ中央軸で、向きは固定（不規則さは担わない）。
+ * **④ 扇。** コアからの放射状光条。**強打の閾値**（`fanGate`）が開いたときだけ出る。
+ * 中心は骨格と同じ中央軸で、**下向きが基本**。リファレンスの扇は下方向と斜めにだけ
+ * 伸びるので、全周へは回さない。
+ *
+ * 打撃ごとの個体差は `fanSeed` が担う — 左右の偏り（±0.25 rad ≒ ±14°）と
+ * 角度幅・本数が少し振れるだけで、**下向きという性格は動かさない**。
+ * `fanSeed < 0`（Manual）は素の扇で、静止画スタディの見え方をそのまま保つ。
+ *
+ * 広がり・到達・強さは `fanGate`（＝打撃の強さ）に追従する。
+ * **on / off の出し入れは `OpticsAudioDrive` が済ませてある**ので、
+ * 断片と同じくここでは間引かない（光は連続量として動かさない）。
  */
 const buildFan = (drive: OpticsDrive): OpticalLayerTraits[] => {
   const gate = clamp01(drive.fanGate);
   if (gate <= 0) return [];
-  return strobed([
+  const seed = Math.round(drive.fanSeed);
+  // 素の扇（Manual）は中立値 0.5 を使う ＝ 従来の固定値と完全に一致する。
+  const a = seed >= 0 ? hash01(seed, 101) : 0.5;
+  const b = seed >= 0 ? hash01(seed, 102) : 0.5;
+  const c = seed >= 0 ? hash01(seed, 103) : 0.5;
+  return [
     layer({
       kind: 'fan',
       position: [0, 0, -5.9],
-      half: [2.5, 2.5],
-      // 基準角は下向き。リファレンスの扇は下方向と斜めにだけ伸びる（全周には出ない）。
+      // 強打ほど板ごと大きい（＝広がりが増える）。
+      half: [2.5 * mix(0.82, 1, gate), 2.5 * mix(0.82, 1, gate)],
+      // 基準角は下向き。左右の偏りだけが打撃ごとに変わる。
       // [基準角, 広がり, 本数, 到達]
-      shape: [-1.42, 0.82, 3.2, 0.66],
+      shape: [
+        -1.42 + (a - 0.5) * 0.5,
+        0.82 + (b - 0.5) * 0.4,
+        3.2 + (c - 0.5) * 1.2,
+        mix(0.46, 0.66, gate),
+      ],
       preferredRoles: ['caustic-fan', 'wide-caustic'],
       fallbackTile: 1,
       crop: [0.5, 0.5, 0.8, 0.8],
@@ -946,7 +972,7 @@ const buildFan = (drive: OpticsDrive): OpticalLayerTraits[] => {
       axis: [1, 0],
       channel: [1.3, 1.4, 0.04, 0.22],
     }),
-  ], drive, STROBE_KEY.fan);
+  ];
 };
 
 /**

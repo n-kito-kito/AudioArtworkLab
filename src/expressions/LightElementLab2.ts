@@ -18,7 +18,11 @@ import {
   type OpticalLayerTraits,
   type OpticsDrive,
 } from './lightOpticsMapping';
-import { OpticsAudioDrive, type OpticsDriveLevels } from './opticsAudioDrive';
+import {
+  OPTICS_THRESHOLDS,
+  OpticsAudioDrive,
+  type OpticsDriveLevels,
+} from './opticsAudioDrive';
 import { loadPrismAtlas, type PrismAtlas, type PrismTile } from './prismAtlas';
 
 /**
@@ -56,8 +60,11 @@ const GROUP_LABELS: Readonly<Record<OpticalGroup, string>> = {
 
 /** この表現の描画側の定数。光学系そのものの数値は `lightOpticsMapping.ts` にある。 */
 const LAB2 = {
-  /** インスタンスの上限。All（骨格 3 + 断片 6 + 扇 1 + コア 1）に余裕を持たせる。 */
-  maximumLayers: 24,
+  /**
+   * インスタンスの上限。Audio の最悪ケース
+   * （膜 2 + カーテン 3 + 骨格 3 + 断片 12 + 扇 1 + コア 1 + アーム 4）に余裕を持たせる。
+   */
+  maximumLayers: 28,
   nearPlane: 0.1,
   farPlane: 80,
   atlas: {
@@ -166,6 +173,13 @@ export class LightElementLab2 implements LabExpression {
   /** ストロボ（光学クロックの量子化）。A/B 比較のために切れる。 */
   private strobeEnabled = true;
   private strobeRate: number = STROBE.defaultRate;
+  /**
+   * **発光の閾値（開発つまみ・Audio のみ）。** 既定はアダプタの焼き込み値。
+   * コア（弱打を落とす）< 扇（強打だけ開く）という階層を保つための道具で、
+   * 本番 UI には出さない（PRD D17）。
+   */
+  private coreThreshold: number = OPTICS_THRESHOLDS.core;
+  private fanThreshold: number = OPTICS_THRESHOLDS.fan;
   /** ドライブの供給元。既定は Manual（静止画スタディの見え方を変えないため）。 */
   private driveMode: DriveMode = 'manual';
   /** 音 → ドライブの変換。対応の記述はこのアダプタ 1 つに集約する。 */
@@ -277,6 +291,8 @@ export class LightElementLab2 implements LabExpression {
       // 静止画スタディは spawn を持たない（つまみの energy と seed から作る）。
       fragments: [],
       fanGate: this.fanGateOpen ? 1 : 0,
+      // 静止画スタディの扇は素のまま（−1）。個体差は打撃が持つので Audio 側の仕事。
+      fanSeed: -1,
       huePhase: this.params.huePhase,
       seed: this.params.fragmentSeed,
       // 静止画スタディは計測器なので連続表示のまま（ストロボは Audio 側の仕事）。
@@ -904,7 +920,7 @@ export class LightElementLab2 implements LabExpression {
     const levels = this.audioDrive.levels();
     const drive =
       this.driveMode === 'audio'
-        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / arms ${levels.armMask} / frag ${levels.visibleFragments}/${levels.liveFragments} (×${levels.fragmentBirths}) / tick ${levels.tick}`
+        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / arms ${levels.armMask} / frag ${levels.visibleFragments}/${levels.liveFragments} (×${levels.fragmentBirths}) / fan ${levels.fanPower.toFixed(2)} ×${levels.fanCount} / tick ${levels.tick}`
         : `manual pulse ${this.params.corePulse.toFixed(2)}`;
     return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
   }
@@ -970,6 +986,23 @@ export class LightElementLab2 implements LabExpression {
         max: 60,
         step: 1,
         value: this.strobeRate,
+      },
+      // ---- 発光の閾値（Audio のみ。弱打 = 無 / 中打 = コア + アーム / 強打 = + 扇）----
+      {
+        key: 'coreThreshold',
+        label: 'Core threshold',
+        min: 0,
+        max: 0.8,
+        step: 0.01,
+        value: this.coreThreshold,
+      },
+      {
+        key: 'fanThreshold',
+        label: 'Fan threshold',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: this.fanThreshold,
       },
       {
         key: 'coreShape',
@@ -1097,6 +1130,18 @@ export class LightElementLab2 implements LabExpression {
       if (!Number.isFinite(rate)) return;
       this.strobeRate = clamp(Math.round(rate), 6, 60);
       this.audioDrive.setStrobe(this.strobeEnabled, this.strobeRate);
+      return;
+    }
+    if (key === 'coreThreshold' || key === 'fanThreshold') {
+      const gate = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(gate)) return;
+      if (key === 'coreThreshold') {
+        this.coreThreshold = clamp(gate, 0, 0.8);
+        this.audioDrive.setCoreThreshold(this.coreThreshold);
+      } else {
+        this.fanThreshold = clamp(gate, 0, 1);
+        this.audioDrive.setFanThreshold(this.fanThreshold);
+      }
       return;
     }
     if (key === 'manualArms') {
