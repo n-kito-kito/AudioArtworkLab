@@ -203,6 +203,12 @@ export class LightElementLab2 implements LabExpression {
    * **0 で蓄積を切る**＝写像だけの従来の見え方に戻る。
    */
   private traceAmount: number = OPTICS_THRESHOLDS.traceAmount;
+  /**
+   * **帯域 → R/G/B の効き（開発つまみ・Audio のみ）。**
+   * 0 で手動の R/G/B つまみのまま、1 で完全に帯域バランスが色調を決める。
+   * 中間はブレンドで、**接続の強さそのものを調整できる**（対応を焼き込まない）。
+   */
+  private channelDrive: number = OPTICS_THRESHOLDS.channelDrive;
   /** ドライブの供給元。既定は Manual（静止画スタディの見え方を変えないため）。 */
   private driveMode: DriveMode = 'manual';
   /** 音 → ドライブの変換。対応の記述はこのアダプタ 1 つに集約する。 */
@@ -336,6 +342,28 @@ export class LightElementLab2 implements LabExpression {
    */
   private activeHue(): number {
     return this.driveMode === 'audio' ? this.audioDrive.huePhase() : this.params.huePhase;
+  }
+
+  /**
+   * **いま効いているチャンネル利得。**
+   * Manual は手動の R/G/B つまみ、Audio は帯域バランスとのブレンド。
+   * 帯域が均等なら利得は (1, 1, 1) ＝ 無彩なので、**チルトが無いときは従来と同じ**。
+   * 利得は必ず 1 以下なので、白の予算（コアだけが白へ届く）は動かない。
+   */
+  private channelTilt(): readonly [number, number, number] {
+    const manual: readonly [number, number, number] = [
+      this.params.redGain,
+      this.params.greenGain,
+      this.params.blueGain,
+    ];
+    if (this.driveMode !== 'audio' || this.channelDrive <= 0) return manual;
+    const driven = this.audioDrive.channelGain();
+    const t = this.channelDrive;
+    return [
+      manual[0] + (manual[0] * driven[0] - manual[0]) * t,
+      manual[1] + (manual[1] * driven[1] - manual[1]) * t,
+      manual[2] + (manual[2] * driven[2] - manual[2]) * t,
+    ];
   }
 
   /** いま採用するドライブ。供給元を切り替えるだけで、リグ側は何も変わらない。 */
@@ -820,11 +848,10 @@ export class LightElementLab2 implements LabExpression {
     const material = this.material;
     if (material) {
       material.uniforms.uIntensity!.value = this.params.intensity;
-      (material.uniforms.uChannelGain!.value as THREE.Vector3).set(
-        this.params.redGain,
-        this.params.greenGain,
-        this.params.blueGain,
-      );
+      // **チャンネル利得。** Audio では帯域バランスが色調を傾ける（Bass=R / Mid=G / Treble=B）。
+      // つまみ 0 で手動のまま、1 で完全に帯域駆動、中間はブレンド。
+      const tilt = this.channelTilt();
+      (material.uniforms.uChannelGain!.value as THREE.Vector3).set(tilt[0], tilt[1], tilt[2]);
       material.uniforms.uOffset!.value = this.params.channelOffset;
       material.uniforms.uOffsetMode!.value = this.offsetMode === 'radial' ? 0 : 1;
       material.uniforms.uDecorrelation!.value = this.params.decorrelation;
@@ -1053,6 +1080,14 @@ export class LightElementLab2 implements LabExpression {
         value: this.fieldGain,
       },
       {
+        key: 'channelDrive',
+        label: 'Channel drive',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: this.channelDrive,
+      },
+      {
         key: 'traceAmount',
         label: 'Trace amount',
         min: 0,
@@ -1238,6 +1273,12 @@ export class LightElementLab2 implements LabExpression {
       if (!Number.isFinite(gamma)) return;
       this.sustainGamma = clamp(gamma, 0.1, 1);
       this.audioDrive.setSustainGamma(this.sustainGamma);
+      return;
+    }
+    if (key === 'channelDrive') {
+      const drive = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(drive)) return;
+      this.channelDrive = clamp(drive, 0, 1);
       return;
     }
     if (key === 'traceAmount') {

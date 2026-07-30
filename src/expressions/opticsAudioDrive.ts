@@ -140,6 +140,21 @@ const DRIVE = {
    */
   fanMinimumFrames: 2,
 
+  // ---- 帯域 → R/G/B チャンネル（色調のチルト）----
+  /**
+   * **帯域の持続値の時定数（秒）。** 打撃 1 発では動かず、
+   * 「いまどの帯域が鳴っているか」の持続だけがチルトを決める。
+   */
+  channelSeconds: 1.2,
+  /**
+   * **チルトの深さ。** 0 で無彩（従来どおり）、1 で「鳴っていない帯域は真っ暗」。
+   *
+   * 山になっている帯域を持ち上げるのではなく、**鳴っていない帯域を落とす**。
+   * こうすると利得は必ず 1 以下に収まるので、**白の予算を 1 mm も超えない**
+   * （持ち上げる作りにすると、コア以外の層が白へ届いてしまう）。
+   */
+  channelTilt: 0.45,
+
   // ---- 断片の痕跡場（蓄積）----
   /**
    * **痕跡場の解像度。** 粗くてよい。ここは「どこで断片が消えたか」の記憶であって
@@ -265,6 +280,8 @@ export const OPTICS_THRESHOLDS = {
   fieldGain: DRIVE.fieldGain,
   /** 痕跡場の効き。開発つまみ `Trace amount` の初期値。 */
   traceAmount: 0.5,
+  /** 帯域 → R/G/B の効き。開発つまみ `Channel drive` の初期値。 */
+  channelDrive: 0.5,
   /** H の切替の粘り（Step 5）。開発つまみ `Hue confirm` / `Hue hold` の初期値。 */
   hueConfirm: DRIVE.hueConfirmSeconds,
   hueHold: DRIVE.hueHoldSeconds,
@@ -329,6 +346,9 @@ export interface OpticsDriveLevels {
   /** 置いた総量と、引き寄せが効いた断片の数。 */
   readonly traceDeposits: number;
   readonly traceAimed: number;
+  /** 帯域の持続値と、そこから作ったチャンネル利得（Bass = R / Mid = G / Treble = B）。 */
+  readonly bands: readonly [number, number, number];
+  readonly channel: readonly [number, number, number];
 }
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -438,6 +458,17 @@ export class OpticsAudioDrive {
   /** 引き寄せの強さ（開発つまみ `Trace amount`）。**0 で完全に従来どおり。** */
   private traceAmount = 0.5;
 
+  // ---- 帯域 → R/G/B チャンネル（色調のチルト）----
+  /** 帯域の持続値。打撃では動かず、区間の色合いだけを表す。 */
+  private bandLow = 0;
+  private bandMid = 0;
+  private bandHigh = 0;
+  /**
+   * ティックの頭で確定したチャンネル利得。**光と同じ規律で latch する**ので、
+   * 色調も連続では動かず、ティック単位で切り替わる。
+   */
+  private heldChannel: [number, number, number] = [1, 1, 1];
+
   /**
    * **④ 扇。** コアより高い閾値を越えた強打だけで開く。
    * コア・アームと同じ規律で、打撃のティックで即出現し、数ティックで消える。
@@ -523,6 +554,26 @@ export class OpticsAudioDrive {
     this.traceAmount = clamp01(value);
   }
 
+  /**
+   * **帯域バランスが決めたチャンネル利得**（Bass = R / Mid = G / Treble = B）。
+   *
+   * 鳴っている帯域を 1 に置き、**鳴っていない帯域を落とす**ので、
+   * 帯域が均等なら (1, 1, 1) ＝ 無彩（チルトなし）になる。
+   * 値はティックで latch 済みで、連続では動かない。
+   */
+  channelGain(): readonly [number, number, number] {
+    return this.heldChannel;
+  }
+
+  /** いまの帯域の持続値から利得を作る。**利得は必ず 1 以下**（白の予算を超えない）。 */
+  private channelFromBands(): [number, number, number] {
+    const peak = Math.max(this.bandLow, this.bandMid, this.bandHigh);
+    if (peak <= 1e-4) return [1, 1, 1];
+    const tilt = DRIVE.channelTilt;
+    const at = (value: number): number => 1 - tilt * (1 - clamp01(value / peak));
+    return [at(this.bandLow), at(this.bandMid), at(this.bandHigh)];
+  }
+
   /** H の確認時間（秒・開発つまみ）。短くすると音色の揺れで色が動きやすくなる。 */
   setHueConfirm(seconds: number): void {
     this.hueConfirmSeconds = Math.max(seconds, 0);
@@ -567,6 +618,10 @@ export class OpticsAudioDrive {
     this.pendingFragments.length = 0;
     this.fragmentBirths = 0;
     this.fragmentSuppressed = 0;
+    this.bandLow = 0;
+    this.bandMid = 0;
+    this.bandHigh = 0;
+    this.heldChannel = [1, 1, 1];
     this.trace.fill(0);
     this.tracePeak = 0;
     this.traceDeposits = 0;
@@ -622,6 +677,16 @@ export class OpticsAudioDrive {
     this.updateHue(audio, playing, deltaSeconds);
     // 痕跡場はゆっくり減衰する。無音でも回すので、止まれば筋も薄れていく。
     this.decayTrace(deltaSeconds);
+
+    // ---- 帯域の持続値（色調のチルトの元）----
+    // 無音では 3 本とも 0 へ沈むので、チルトは自然に無彩へ戻る。
+    const lowTarget = playing ? clamp01(audio.bass ?? 0) : 0;
+    const midTarget = playing ? clamp01(audio.mid ?? 0) : 0;
+    const highTarget = playing ? clamp01(audio.treble ?? 0) : 0;
+    this.bandLow = smooth(this.bandLow, lowTarget, deltaSeconds, DRIVE.channelSeconds);
+    this.bandMid = smooth(this.bandMid, midTarget, deltaSeconds, DRIVE.channelSeconds);
+    this.bandHigh = smooth(this.bandHigh, highTarget, deltaSeconds, DRIVE.channelSeconds);
+    if (!this.strobeEnabled) this.heldChannel = this.channelFromBands();
 
     if (this.coreFramesLeft > 0) this.coreFramesLeft -= 1;
     if (this.armFramesLeft > 0) this.armFramesLeft -= 1;
@@ -986,6 +1051,8 @@ export class OpticsAudioDrive {
     this.heldHaze = this.haze;
     // **H の切替もティック境界でだけ起きる。** 中間色は 1 フレームも出ない。
     this.commitHue();
+    // 色調のチルトも同じ規律で latch する（連続では動かさない）。
+    this.heldChannel = this.channelFromBands();
     if (this.coreTicksLeft > 0) {
       this.coreTicksLeft -= 1;
       if (this.coreTicksLeft <= 0 && this.coreFramesLeft <= 0) this.heldCorePulse = 0;
@@ -1083,6 +1150,8 @@ export class OpticsAudioDrive {
       traceCells: this.traceLiveCells(),
       traceDeposits: this.traceDeposits,
       traceAimed: this.traceAimed,
+      bands: [this.bandLow, this.bandMid, this.bandHigh],
+      channel: this.heldChannel,
     };
   }
 
