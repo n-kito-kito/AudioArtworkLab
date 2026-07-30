@@ -1,6 +1,12 @@
 import type { AudioParameters, SpectrumFrame } from '../audio/AudioEngine';
 import { BandLightEventDetector } from '../engine/bandLightEvents';
-import { CORE_SHAPES, RESPONSE_SECONDS, STROBE, type OpticsDrive } from './lightOpticsMapping';
+import {
+  CORE_SHAPES,
+  RESPONSE_SECONDS,
+  STROBE,
+  type FragmentSpawn,
+  type OpticsDrive,
+} from './lightOpticsMapping';
 
 /**
  * **音 → `OpticsDrive` の変換アダプタ（Light Element Lab 2）。**
@@ -24,7 +30,12 @@ import { CORE_SHAPES, RESPONSE_SECONDS, STROBE, type OpticsDrive } from './light
  *   1 ティック（実フレーム 2〜3 枚）で消える。フェードはしない。
  *   **強い打撃だけがコアを出す**（閾値 + 強い側を強調する曲線）。
  *   形状族は打撃の音のシードが選ぶので「毎回同じコア」にならない。
- * - **Step 3（未配線）** 帯域イベント → `fragmentEnergy`。断片の誕生。
+ * - **Step 3（実装済み）** 帯域イベント → 断片の誕生。
+ *   1 イベントで 1〜4 枚。枚数は打撃の強さと新奇性で増え、上限で頭打ちになる
+ *   （上限時は**新規を抑制**する。最古を突然消すと消えたことが見えてしまう）。
+ *   形・位置・縦横比・欠け・傾きは**イベント固有の音シード**だけから決まる。
+ *   寿命はティックで数え（1〜4）、生きているあいだ on / off を交互に繰り返して
+ *   最後のティックで消える。**フェードはしない。**
  * - **Step 4（未配線）** 強 onset の閾値 → `fanGate`。放射の扇。
  * - **Step 5（未配線）** 音色の持続値 → `huePhase`。**補間せずイベント的に切り替える。**
  *   同じく音由来のシード → `seed`（断片・カーテンの散らばり）。
@@ -53,6 +64,27 @@ const DRIVE = {
    * 1 フレームで消えないようにするだけの保険。
    */
   coreMinimumFrames: 2,
+
+  /**
+   * **断片の誕生（Step 3）。** 1 イベントで何枚生まれるか。
+   * 打撃の強さと新奇性で増え、上限で頭打ちになる。
+   */
+  fragmentPerEventBase: 1,
+  fragmentPerEventFromStrength: 1.6,
+  fragmentPerEventFromNovelty: 1.4,
+  fragmentPerEventMaximum: 4,
+  /**
+   * 断片の寿命（ティック）。強い打撃ほど長く残る。
+   * **フェードはしない** — 生きているあいだ on/off を交互に繰り返し、最後のティックで消える。
+   */
+  fragmentLifeBase: 1,
+  fragmentLifeFromStrength: 3,
+  fragmentLifeMaximum: 4,
+  /**
+   * 同時に生きていられる断片の上限。**上限に達したら新規を抑制する**
+   * （最古を突然消すと「消えた」ことが見えてしまうため）。
+   */
+  fragmentLiveMaximum: 12,
   /**
    * 検出器の運転設定。Light Reactive Lab と同じ既定値をそのまま使う
    * （イベント列を別物にしないため）。開発つまみには出さない。
@@ -88,6 +120,12 @@ export interface OpticsDriveLevels {
   readonly coreShape: number;
   /** 光学クロックのティック番号（−1 は連続表示）。 */
   readonly tick: number;
+  /** 生きている断片の数と、このティックで点いている数。 */
+  readonly liveFragments: number;
+  readonly visibleFragments: number;
+  /** 誕生した断片の総数と、上限で抑制された数。 */
+  readonly fragmentBirths: number;
+  readonly fragmentSuppressed: number;
 }
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -139,6 +177,28 @@ export class OpticsAudioDrive {
   private coreTicksLeft = 0;
   private coreFramesLeft = 0;
 
+  /**
+   * 生きている断片。**寿命はティックで数える**（秒ではない）。
+   * 誕生ティックで点き、以後 on / off を交互に繰り返して最後のティックで消える。
+   */
+  private readonly liveFragments: {
+    readonly spawn: FragmentSpawn;
+    /** 誕生してから経過したティック数。 */
+    age: number;
+    /** 生きられるティック数。 */
+    readonly life: number;
+  }[] = [];
+  /**
+   * 打撃で予約され、**次のティックの頭で生まれる**断片。
+   * こうしておくと出入りがティック境界だけで起き、コマ送りの規律が崩れない。
+   */
+  private readonly pendingFragments: {
+    readonly spawn: FragmentSpawn;
+    readonly life: number;
+  }[] = [];
+  private fragmentBirths = 0;
+  private fragmentSuppressed = 0;
+
   /** ストロボの入り切りと速度（開発つまみ）。A/B 比較のために外から触れる。 */
   setStrobe(enabled: boolean, rate: number): void {
     this.strobeEnabled = enabled;
@@ -165,6 +225,10 @@ export class OpticsAudioDrive {
     this.heldCoreShape = -1;
     this.coreTicksLeft = 0;
     this.coreFramesLeft = 0;
+    this.liveFragments.length = 0;
+    this.pendingFragments.length = 0;
+    this.fragmentBirths = 0;
+    this.fragmentSuppressed = 0;
   }
 
   /**
@@ -217,6 +281,9 @@ export class OpticsAudioDrive {
       this.heldCorePulse = 0;
       this.coreTicksLeft = 0;
       this.coreFramesLeft = 0;
+      // 無音では断片も生まれず、生きているものも消える（無音 = 黒）。
+      this.liveFragments.length = 0;
+      this.pendingFragments.length = 0;
       return;
     }
 
@@ -242,6 +309,11 @@ export class OpticsAudioDrive {
       this.strikeCount += 1;
       this.lastStrength = strength;
       this.lastBand = event.band;
+
+      // ---- 断片の誕生（Step 3）: **どの打撃も断片を生む**（コアの閾値とは独立）----
+      this.spawnFragments(event.snapshot.audioSeed, event.eventIndex, strength,
+        clamp01(event.snapshot.novelty), event.band);
+
       // **強い音のときだけ光る。** 閾値未満はコアを出さない。
       if (strength < DRIVE.coreStrengthGate) continue;
       const above = (strength - DRIVE.coreStrengthGate) / (1 - DRIVE.coreStrengthGate);
@@ -260,8 +332,49 @@ export class OpticsAudioDrive {
   }
 
   /**
+   * **1 イベントから断片を生む。**
+   *
+   * 枚数は打撃の強さと新奇性で増え、上限で頭打ちになる。
+   * 上限に達しているときは**新規を抑制する**（最古を突然消すと、消えたことが見えてしまう）。
+   * 形も位置もイベント固有の音シードだけから決まるので、同じ音なら同じ断片になる。
+   */
+  private spawnFragments(
+    audioSeed: number,
+    eventIndex: number,
+    strength: number,
+    novelty: number,
+    band: string,
+  ): void {
+    const count = Math.min(
+      Math.max(
+        Math.round(
+          DRIVE.fragmentPerEventBase +
+            strength * DRIVE.fragmentPerEventFromStrength +
+            novelty * DRIVE.fragmentPerEventFromNovelty,
+        ),
+        1,
+      ),
+      DRIVE.fragmentPerEventMaximum,
+    );
+    const life = Math.min(
+      Math.max(Math.round(DRIVE.fragmentLifeBase + strength * DRIVE.fragmentLifeFromStrength), 1),
+      DRIVE.fragmentLifeMaximum,
+    );
+    // イベント固有の整数シード。同じ音・同じ通し番号なら必ず同じ形になる。
+    const seed = (Math.round(clamp01(audioSeed) * 100003) + eventIndex * 7919) | 0;
+    for (let slot = 0; slot < count; slot++) {
+      if (this.liveFragments.length + this.pendingFragments.length >= DRIVE.fragmentLiveMaximum) {
+        this.fragmentSuppressed += 1;
+        continue;
+      }
+      // **生まれるのは次のティックの頭。** 出入りをティック境界だけに揃える。
+      this.pendingFragments.push({ spawn: { seed, slot, strength, band }, life });
+    }
+  }
+
+  /**
    * ティックの頭。**ここでだけ表示状態が変わる。**
-   * 遅い層はいまの状態の量を写し取り、コアは 1 ティックで消える。
+   * 遅い層はいまの状態の量を写し取り、コアは 1 ティックで消え、断片は 1 つ歳を取る。
    */
   private onTick(): void {
     this.heldSkeleton = this.skeleton;
@@ -273,6 +386,34 @@ export class OpticsAudioDrive {
     } else {
       this.heldCorePulse = 0;
     }
+    // 断片の寿命はティックで数える。**寿命が尽きたらフェードせずに消える。**
+    let write = 0;
+    for (let read = 0; read < this.liveFragments.length; read++) {
+      const entry = this.liveFragments[read]!;
+      entry.age += 1;
+      if (entry.age >= entry.life) continue;
+      this.liveFragments[write] = entry;
+      write += 1;
+    }
+    this.liveFragments.length = write;
+    // 予約されていた断片はここで生まれる（＝出入りはティック境界だけ）。
+    for (const pending of this.pendingFragments) {
+      this.liveFragments.push({ spawn: pending.spawn, age: 0, life: pending.life });
+      this.fragmentBirths += 1;
+    }
+    this.pendingFragments.length = 0;
+  }
+
+  /**
+   * このティックで点いている断片。
+   * 誕生ティックで点き、以後は on / off を交互に繰り返す
+   * （全部が同時に消えないよう、位相は誕生からの経過ティックで決まる）。
+   */
+  private visibleFragments(): FragmentSpawn[] {
+    if (!this.strobeEnabled) return this.liveFragments.map((entry) => entry.spawn);
+    return this.liveFragments
+      .filter((entry) => entry.age % STROBE.period < STROBE.onTicks)
+      .map((entry) => entry.spawn);
   }
 
   /** 開発・検証用。時定数の効きと打撃を時系列で測るために読む。 */
@@ -289,6 +430,10 @@ export class OpticsAudioDrive {
       lastBand: this.lastBand,
       coreShape: this.publishedCorePulse() > 0 ? this.heldCoreShape : -1,
       tick: this.strobeEnabled ? this.tickIndex : -1,
+      liveFragments: this.liveFragments.length,
+      visibleFragments: this.visibleFragments().length,
+      fragmentBirths: this.fragmentBirths,
+      fragmentSuppressed: this.fragmentSuppressed,
     };
   }
 
@@ -313,8 +458,10 @@ export class OpticsAudioDrive {
       curtainLevel: this.heldCurtain,
       hazeLevel: this.heldHaze,
       corePulse: pulse,
-      // Step 3〜4 で配線する。それまでは 0（＝その層は出ない）。
+      // 断片は spawn 側で作るので、つまみ由来の energy は使わない。
       fragmentEnergy: 0,
+      fragments: this.visibleFragments(),
+      // Step 4 で配線する。それまでは 0（＝その層は出ない）。
       fanGate: 0,
       // Step 5 で配線する。それまでは開発つまみの値をそのまま使う。
       huePhase: manual.huePhase,

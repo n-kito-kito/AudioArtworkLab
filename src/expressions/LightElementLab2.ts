@@ -272,6 +272,8 @@ export class LightElementLab2 implements LabExpression {
       hazeLevel: this.params.skeletonLevel,
       corePulse: this.params.corePulse,
       fragmentEnergy: this.params.fragmentEnergy,
+      // 静止画スタディは spawn を持たない（つまみの energy と seed から作る）。
+      fragments: [],
       fanGate: this.fanGateOpen ? 1 : 0,
       huePhase: this.params.huePhase,
       seed: this.params.fragmentSeed,
@@ -884,7 +886,7 @@ export class LightElementLab2 implements LabExpression {
     const levels = this.audioDrive.levels();
     const drive =
       this.driveMode === 'audio'
-        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / tick ${levels.tick}`
+        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / frag ${levels.visibleFragments}/${levels.liveFragments} (×${levels.fragmentBirths}) / tick ${levels.tick}`
         : `manual pulse ${this.params.corePulse.toFixed(2)}`;
     return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
   }

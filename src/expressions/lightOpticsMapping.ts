@@ -68,6 +68,21 @@ export const FRAGMENT_FAMILIES = ['shard', 'sliver', 'plate', 'chip'] as const;
 export type FragmentFamily = (typeof FRAGMENT_FAMILIES)[number];
 
 /**
+ * **帯域イベントが生んだ断片 1 枚。**
+ * 形も位置もこの `seed` と `slot` だけから決まるので、同じイベントなら同じ断片になる。
+ */
+export interface FragmentSpawn {
+  /** イベント固有の音シード（整数）。形状族・位置・縦横比・欠け・傾きの元。 */
+  readonly seed: number;
+  /** そのイベントの中での通し番号。同時に生まれた枚数を散らす。 */
+  readonly slot: number;
+  /** 打撃の強さ（0..1）。誕生時に確定し、以後は変わらない。 */
+  readonly strength: number;
+  /** 発火帯域。控えめな寄せにだけ使う。 */
+  readonly band: string;
+}
+
+/**
  * **コアの形状族。** 打撃ごとに seed が選ぶので「毎回同じコア」にならない。
  * 素の芯（`coreShape < 0`）は静止画スタディ用に温存してある。
  */
@@ -153,8 +168,14 @@ export interface OpticsDrive {
   readonly hazeLevel: number;
   /** onset 強度 → コアの脈動。1 で白熱の頂点。 */
   readonly corePulse: number;
-  /** 帯域イベント → 断片の量と明るさ。 */
+  /** 帯域イベント → 断片の量と明るさ（Manual の静止画スタディ用）。 */
   readonly fragmentEnergy: number;
+  /**
+   * **帯域イベントが生んだ断片**（Audio）。空なら Manual の作り方へ落ちる。
+   * ここに載っているのは**このティックで点いているものだけ**で、
+   * 寿命と on/off の判定は `OpticsAudioDrive` が済ませてある（光は連続量として動かさない）。
+   */
+  readonly fragments: readonly FragmentSpawn[];
   /** 強 onset の閾値ゲート → 放射の扇。0 で出ない。 */
   readonly fanGate: number;
   /** 音色の持続値 → グローバル波長 H（0〜1 の位相）。**補間せずイベント的に切り替わる。** */
@@ -654,10 +675,111 @@ const buildCore = (drive: OpticsDrive): OpticalLayerTraits[] => {
  *   plate  … 不等辺の四辺形の板片 / chip … 角の欠けた小片
  * 伸び（縦横比）は板が持ち、輪郭だけを形状族が作る。
  */
+/**
+ * 断片 1 枚を組む。**Manual（seed + energy）と Audio（イベントごとの spawn）で
+ * まったく同じ式を通す**ので、生まれ方が違っても見え方の文法は 1 つである。
+ *
+ * `bias` は発火帯域による**控えめな**寄せ（強い固定ルールにはしない）。
+ */
+const makeFragment = (
+  seed: number,
+  index: number,
+  familyOffset: number,
+  intensityScale: number,
+  bias: { readonly size: number; readonly lift: number; readonly family: number },
+  viewport: OpticsViewport,
+): OpticalLayerTraits => {
+  const a = hash01(seed, index * 7 + 1);
+  const b = hash01(seed, index * 7 + 2);
+  const c = hash01(seed, index * 7 + 3);
+  const d = hash01(seed, index * 7 + 4);
+  const e = hash01(seed, index * 7 + 5);
+  const g = hash01(seed, index * 7 + 6);
+  const h = hash01(seed, index * 7 + 7);
+  // **族は層化して引く。** 素のハッシュだと seed によっては全部同じ族になり、
+  // 「同じ形の使い回し」に逆戻りする。並び順を seed でずらしつつ、
+  // ときどき 1 つ飛ばして規則性も消す。
+  const family =
+    (index + familyOffset + bias.family + (g > 0.72 ? 1 : 0) + FRAGMENT_FAMILIES.length) %
+    FRAGMENT_FAMILIES.length;
+  const z = -(5.2 + b * 7.4);
+  const extent = visibleHalfExtent(z, viewport);
+  // 周縁に散らす。中央軸は骨格のものなので、半径の下限を置いて避ける。
+  const angle = a * TAU;
+  const radius = 0.44 + c * 0.52;
+  const size = (0.2 + d * 0.4) * (Math.abs(z) / 6) * bias.size;
+  // 族ごとの縦横比。伸びは板が持つので、輪郭の式は正方の p 空間で書ける。
+  const stretch =
+    family === 1
+      ? 2.1 + h * 1.5 // sliver は細長い
+      : family === 2
+        ? 1.1 + h * 0.7 // plate は少し横長
+        : 0.85 + h * 0.5; // shard / chip はほぼ等方
+  return layer({
+    kind: 'veil',
+    position: [
+      Math.cos(angle) * extent.halfWidth * radius,
+      Math.sin(angle) * extent.halfHeight * radius + extent.halfHeight * bias.lift,
+      z,
+    ],
+    half: [size * stretch, size / Math.sqrt(stretch)],
+    spin: e * TAU,
+    preferredRoles: ['wide-caustic', 'wide-haze', 'layered-sheets'],
+    fallbackTile: (index * 3 + seed) % 10,
+    crop: [0.3 + a * 0.4, 0.3 + c * 0.4, 0.5, 0.5],
+    uvAngle: d * TAU,
+    flipX: e > 0.5 ? -1 : 1,
+    // H への小さなオフセットだけ。断片が独立の色を持たないようにする。
+    hueDelta: (a - 0.5) * 0.07,
+    hueSpan: 0.1,
+    gradientForm: 3,
+    // 断片は「一時的で半透明」。輪郭が立つと貼り紙に見えるので薄く保つ。
+    intensity: (0.14 + c * 0.13) * intensityScale,
+    // [縁, 形状族, 形の中の伸び, 欠けの深さ]
+    shape: [0.34, family, 0.75 + h * 0.6, 0.04 + d * 0.2],
+    axis: [1, 0],
+    // 白の予算を持たないので、下限で必ずチャンネルをずらす。
+    channel: [1.4, 1.6, 0.05, 0.3],
+  });
+};
+
+/** 発火帯域による控えめな寄せ。大きさ・高さ・族の並びを少しだけ動かす。 */
+const BAND_BIAS: Readonly<
+  Record<string, { readonly size: number; readonly lift: number; readonly family: number }>
+> = {
+  // 低い音は「やや大きめ・やや低い位置」。
+  bass: { size: 1.26, lift: -0.16, family: 0 },
+  mid: { size: 1, lift: 0, family: 1 },
+  // 高い音は「小さめ・やや高い位置」で、細長い族へ寄りやすい。
+  treble: { size: 0.78, lift: 0.12, family: 2 },
+};
+
+const NEUTRAL_BIAS = { size: 1, lift: 0, family: 0 } as const;
+
 const buildFragments = (
   drive: OpticsDrive,
   viewport: OpticsViewport,
 ): OpticalLayerTraits[] => {
+  // ---- Audio: 帯域イベントが生んだ断片。**すでに寿命とティックで間引かれている** ----
+  if (drive.fragments.length > 0) {
+    return drive.fragments.map((spawn) => {
+      const bias = BAND_BIAS[spawn.band] ?? NEUTRAL_BIAS;
+      const familyOffset = Math.floor(
+        hash01(spawn.seed + 1013, 7) * FRAGMENT_FAMILIES.length,
+      );
+      // 打撃が強いほど少しだけ濃い。フェードはしないので、これは誕生時に確定する。
+      return makeFragment(
+        spawn.seed,
+        spawn.slot,
+        familyOffset,
+        0.62 + 0.5 * clamp01(spawn.strength),
+        bias,
+        viewport,
+      );
+    });
+  }
+
+  // ---- Manual: つまみの energy と seed から作る静止画スタディ ----
   const energy = clamp01(drive.fragmentEnergy);
   if (energy <= 0) return [];
   const seed = Math.round(drive.seed);
@@ -668,59 +790,7 @@ const buildFragments = (
     hash01(seed + 1013, 7) * FRAGMENT_FAMILIES.length,
   );
   for (let index = 0; index < count; index++) {
-    const a = hash01(seed, index * 7 + 1);
-    const b = hash01(seed, index * 7 + 2);
-    const c = hash01(seed, index * 7 + 3);
-    const d = hash01(seed, index * 7 + 4);
-    const e = hash01(seed, index * 7 + 5);
-    const g = hash01(seed, index * 7 + 6);
-    const h = hash01(seed, index * 7 + 7);
-    // **族は層化して引く。** 素のハッシュだと seed によっては 6 枚とも同じ族になり、
-    // 「同じ形の使い回し」に逆戻りする。並び順を seed でずらしつつ、
-    // ときどき 1 つ飛ばして規則性も消す。
-    const family =
-      (index + familyOffset + (g > 0.72 ? 1 : 0)) % FRAGMENT_FAMILIES.length;
-    const z = -(5.2 + b * 7.4);
-    const extent = visibleHalfExtent(z, viewport);
-    // 周縁に散らす。中央軸は骨格のものなので、半径の下限を置いて避ける。
-    const angle = a * TAU;
-    const radius = 0.44 + c * 0.52;
-    const size = (0.2 + d * 0.4) * (Math.abs(z) / 6);
-    // 族ごとの縦横比。伸びは板が持つので、輪郭の式は正方の p 空間で書ける。
-    const stretch =
-      family === 1
-        ? 2.1 + h * 1.5 // sliver は細長い
-        : family === 2
-          ? 1.1 + h * 0.7 // plate は少し横長
-          : 0.85 + h * 0.5; // shard / chip はほぼ等方
-    out.push(
-      layer({
-        kind: 'veil',
-        position: [
-          Math.cos(angle) * extent.halfWidth * radius,
-          Math.sin(angle) * extent.halfHeight * radius,
-          z,
-        ],
-        half: [size * stretch, size / Math.sqrt(stretch)],
-        spin: e * TAU,
-        preferredRoles: ['wide-caustic', 'wide-haze', 'layered-sheets'],
-        fallbackTile: (index * 3 + seed) % 10,
-        crop: [0.3 + a * 0.4, 0.3 + c * 0.4, 0.5, 0.5],
-        uvAngle: d * TAU,
-        flipX: e > 0.5 ? -1 : 1,
-        // H への小さなオフセットだけ。断片が独立の色を持たないようにする。
-        hueDelta: (a - 0.5) * 0.07,
-        hueSpan: 0.1,
-        gradientForm: 3,
-        // 断片は「一時的で半透明」。輪郭が立つと貼り紙に見えるので薄く保つ。
-        intensity: (0.14 + c * 0.13) * energy,
-        // [縁, 形状族, 形の中の伸び, 欠けの深さ]
-        shape: [0.34, family, 0.75 + h * 0.6, 0.04 + d * 0.2],
-        axis: [1, 0],
-        // 白の予算を持たないので、下限で必ずチャンネルをずらす。
-        channel: [1.4, 1.6, 0.05, 0.3],
-      }),
-    );
+    out.push(makeFragment(seed, index, familyOffset, energy, NEUTRAL_BIAS, viewport));
   }
   return strobed(out, drive, STROBE_KEY.fragment);
 };
