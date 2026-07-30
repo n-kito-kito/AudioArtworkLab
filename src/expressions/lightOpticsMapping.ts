@@ -68,6 +68,29 @@ export const FRAGMENT_FAMILIES = ['shard', 'sliver', 'plate', 'chip'] as const;
 export type FragmentFamily = (typeof FRAGMENT_FAMILIES)[number];
 
 /**
+ * **光は連続量として動かさない**（恒久方針）。
+ * すべての光は「その瞬間の音に対応した状態」で瞬間的に現れ、瞬間的に消える。
+ * フェード・補間・連続的なスケール変化は描かず、変化は表示 / 非表示の出し入れで表す。
+ */
+export const STROBE = {
+  /** 既定のティック速度（fps 相当）。24 コマのコマ送り感を狙う。 */
+  defaultRate: 24,
+  /** 1 周期のティック数。2 なら 1 ティック点いて 1 ティック消える。 */
+  period: 2,
+  /** 1 周期のうち点いているティック数。 */
+  onTicks: 1,
+} as const;
+
+/** 層のグループ識別子。ストロボの位相を層ごとに散らすための鍵。 */
+const STROBE_KEY = {
+  haze: 1000,
+  curtain: 2000,
+  skeleton: 3000,
+  fragment: 4000,
+  fan: 5000,
+} as const;
+
+/**
  * **速度の階層。** 膜がいちばんゆっくり呼吸し、断片がいちばん速い。
  * 静止画の段階では駆動しないので定数として置くだけで、
  * 次フェーズで音を平滑化するときの時定数（秒）になる。
@@ -115,6 +138,12 @@ export interface OpticsDrive {
   readonly huePhase: number;
   /** 断片の散らばりを決めるシード（整数）。 */
   readonly seed: number;
+  /**
+   * **光学クロックのティック番号。** 光は連続量として動かさず、
+   * このティック単位で表示 / 非表示を出し入れする（コマ送り・ストロボ）。
+   * **−1 は連続表示**（Manual の静止画スタディ。計測器として温存する）。
+   */
+  readonly tick: number;
   /**
    * 開発用の奥行き計測つまみ。0 で作者指定の z をそのまま使う。
    * 0 より大きいと、**見かけの位置と大きさを保ったまま**全層をその正規化深度へ移す。
@@ -245,6 +274,28 @@ export const hash01 = (seed: number, index: number): number => {
 };
 
 /**
+ * **その層がこのティックで表示されるか。**
+ *
+ * 光は連続量として動かさないので、変化はここの出し入れだけで起きる。
+ * 位相は層ごとに違う。全要素が同時に消えて画面全体が明滅するのを避けるため、
+ * **同じグループの中では位相を層化**（`index` で 1 ずつずらす）してあり、
+ * 2 枚以上ある層は必ずどれか 1 枚が点いている。オフセットは seed 由来で決定論。
+ *
+ * `tick < 0` は連続表示（Manual の静止画スタディ。計測器として温存する）。
+ */
+export const strobeVisible = (
+  tick: number,
+  seed: number,
+  groupKey: number,
+  index: number,
+): boolean => {
+  if (tick < 0) return true;
+  const offset = Math.floor(hash01(seed + groupKey, 7717) * STROBE.period);
+  const phase = (((tick + index + offset) % STROBE.period) + STROBE.period) % STROBE.period;
+  return phase < STROBE.onTicks;
+};
+
+/**
  * **奥行きの手がかり（1 本の式）。**
  * 静止画では視差が使えないので、z だけから「遠いほど暗く・遠いほど鈍く」を出す。
  * 層ごとの個別調整はしない — どの層もこの同じ式を通る。
@@ -288,6 +339,20 @@ const layer = (
 });
 
 /**
+ * **ストロボの間引き。** 光は連続量として動かさないので、
+ * 組み上がった層のうち「このティックで点いているもの」だけを残す。
+ * `tick < 0`（Manual）では全部残るので、静止画スタディは連続表示のまま。
+ */
+const strobed = (
+  layers: readonly OpticalLayerTraits[],
+  drive: OpticsDrive,
+  groupKey: number,
+): OpticalLayerTraits[] =>
+  layers.filter((_, index) =>
+    strobeVisible(drive.tick, Math.round(drive.seed), groupKey, index),
+  );
+
+/**
  * **⓪ 膜。** 画面全体をまとめる大面積・低輝度の霞。**リグでいちばん遠く、いちばん暗い。**
  * 役割は 3 つ — ① 明るさの階層の床（黒と中輝度の間を埋める）② 光が散乱する媒質の存在感
  * ③ 最遠の奥行き層。要素が黒に浮いて孤立するのを防ぐためだけに置く。
@@ -304,7 +369,7 @@ const buildHaze = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLayerTr
   // リグでもっとも遠い面（断片の最奥 −12.6 より奥）。奥行きの式でさらに 0.33 倍に落ちる。
   const z = -13.6;
   const extent = visibleHalfExtent(z, viewport);
-  return [
+  return strobed([
     // コア中心の大きな放射グロー。板は画面の 1.25 倍で、縁の窓は画面の内側で 0 になる。
     layer({
       kind: 'haze',
@@ -342,7 +407,7 @@ const buildHaze = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLayerTr
       ceiling: OPTICS.hazeCeiling,
       channel: [1.2, 1.5, 0.04, 0.35],
     }),
-  ];
+  ], drive, STROBE_KEY.haze);
 };
 
 /**
@@ -452,7 +517,7 @@ const buildCurtains = (
       }),
     );
   }
-  return out;
+  return strobed(out, drive, STROBE_KEY.curtain);
 };
 
 /**
@@ -466,7 +531,7 @@ const buildSkeleton = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLay
   const extent = visibleHalfExtent(z, viewport);
   // 板は必ず画面を貫く長さにする（画角が変わっても線が途中で切れない）。
   const reach = Math.max(extent.halfWidth, extent.halfHeight) * 1.3;
-  return [
+  return strobed([
     // 縦の極細線。板ごと 90° 倒し、ローカル x が画面の縦になる。
     layer({
       kind: 'beam',
@@ -505,12 +570,14 @@ const buildSkeleton = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLay
       axis: [0, 1],
       channel: [1, 1, 0.03, 0.2],
     }),
-  ];
+  ], drive, STROBE_KEY.skeleton);
 };
 
 /**
  * **② コア。** 中央の白熱。**白へ到達してよい唯一の層**で、
  * 脈動（`corePulse`）が上がるほど中心が飽和して白になる。
+ *
+ * 打撃の 1 ティックだけ出て消える（光は連続量として動かさない）。
  */
 const buildCore = (drive: OpticsDrive): OpticalLayerTraits[] => {
   const pulse = clamp01(drive.corePulse);
@@ -519,7 +586,7 @@ const buildCore = (drive: OpticsDrive): OpticalLayerTraits[] => {
     layer({
       kind: 'core',
       position: [0, 0, -5.6],
-      // 脈動は「膨らんで引く」。大きさも少しだけ連れて動く。
+      // 大きさも打撃の強さで決まる。**表示のたびに確定し、その表示中は動かない。**
       half: [mix(0.34, 0.5, pulse), mix(0.34, 0.5, pulse)],
       preferredRoles: ['layered-sheets', 'curved-volume'],
       fallbackTile: 3,
@@ -615,7 +682,7 @@ const buildFragments = (
       }),
     );
   }
-  return out;
+  return strobed(out, drive, STROBE_KEY.fragment);
 };
 
 /**
@@ -625,7 +692,7 @@ const buildFragments = (
 const buildFan = (drive: OpticsDrive): OpticalLayerTraits[] => {
   const gate = clamp01(drive.fanGate);
   if (gate <= 0) return [];
-  return [
+  return strobed([
     layer({
       kind: 'fan',
       position: [0, 0, -5.9],
@@ -643,7 +710,7 @@ const buildFan = (drive: OpticsDrive): OpticalLayerTraits[] => {
       axis: [1, 0],
       channel: [1.3, 1.4, 0.04, 0.22],
     }),
-  ];
+  ], drive, STROBE_KEY.fan);
 };
 
 /**

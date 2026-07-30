@@ -1,6 +1,6 @@
 import type { AudioParameters, SpectrumFrame } from '../audio/AudioEngine';
 import { BandLightEventDetector } from '../engine/bandLightEvents';
-import { RESPONSE_SECONDS, type OpticsDrive } from './lightOpticsMapping';
+import { RESPONSE_SECONDS, STROBE, type OpticsDrive } from './lightOpticsMapping';
 
 /**
  * **音 → `OpticsDrive` の変換アダプタ（Light Element Lab 2）。**
@@ -20,8 +20,8 @@ import { RESPONSE_SECONDS, type OpticsDrive } from './lightOpticsMapping';
  *   音が止まれば 3 層とも黒へ沈むが、**膜が最後まで残って消える**。
  * - **Step 2（実装済み）** onset 強度 → `corePulse`。コアの脈動。
  *   `BandLightEventDetector` の発火 1 回につき **1 脈動**。
- *   立ち上がりは**そのフレームで即座**（滑らかに上げると打撃が消える）、
- *   短い Hold のあと `RESPONSE_SECONDS.core` で戻る。
+ *   **光は連続量として動かさない**ので、打撃の瞬間にその強さで現れ、
+ *   1 ティック（実フレーム 2〜3 枚）で消える。フェードはしない。
  * - **Step 3（未配線）** 帯域イベント → `fragmentEnergy`。断片の誕生。
  * - **Step 4（未配線）** 強 onset の閾値 → `fanGate`。放射の扇。
  * - **Step 5（未配線）** 音色の持続値 → `huePhase`。**補間せずイベント的に切り替える。**
@@ -34,15 +34,14 @@ import { RESPONSE_SECONDS, type OpticsDrive } from './lightOpticsMapping';
 /** この変換の定数。**対応の数値はすべてここに集める。** */
 const DRIVE = {
   /**
-   * **脈動の Hold（秒）。** 打撃の頂点を数フレームだけ保つ。
-   * 0 にすると 1 フレームで落ち始めるので、点滅が目で追えなくなる。
-   */
-  corePulseHold: 0.035,
-  /**
    * 脈動の下限。検出器が拾った以上は必ず目に見える明るさにする。
-   * これより弱い strength でも「1 打あった」ことは分かる。
    */
   corePulseFloor: 0.22,
+  /**
+   * コアを出しておく実フレーム数の下限。ティックの終わり際に来た打撃でも
+   * 1 フレームで消えないようにするだけの保険。
+   */
+  coreMinimumFrames: 2,
   /**
    * 検出器の運転設定。Light Reactive Lab と同じ既定値をそのまま使う
    * （イベント列を別物にしないため）。開発つまみには出さない。
@@ -65,13 +64,17 @@ export interface OpticsDriveLevels {
   readonly haze: number;
   /** 平滑前のソース（音量の持続）。時定数の効きを見るために出す。 */
   readonly source: number;
-  /** コアの脈動（0..1）。打撃で跳ね、短い Hold のあと落ちる。 */
+  /** コアの脈動（0..1）。閾値を越えた打撃の 1 ティックだけ立つ。 */
   readonly corePulse: number;
-  /** 発火した打撃の総数。1 打 = 1 脈動であることを数で確かめるために出す。 */
+  /** 発火した打撃の総数。 */
+  readonly strikeCount: number;
+  /** そのうちコアを出した（閾値を越えた）打撃の数。 */
   readonly pulseCount: number;
   /** 直近の打撃の強さと帯域。 */
   readonly lastStrength: number;
   readonly lastBand: string | null;
+  /** 光学クロックのティック番号（−1 は連続表示）。 */
+  readonly tick: number;
 }
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -99,11 +102,34 @@ export class OpticsAudioDrive {
 
   /** 打撃の検出。**この表現は検出器を持つだけで、中身は一切変えない。** */
   private readonly detector = new BandLightEventDetector();
-  private corePulse = 0;
-  private holdRemaining = 0;
+  private strikeCount = 0;
   private pulseCount = 0;
   private lastStrength = 0;
   private lastBand: string | null = null;
+
+  // ---- 光学クロック（ストロボ）----
+  /**
+   * **光は連続量として動かさない。** 実フレームではなくこのティック単位で
+   * 表示状態を再サンプルし、ティックの間は値を保持する（コマ送り）。
+   */
+  private strobeEnabled = true;
+  private strobeRate: number = STROBE.defaultRate;
+  private tickIndex = 0;
+  private tickAccumulator = 0;
+  /** ティックの頭で確定した「その表示期間ぶんの値」。表示中は動かない。 */
+  private heldSkeleton = 0;
+  private heldCurtain = 0;
+  private heldHaze = 0;
+  /** コアは打撃の 1 ティックだけ出る。値は打撃の瞬間に確定する。 */
+  private heldCorePulse = 0;
+  private coreTicksLeft = 0;
+  private coreFramesLeft = 0;
+
+  /** ストロボの入り切りと速度（開発つまみ）。A/B 比較のために外から触れる。 */
+  setStrobe(enabled: boolean, rate: number): void {
+    this.strobeEnabled = enabled;
+    this.strobeRate = Math.max(rate, 1);
+  }
 
   /** 表現を開き直したときに呼ぶ。前の曲の余韻も統計も持ち越さない。 */
   reset(): void {
@@ -112,11 +138,18 @@ export class OpticsAudioDrive {
     this.haze = 0;
     this.source = 0;
     this.detector.reset();
-    this.corePulse = 0;
-    this.holdRemaining = 0;
+    this.strikeCount = 0;
     this.pulseCount = 0;
     this.lastStrength = 0;
     this.lastBand = null;
+    this.tickIndex = 0;
+    this.tickAccumulator = 0;
+    this.heldSkeleton = 0;
+    this.heldCurtain = 0;
+    this.heldHaze = 0;
+    this.heldCorePulse = 0;
+    this.coreTicksLeft = 0;
+    this.coreFramesLeft = 0;
   }
 
   /**
@@ -125,7 +158,9 @@ export class OpticsAudioDrive {
    * `active !== 1`（停止・音源なし）ではソースを 0 にするので、
    * 3 層はそれぞれの時定数で黒へ沈む。**カット時に瞬時に消えるのではなく、
    * 膜が最後まで残って消える**のが正しい見え方である（無音 = 黒・PRD D5）。
-   * 脈動は止まった瞬間にゼロへ落とす（余韻の残った打撃は無いため）。
+   *
+   * **状態の量（遅い時定数）は連続で回し続けるが、見え方はティック単位で離散化する。**
+   * 膜がゆっくり満ちて最後まで残る階層は保ったまま、表示は出し入れだけになる。
    */
   update(
     audio: AudioParameters,
@@ -135,27 +170,42 @@ export class OpticsAudioDrive {
   ): void {
     const playing = audio.active === 1;
 
-    // ---- 持続（Step 1）: 音量を 3 つの時定数で受ける ----
+    // ---- 持続（Step 1）: 音量を 3 つの時定数で受ける（状態の量。連続で回す）----
     this.source = playing ? clamp01(audio.volume ?? 0) : 0;
     this.skeleton = smooth(this.skeleton, this.source, deltaSeconds, RESPONSE_SECONDS.skeleton);
     this.curtain = smooth(this.curtain, this.source, deltaSeconds, RESPONSE_SECONDS.curtain);
     this.haze = smooth(this.haze, this.source, deltaSeconds, RESPONSE_SECONDS.haze);
 
-    // ---- 脈動（Step 2）: 打撃の瞬間だけ跳ねる ----
+    if (this.coreFramesLeft > 0) this.coreFramesLeft -= 1;
+
+    // ---- 光学クロック: ティックを跨いだら表示状態を再サンプルする ----
+    if (this.strobeEnabled) {
+      this.tickAccumulator += Math.max(deltaSeconds, 0);
+      const tickSeconds = 1 / this.strobeRate;
+      // 巨大な delta でティックを無限に回さないよう、進める数に上限を置く。
+      let steps = 0;
+      while (this.tickAccumulator >= tickSeconds && steps < 8) {
+        this.tickAccumulator -= tickSeconds;
+        this.tickIndex += 1;
+        steps += 1;
+        this.onTick();
+      }
+      if (steps >= 8) this.tickAccumulator = 0;
+    } else {
+      // ストロボを切っているあいだは、そのまま連続の値を見せる。
+      this.heldSkeleton = this.skeleton;
+      this.heldCurtain = this.curtain;
+      this.heldHaze = this.haze;
+    }
+
     if (!playing) {
-      this.corePulse = 0;
-      this.holdRemaining = 0;
+      this.heldCorePulse = 0;
+      this.coreTicksLeft = 0;
+      this.coreFramesLeft = 0;
       return;
     }
 
-    // 先に古い脈動を進める。こうすると同じフレームで来た新しい打撃が
-    // **減衰に食われずそのまま頂点になる**（立ち上がりが 1 フレーム）。
-    if (this.holdRemaining > 0) {
-      this.holdRemaining = Math.max(this.holdRemaining - deltaSeconds, 0);
-    } else {
-      this.corePulse = smooth(this.corePulse, 0, deltaSeconds, RESPONSE_SECONDS.core);
-    }
-
+    // ---- 打撃（Step 2）: 閾値を越えたものだけがコアを出す ----
     const events = this.detector.update(
       spectrum,
       {
@@ -173,13 +223,31 @@ export class OpticsAudioDrive {
     );
 
     for (const event of events) {
-      // 同じフレームに複数帯域が来たら、いちばん強い打撃が頂点になる。
       const strength = Math.max(clamp01(event.strength), DRIVE.corePulseFloor);
-      this.corePulse = Math.max(this.corePulse, strength);
-      this.holdRemaining = DRIVE.corePulseHold;
-      this.pulseCount += 1;
+      this.strikeCount += 1;
       this.lastStrength = strength;
       this.lastBand = event.band;
+      // **表示のたびに確定する。** この表示期間のあいだ、値は動かない。
+      this.heldCorePulse = Math.max(this.heldCorePulse, strength);
+      this.coreTicksLeft = 1;
+      this.coreFramesLeft = DRIVE.coreMinimumFrames;
+      this.pulseCount += 1;
+    }
+  }
+
+  /**
+   * ティックの頭。**ここでだけ表示状態が変わる。**
+   * 遅い層はいまの状態の量を写し取り、コアは 1 ティックで消える。
+   */
+  private onTick(): void {
+    this.heldSkeleton = this.skeleton;
+    this.heldCurtain = this.curtain;
+    this.heldHaze = this.haze;
+    if (this.coreTicksLeft > 0) {
+      this.coreTicksLeft -= 1;
+      if (this.coreTicksLeft <= 0 && this.coreFramesLeft <= 0) this.heldCorePulse = 0;
+    } else {
+      this.heldCorePulse = 0;
     }
   }
 
@@ -190,31 +258,43 @@ export class OpticsAudioDrive {
       curtain: this.curtain,
       haze: this.haze,
       source: this.source,
-      corePulse: this.corePulse,
+      corePulse: this.publishedCorePulse(),
+      strikeCount: this.strikeCount,
       pulseCount: this.pulseCount,
       lastStrength: this.lastStrength,
       lastBand: this.lastBand,
+      tick: this.strobeEnabled ? this.tickIndex : -1,
     };
+  }
+
+  /** コアが出ているのは、打撃のティックのあいだだけ。 */
+  private publishedCorePulse(): number {
+    return this.coreTicksLeft > 0 || this.coreFramesLeft > 0 ? this.heldCorePulse : 0;
   }
 
   /**
    * いまの状態から `OpticsDrive` を作る。
    *
+   * **公開するのはティックの頭で確定した値**（`held*`）で、連続の平滑値ではない。
+   * 光は連続量として動かさず、ティックの間は同じ状態を保つ。
+   *
    * `manual` は開発つまみが作ったドライブで、**まだ配線していない入力は
    * そこからそのまま通す**（`huePhase` と `seed` は開発つまみの値を維持する）。
    */
   toDrive(manual: OpticsDrive): OpticsDrive {
+    const pulse = this.publishedCorePulse();
     return {
-      skeletonLevel: this.skeleton,
-      curtainLevel: this.curtain,
-      hazeLevel: this.haze,
-      corePulse: this.corePulse,
+      skeletonLevel: this.heldSkeleton,
+      curtainLevel: this.heldCurtain,
+      hazeLevel: this.heldHaze,
+      corePulse: pulse,
       // Step 3〜4 で配線する。それまでは 0（＝その層は出ない）。
       fragmentEnergy: 0,
       fanGate: 0,
       // Step 5 で配線する。それまでは開発つまみの値をそのまま使う。
       huePhase: manual.huePhase,
       seed: manual.seed,
+      tick: this.strobeEnabled ? this.tickIndex : -1,
       // 奥行き計測つまみは音とは無関係の開発用なので、常に開発つまみの値。
       depthProbe: manual.depthProbe,
     };

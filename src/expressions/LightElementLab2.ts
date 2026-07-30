@@ -10,6 +10,7 @@ import {
   FRAGMENT_FAMILIES,
   KIND_INDEX,
   OPTICS,
+  STROBE,
   buildOpticalRig,
   depthCue,
   type OpticalGroup,
@@ -154,6 +155,9 @@ export class LightElementLab2 implements LabExpression {
    * 膜あり・なしを往復して黒の面積と濁りを比べるために置いてある。
    */
   private hazeVisible = true;
+  /** ストロボ（光学クロックの量子化）。A/B 比較のために切れる。 */
+  private strobeEnabled = true;
+  private strobeRate: number = STROBE.defaultRate;
   /** ドライブの供給元。既定は Manual（静止画スタディの見え方を変えないため）。 */
   private driveMode: DriveMode = 'manual';
   /** 音 → ドライブの変換。対応の記述はこのアダプタ 1 つに集約する。 */
@@ -265,6 +269,8 @@ export class LightElementLab2 implements LabExpression {
       fanGate: this.fanGateOpen ? 1 : 0,
       huePhase: this.params.huePhase,
       seed: this.params.fragmentSeed,
+      // 静止画スタディは計測器なので連続表示のまま（ストロボは Audio 側の仕事）。
+      tick: -1,
       depthProbe: this.params.depthProbe,
     };
   }
@@ -864,7 +870,7 @@ export class LightElementLab2 implements LabExpression {
     const levels = this.audioDrive.levels();
     const drive =
       this.driveMode === 'audio'
-        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}`
+        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / tick ${levels.tick}`
         : `manual pulse ${this.params.corePulse.toFixed(2)}`;
     return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
   }
@@ -912,6 +918,24 @@ export class LightElementLab2 implements LabExpression {
           { value: 'audio', label: 'Audio' },
         ],
         value: this.driveMode,
+      },
+      {
+        key: 'strobe',
+        label: 'Strobe (Audio only)',
+        type: 'select',
+        options: [
+          { value: 'on', label: 'On (24fps ticks)' },
+          { value: 'off', label: 'Off (continuous)' },
+        ],
+        value: this.strobeEnabled ? 'on' : 'off',
+      },
+      {
+        key: 'strobeRate',
+        label: 'Strobe rate (fps)',
+        min: 6,
+        max: 60,
+        step: 1,
+        value: this.strobeRate,
       },
       // ---- 音が注ぎ込むもの（Audio では未配線のものだけつまみが効く）----
       row('huePhase', 'Global hue H'),
@@ -999,6 +1023,18 @@ export class LightElementLab2 implements LabExpression {
     if (key === 'hazeVisible') {
       this.hazeVisible = value !== 'off';
       this.rebuildRig();
+      return;
+    }
+    if (key === 'strobe') {
+      this.strobeEnabled = value !== 'off';
+      this.audioDrive.setStrobe(this.strobeEnabled, this.strobeRate);
+      return;
+    }
+    if (key === 'strobeRate') {
+      const rate = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(rate)) return;
+      this.strobeRate = clamp(Math.round(rate), 6, 60);
+      this.audioDrive.setStrobe(this.strobeEnabled, this.strobeRate);
       return;
     }
     const numeric = typeof value === 'number' ? value : Number(value);
