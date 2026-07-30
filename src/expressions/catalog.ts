@@ -6,7 +6,8 @@ import { CymaticsV2 } from '../fields/CymaticsV2';
 import { CymaticsPlate } from './CymaticsPlate';
 import { LightCoreStudy } from './LightCoreStudy';
 import { LightElementLab, type LightElementMode } from './LightElementLab';
-import { LightElementLab2, type LightElement2Mode } from './LightElementLab2';
+import { LightElementLab2 } from './LightElementLab2';
+import type { OpticalGroup } from './lightOpticsMapping';
 import { LightReactiveLab, type ReactiveMode } from './LightReactiveLab';
 import { LightSpatialStudy } from './LightSpatialStudy';
 import { LightTraces } from './LightTraces';
@@ -36,10 +37,10 @@ export type ExpressionId =
   | 'light-element-depth-v1'
   | 'light-element-envelope-v1'
   | 'light-element-composite-v1'
+  | 'light-element2-skeleton-v1'
   | 'light-element2-core-v1'
-  | 'light-element2-sheet-v1'
-  | 'light-element2-haze-v1'
-  | 'light-element2-ray-v1'
+  | 'light-element2-fragment-v1'
+  | 'light-element2-fan-v1'
   | 'light-element2-all-v1'
   | 'light-reactive-trigger-v1'
   | 'light-reactive-texture-v1'
@@ -138,15 +139,16 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   },
   // 色の作り方だけを差し替えた 2 台目の実験室（V1 は無改変で温存する）。
   // 1 つの光を R/G/B の 3 チャンネルへ分け、わずかにずらして重ねる（CRT 的構造）。
-  // 音へは繋がず、要素ごとに静止画で見え方だけを検証する。
+  // 音へは繋がず、静止画でリファレンスの頂点フレーム 1 枚を目標に見え方を検証する。
+  // Version はリファレンス分析の 4 層構造（骨格 / コア / 断片 / 扇）と 1 対 1。
   {
     id: 'light-element-lab-2',
     label: 'Light Element Lab 2',
     versions: [
+      { id: 'light-element2-skeleton-v1', label: 'Skeleton' },
       { id: 'light-element2-core-v1', label: 'Core' },
-      { id: 'light-element2-sheet-v1', label: 'Sheet' },
-      { id: 'light-element2-haze-v1', label: 'Haze' },
-      { id: 'light-element2-ray-v1', label: 'Ray' },
+      { id: 'light-element2-fragment-v1', label: 'Fragment' },
+      { id: 'light-element2-fan-v1', label: 'Fan' },
       { id: 'light-element2-all-v1', label: 'All' },
     ],
   },
@@ -184,11 +186,11 @@ const LIGHT_ELEMENT_MODES: Partial<Record<ExpressionId, LightElementMode>> = {
   'light-element-composite-v1': 'composite',
 };
 
-const LIGHT_ELEMENT2_MODES: Partial<Record<ExpressionId, LightElement2Mode>> = {
+const LIGHT_ELEMENT2_GROUPS: Partial<Record<ExpressionId, OpticalGroup>> = {
+  'light-element2-skeleton-v1': 'skeleton',
   'light-element2-core-v1': 'core',
-  'light-element2-sheet-v1': 'sheet',
-  'light-element2-haze-v1': 'haze',
-  'light-element2-ray-v1': 'ray',
+  'light-element2-fragment-v1': 'fragment',
+  'light-element2-fan-v1': 'fan',
   'light-element2-all-v1': 'all',
 };
 
@@ -226,8 +228,8 @@ export function createExpression(
   if (id === 'light-spatial-study-v1') return new LightSpatialStudy(effects, theme);
   const lightElementMode = LIGHT_ELEMENT_MODES[id];
   if (lightElementMode) return new LightElementLab(id, lightElementMode, effects, theme);
-  const lightElement2Mode = LIGHT_ELEMENT2_MODES[id];
-  if (lightElement2Mode) return new LightElementLab2(id, lightElement2Mode, effects, theme);
+  const lightElement2Group = LIGHT_ELEMENT2_GROUPS[id];
+  if (lightElement2Group) return new LightElementLab2(id, lightElement2Group, effects, theme);
   const reactiveMode = LIGHT_REACTIVE_MODES[id];
   if (reactiveMode) return new LightReactiveLab(id, reactiveMode, effects, theme);
   if (id === 'reactive-geometry-v1') return new ReactiveGeometry(effects, theme);
