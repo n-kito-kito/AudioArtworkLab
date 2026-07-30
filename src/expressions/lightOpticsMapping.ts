@@ -29,10 +29,17 @@
  */
 
 /** 描画側のフラグメント分岐と 1 対 1 で対応する形の種別。 */
-export type OpticalKind = 'core' | 'beam' | 'veil' | 'fan' | 'haze';
+export type OpticalKind = 'core' | 'beam' | 'veil' | 'fan' | 'haze' | 'curtain';
 
 /** Version ボタンと 1 対 1。各層をそれぞれ単独で確かめるための単位。 */
-export type OpticalGroup = 'haze' | 'skeleton' | 'core' | 'fragment' | 'fan' | 'all';
+export type OpticalGroup =
+  | 'haze'
+  | 'curtain'
+  | 'skeleton'
+  | 'core'
+  | 'fragment'
+  | 'fan'
+  | 'all';
 
 /** 種別 → シェーダーへ渡す番号。 */
 export const KIND_INDEX: Readonly<Record<OpticalKind, number>> = {
@@ -41,7 +48,24 @@ export const KIND_INDEX: Readonly<Record<OpticalKind, number>> = {
   veil: 2,
   fan: 3,
   haze: 4,
+  curtain: 5,
 };
+
+/**
+ * **カーテンの形状族。** seed が族と個体差の両方を選ぶ。
+ * 同じ族でも襞の周期・幅・折れの量・傾きが個体ごとに変わるので、
+ * 「同じ形の使い回し」にはならない。
+ */
+export const CURTAIN_FAMILIES = ['standing-veil', 'drifting-band', 'folded-ribbon'] as const;
+export type CurtainFamily = (typeof CURTAIN_FAMILIES)[number];
+
+/**
+ * **断片の形状族。** これも seed が族と個体差を選ぶ。
+ * 三角 1 種類だと「同じ形が飛び回っている」ようにしか見えないので、
+ * 輪郭の作り方そのものを 4 通り持つ。
+ */
+export const FRAGMENT_FAMILIES = ['shard', 'sliver', 'plate', 'chip'] as const;
+export type FragmentFamily = (typeof FRAGMENT_FAMILIES)[number];
 
 /**
  * **速度の階層。** 膜がいちばんゆっくり呼吸し、断片がいちばん速い。
@@ -54,6 +78,8 @@ export const KIND_INDEX: Readonly<Record<OpticalKind, number>> = {
 export const RESPONSE_SECONDS = {
   /** 膜 — 最遅。場そのものの明るさなので、曲の区間くらいの速さでしか動かない。 */
   haze: 2.6,
+  /** カーテン — 膜より速く骨格より遅い。立ったまま長く残り、ゆっくり入れ替わる。 */
+  curtain: 1.4,
   /** 骨格 — 音量の持続にゆっくり追従する。 */
   skeleton: 0.9,
   /** コア脈動 — onset で跳ねて引く。 */
@@ -118,8 +144,9 @@ export interface OpticalLayerTraits {
   readonly intensity: number;
   /**
    * 種別ごとの形の値。
-   * beam: 幅・ハロー / veil: 縁 / fan: 基準角・広がり・本数・到達 /
-   * haze: 減衰・縁の始まり・縁の終わり・分光の深さ倍率
+   * beam: 幅・ハロー / veil: 縁・形状族・伸び・欠け / fan: 基準角・広がり・本数・到達 /
+   * haze: 減衰・縁の始まり・縁の終わり・分光の深さ倍率 /
+   * curtain: 形状族・襞の周期・帯の半幅・折れの量
    */
   readonly shape: readonly [number, number, number, number];
   /** 「軸沿い」モードでのチャンネル分離方向（単位ベクトル・ローカル平面）。 */
@@ -165,8 +192,15 @@ export const OPTICS = {
    * **迷ったら暗いほうへ倒すこと。**
    */
   hazeCeiling: 0.11,
+  /**
+   * **カーテンの天井。** 明るさの階層で膜（0.11）と断片（0.30）の間。
+   * 膜よりはっきりした形を持つが、あくまで薄い層である。
+   */
+  curtainCeiling: 0.2,
   /** 断片の枚数。 */
   fragmentCount: 6,
+  /** カーテンの枚数。 */
+  curtainCount: 3,
   /** アトラスを平均で読む半径（鈍りが 1 のとき。クロップ座標）。 */
   softSampleRadius: 0.045,
   /**
@@ -302,6 +336,116 @@ const buildHaze = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLayerTr
 };
 
 /**
+ * **⓪-b カーテン。** 膜よりはっきりした形を持つが、あくまで薄い層。
+ * 明るさの階層では膜（0.11）と断片（0.30）の間に入り、白へは到達しない。
+ *
+ * **形状族は 3 つ**（`CURTAIN_FAMILIES`）で、seed が族と個体差の両方を選ぶ:
+ *   standing-veil  … 縦に立つ襞のあるヴェール
+ *   drifting-band  … 斜めに流れる帯
+ *   folded-ribbon  … 折れたリボン状
+ * 素材はアトラスのカーテン系・リボン系（`parallel-curtains` / `filament-and-curtain` /
+ * `curved-volume`）を族ごとに選び分ける。
+ *
+ * 音入力は増やさない（骨格と同じ `skeletonLevel`。速度は `RESPONSE_SECONDS.curtain`）。
+ */
+const buildCurtains = (
+  drive: OpticsDrive,
+  viewport: OpticsViewport,
+): OpticalLayerTraits[] => {
+  const level = clamp01(drive.skeletonLevel);
+  if (level <= 0) return [];
+  const seed = Math.round(drive.seed);
+  const out: OpticalLayerTraits[] = [];
+  // 族は層化して引く（素のハッシュだと seed によっては 3 枚とも同じ族になる）。
+  const familyOffset = Math.floor(
+    hash01(seed + 2027, 11) * CURTAIN_FAMILIES.length,
+  );
+  for (let index = 0; index < OPTICS.curtainCount; index++) {
+    // 断片とハッシュ列が相関しないよう、別の添字空間を使う。
+    const a = hash01(seed + 977, index * 7 + 1);
+    const b = hash01(seed + 977, index * 7 + 2);
+    const c = hash01(seed + 977, index * 7 + 3);
+    const d = hash01(seed + 977, index * 7 + 4);
+    const e = hash01(seed + 977, index * 7 + 5);
+    const f = hash01(seed + 977, index * 7 + 6);
+    const family =
+      (index + familyOffset + (a > 0.78 ? 1 : 0)) % CURTAIN_FAMILIES.length;
+    // 中間〜遠め。断片（−5.2〜−12.6）と膜（−13.6）の間に立たせる。
+    const z = -(8.2 + b * 3.6);
+    const extent = visibleHalfExtent(z, viewport);
+
+    // 族ごとに板の比率が変わる。伸びは板が持ち、輪郭だけを形状族が作る。
+    const shapeOf = (): {
+      half: [number, number];
+      spin: number;
+      roles: string[];
+      tile: number;
+      params: [number, number, number, number];
+    } => {
+      if (family === 0) {
+        // 縦に立つ襞のあるヴェール。
+        return {
+          half: [extent.halfWidth * (0.22 + c * 0.16), extent.halfHeight * (0.7 + d * 0.28)],
+          spin: (e - 0.5) * 0.22,
+          roles: ['parallel-curtains', 'filament-and-curtain'],
+          tile: 7,
+          params: [0, 5.5 + f * 7, 0.34 + c * 0.22, 0],
+        };
+      }
+      if (family === 1) {
+        // 斜めに流れる帯。
+        return {
+          half: [extent.halfWidth * (0.9 + c * 0.5), extent.halfHeight * (0.32 + d * 0.22)],
+          spin: (e - 0.5) * 1.5,
+          roles: ['wide-caustic', 'curved-wavefront'],
+          tile: 6,
+          params: [1, 3 + f * 5, 0.3 + c * 0.24, (d - 0.5) * 0.5],
+        };
+      }
+      // 折れたリボン状。
+      return {
+        half: [extent.halfWidth * (0.7 + c * 0.4), extent.halfHeight * (0.5 + d * 0.3)],
+        spin: (e - 0.5) * 1.1,
+        roles: ['folded-ribbon', 'curved-volume'],
+        tile: 2,
+        params: [2, 4 + f * 4, 0.24 + c * 0.18, 0.5 + d * 0.7],
+      };
+    };
+
+    const s = shapeOf();
+    out.push(
+      layer({
+        kind: 'curtain',
+        position: [
+          (a - 0.5) * 2 * extent.halfWidth * 0.72,
+          (b - 0.5) * 2 * extent.halfHeight * 0.4,
+          z,
+        ],
+        half: s.half,
+        spin: s.spin,
+        preferredRoles: s.roles,
+        fallbackTile: s.tile,
+        crop: [0.28 + a * 0.44, 0.28 + d * 0.44, 0.6, 0.6],
+        uvAngle: f * TAU,
+        flipX: c > 0.5 ? -1 : 1,
+        flipY: d > 0.5 ? -1 : 1,
+        // H への小さなオフセットだけ。カーテンが独立の色を持たないようにする。
+        hueDelta: (c - 0.5) * 0.08,
+        hueSpan: 0.11,
+        gradientForm: 2,
+        // 薄い層なので暗いほうへ倒す。黒の支配（画面の 7〜8 割）を壊さない範囲。
+        intensity: (0.14 + d * 0.09) * level,
+        shape: s.params,
+        axis: [1, 0],
+        ceiling: OPTICS.curtainCeiling,
+        channel: [1.3, 1.5, 0.045, 0.28],
+      }),
+    );
+  }
+  return out;
+};
+
+/**
  * **① 骨格。** 縦の細い線 + 横の帯 + 中央の十字。位置は中央軸に固定で、
  * 音が変えるのは基礎輝度だけ（`skeletonLevel`）。回転も移動もしない。
  */
@@ -384,8 +528,14 @@ const buildCore = (drive: OpticsDrive): OpticalLayerTraits[] => {
 };
 
 /**
- * **③ 断片。** 周縁の三角ヴェール片。**不規則さを担うのはこの層だけ**で、
- * 位置・大きさ・向きは決定論ハッシュから来る（同じ seed なら同じ配置）。
+ * **③ 断片。** 周縁の一時的なヴェール片。**不規則さを担うのはこの層だけ**で、
+ * 位置・大きさ・向き・**形状族**は決定論ハッシュから来る（同じ seed なら同じ配置）。
+ *
+ * **形状族は 4 つ**（`FRAGMENT_FAMILIES`）。三角 1 種類だと
+ * 「同じ形がただ飛び回っている」ようにしか見えないので、輪郭の作り方から変える:
+ *   shard  … 三角シャード / sliver … 細長いスリヴァー
+ *   plate  … 不等辺の四辺形の板片 / chip … 角の欠けた小片
+ * 伸び（縦横比）は板が持ち、輪郭だけを形状族が作る。
  */
 const buildFragments = (
   drive: OpticsDrive,
@@ -397,18 +547,35 @@ const buildFragments = (
   const out: OpticalLayerTraits[] = [];
   // 枚数もエネルギーで決まる（帯域イベントが増えるほど断片が増える）。
   const count = Math.max(Math.round(OPTICS.fragmentCount * energy), 1);
+  const familyOffset = Math.floor(
+    hash01(seed + 1013, 7) * FRAGMENT_FAMILIES.length,
+  );
   for (let index = 0; index < count; index++) {
-    const a = hash01(seed, index * 5 + 1);
-    const b = hash01(seed, index * 5 + 2);
-    const c = hash01(seed, index * 5 + 3);
-    const d = hash01(seed, index * 5 + 4);
-    const e = hash01(seed, index * 5 + 5);
+    const a = hash01(seed, index * 7 + 1);
+    const b = hash01(seed, index * 7 + 2);
+    const c = hash01(seed, index * 7 + 3);
+    const d = hash01(seed, index * 7 + 4);
+    const e = hash01(seed, index * 7 + 5);
+    const g = hash01(seed, index * 7 + 6);
+    const h = hash01(seed, index * 7 + 7);
+    // **族は層化して引く。** 素のハッシュだと seed によっては 6 枚とも同じ族になり、
+    // 「同じ形の使い回し」に逆戻りする。並び順を seed でずらしつつ、
+    // ときどき 1 つ飛ばして規則性も消す。
+    const family =
+      (index + familyOffset + (g > 0.72 ? 1 : 0)) % FRAGMENT_FAMILIES.length;
     const z = -(5.2 + b * 7.4);
     const extent = visibleHalfExtent(z, viewport);
     // 周縁に散らす。中央軸は骨格のものなので、半径の下限を置いて避ける。
     const angle = a * TAU;
     const radius = 0.44 + c * 0.52;
     const size = (0.2 + d * 0.4) * (Math.abs(z) / 6);
+    // 族ごとの縦横比。伸びは板が持つので、輪郭の式は正方の p 空間で書ける。
+    const stretch =
+      family === 1
+        ? 2.1 + h * 1.5 // sliver は細長い
+        : family === 2
+          ? 1.1 + h * 0.7 // plate は少し横長
+          : 0.85 + h * 0.5; // shard / chip はほぼ等方
     out.push(
       layer({
         kind: 'veil',
@@ -417,7 +584,7 @@ const buildFragments = (
           Math.sin(angle) * extent.halfHeight * radius,
           z,
         ],
-        half: [size, size],
+        half: [size * stretch, size / Math.sqrt(stretch)],
         spin: e * TAU,
         preferredRoles: ['wide-caustic', 'wide-haze', 'layered-sheets'],
         fallbackTile: (index * 3 + seed) % 10,
@@ -430,7 +597,8 @@ const buildFragments = (
         gradientForm: 3,
         // 断片は「一時的で半透明」。輪郭が立つと貼り紙に見えるので薄く保つ。
         intensity: (0.14 + c * 0.13) * energy,
-        shape: [0.34, 0, 0, 0],
+        // [縁, 形状族, 形の中の伸び, 欠けの深さ]
+        shape: [0.34, family, 0.75 + h * 0.6, 0.04 + d * 0.2],
         axis: [1, 0],
         // 白の予算を持たないので、下限で必ずチャンネルをずらす。
         channel: [1.4, 1.6, 0.05, 0.3],
@@ -480,6 +648,7 @@ export const buildOpticalRig = (
   const layers: OpticalLayerTraits[] = [];
   // 奥のものから順に積む（加算合成なので順序は見え方を変えないが、意図を残す）。
   if (group === 'haze' || group === 'all') layers.push(...buildHaze(drive, viewport));
+  if (group === 'curtain' || group === 'all') layers.push(...buildCurtains(drive, viewport));
   if (group === 'skeleton' || group === 'all') layers.push(...buildSkeleton(drive, viewport));
   if (group === 'fragment' || group === 'all') layers.push(...buildFragments(drive, viewport));
   if (group === 'fan' || group === 'all') layers.push(...buildFan(drive));

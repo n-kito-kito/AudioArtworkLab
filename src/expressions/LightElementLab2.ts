@@ -6,6 +6,8 @@ import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
 import {
+  CURTAIN_FAMILIES,
+  FRAGMENT_FAMILIES,
   KIND_INDEX,
   OPTICS,
   buildOpticalRig,
@@ -41,6 +43,7 @@ import { loadPrismAtlas, type PrismAtlas, type PrismTile } from './prismAtlas';
 
 const GROUP_LABELS: Readonly<Record<OpticalGroup, string>> = {
   haze: 'Haze',
+  curtain: 'Curtain',
   skeleton: 'Skeleton',
   core: 'Core',
   fragment: 'Fragment',
@@ -112,6 +115,8 @@ export interface LightElementLab2State {
     readonly dim: number;
     readonly soft: number;
   }[];
+  /** 形状族を持つ層（断片・カーテン）の内訳。検証で分布を数えるために出す。 */
+  readonly families: readonly { readonly kind: string; readonly family: string }[];
 }
 
 export class LightElementLab2 implements LabExpression {
@@ -433,6 +438,34 @@ export class LightElementLab2 implements LabExpression {
           float kind = vTone.z;
           float soft = vDepth.y;
 
+          // ---- カーテン: 膜よりはっきりした形を持つが、あくまで薄い層 ----
+          // 形状族は 3 つ。族と個体差は seed が選び、ここは受け取った値を描くだけ。
+          if (kind > 4.5) {
+            float family = vShape.x;
+            float width = max(vShape.z, 0.02);
+            float body;
+            float along;
+            if (family < 0.5) {
+              // 縦に立つ襞のあるヴェール。横断は x、伸びは y。
+              float across = p.x / width;
+              body = exp(-across * across) * (0.55 + 0.45 * sin(p.x * vShape.y + p.y * 1.7));
+              along = 1.0 - smoothstep(0.38, 0.9, abs(p.y));
+            } else if (family < 1.5) {
+              // 斜めに流れる帯。板ごと回してあるので、ここは緩い傾きだけ足す。
+              float across = (p.y + p.x * vShape.w) / width;
+              body = exp(-across * across) * (0.6 + 0.4 * sin(p.x * vShape.y));
+              along = 1.0 - smoothstep(0.34, 0.88, abs(p.x));
+            } else {
+              // 折れたリボン状。中心線に V 字の折れを入れる。
+              float centre = vShape.w * (abs(p.x) - 0.45);
+              float across = (p.y - centre) / width;
+              body = exp(-across * across) * (0.58 + 0.42 * sin(p.x * vShape.y + 1.1));
+              along = 1.0 - smoothstep(0.34, 0.88, abs(p.x));
+            }
+            if (along <= 0.0) return 0.0;
+            return max(body, 0.0) * along * (0.26 + atlasLight(p, channel) * 0.95);
+          }
+
           // ---- 膜: 画面全体をまとめる大面積の霞。明るさの階層のいちばん下 ----
           if (kind > 3.5) {
             float r = length(p);
@@ -465,12 +498,39 @@ export class LightElementLab2 implements LabExpression {
             return sector * blades * radial * (0.35 + atlasLight(p, channel) * 0.95);
           }
 
-          // ---- 断片: 三角のヴェール片。素材で内部に質感を入れる ----
+          // ---- 断片: 一時的なヴェール片。輪郭の作り方そのものが 4 通りある ----
+          // 三角 1 種類だと「同じ形が飛び回っている」ようにしか見えないため。
           if (kind > 1.5) {
-            float d = max(
-              max(dot(p, vec2(0.0, -1.0)), dot(p, vec2(0.8660254, 0.5))),
-              dot(p, vec2(-0.8660254, 0.5))
-            );
+            float family = vShape.y;
+            // 形の中の伸び。板の比率と掛かって、同じ族でも個体差が出る。
+            vec2 q = vec2(p.x / max(vShape.z, 0.15), p.y * max(vShape.z, 0.15));
+            float d;
+            if (family < 0.5) {
+              // 三角シャード。
+              d = max(
+                max(dot(q, vec2(0.0, -1.0)), dot(q, vec2(0.8660254, 0.5))),
+                dot(q, vec2(-0.8660254, 0.5))
+              );
+            } else if (family < 1.5) {
+              // 細長いスリヴァー。2 つの円の交わりで両端の尖ったレンズを作る。
+              d = max(
+                length(q - vec2(0.0, -0.95)) - 1.22,
+                length(q - vec2(0.0, 0.95)) - 1.22
+              ) + 0.34;
+            } else if (family < 2.5) {
+              // 不等辺の四辺形の板片。
+              d = max(
+                max(dot(q, vec2(0.9487, 0.3162)), dot(q, vec2(-0.8575, 0.5145))),
+                max(dot(q, vec2(-0.1961, -0.9806)), dot(q, vec2(0.6, -0.8)))
+              );
+            } else {
+              // 角の欠けた小片。三角から 1 辺ぶん落とす。
+              float tri = max(
+                max(dot(q, vec2(0.0, -1.0)), dot(q, vec2(0.8660254, 0.5))),
+                dot(q, vec2(-0.8660254, 0.5))
+              );
+              d = max(tri, dot(q, vec2(0.6402, 0.7682)) + vShape.w);
+            }
             float inside = 1.0 - smoothstep(
               vShape.x - mix(0.18, 0.44, soft),
               vShape.x + mix(0.10, 0.34, soft),
@@ -531,7 +591,9 @@ export class LightElementLab2 implements LabExpression {
           // 分光は白へ少し寄せる。光は「染まった白」であって絵の具ではないので、
           // ここを浅くしておくとチャンネル分離の縁の色が波長の下から見えてくる。
           // 膜だけは彩度をさらに落とす（媒質が独立の色を持つと全体の色相ルールが崩れる）。
-          float tintDepth = TINT_DEPTH * (vTone.z > 3.5 ? vShape.w : 1.0);
+          // カーテン（種別 5）も 3.5 より大きいので、膜（種別 4）だけを取り出す。
+          float isHaze = step(3.5, vTone.z) * step(vTone.z, 4.5);
+          float tintDepth = TINT_DEPTH * mix(1.0, vShape.w, isHaze);
           vec3 tint = uTint > 0.5
             ? mix(
                 vec3(1.0),
@@ -770,6 +832,15 @@ export class LightElementLab2 implements LabExpression {
         z: entry.position[2],
         ...depthCue(entry.position[2]),
       })),
+      families: this.layers
+        .filter((entry) => entry.kind === 'veil' || entry.kind === 'curtain')
+        .map((entry) => ({
+          kind: entry.kind,
+          family:
+            entry.kind === 'veil'
+              ? (FRAGMENT_FAMILIES[entry.shape[1]] ?? 'unknown')
+              : (CURTAIN_FAMILIES[entry.shape[0]] ?? 'unknown'),
+        })),
     };
   }
 
