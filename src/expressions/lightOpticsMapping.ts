@@ -68,6 +68,29 @@ export const FRAGMENT_FAMILIES = ['shard', 'sliver', 'plate', 'chip'] as const;
 export type FragmentFamily = (typeof FRAGMENT_FAMILIES)[number];
 
 /**
+ * **コアの形状族。** 打撃ごとに seed が選ぶので「毎回同じコア」にならない。
+ * 素の芯（`coreShape < 0`）は静止画スタディ用に温存してある。
+ */
+export const CORE_SHAPES = [
+  'cross-flare',
+  'vertical-spike',
+  'horizontal-flare',
+  'compact-burst',
+] as const;
+export type CoreShape = (typeof CORE_SHAPES)[number];
+
+/**
+ * 形状族ごとの [族番号, 横フレアの利得, 縦スパイクの利得, 芯の強さ倍率]。
+ * シェーダーの core 分岐がこの 4 値だけを見る。
+ */
+const CORE_SHAPE_PARAMS: readonly (readonly [number, number, number, number])[] = [
+  [0, 0.5, 0.5, 1], // 十字フレア
+  [1, 0.14, 0.92, 0.92], // 縦スパイク優勢
+  [2, 0.92, 0.14, 0.92], // 横フレア優勢
+  [3, 0.1, 0.1, 1.4], // コンパクトな星形バースト
+];
+
+/**
  * **光は連続量として動かさない**（恒久方針）。
  * すべての光は「その瞬間の音に対応した状態」で瞬間的に現れ、瞬間的に消える。
  * フェード・補間・連続的なスケール変化は描かず、変化は表示 / 非表示の出し入れで表す。
@@ -144,6 +167,11 @@ export interface OpticsDrive {
    * **−1 は連続表示**（Manual の静止画スタディ。計測器として温存する）。
    */
   readonly tick: number;
+  /**
+   * コアの形状族。**−1 は素の芯**（静止画スタディの既定）で、
+   * 0 以上は `CORE_SHAPES` の番号。打撃ごとに seed が選ぶ。
+   */
+  readonly coreShape: number;
   /**
    * 開発用の奥行き計測つまみ。0 で作者指定の z をそのまま使う。
    * 0 より大きいと、**見かけの位置と大きさを保ったまま**全層をその正規化深度へ移す。
@@ -574,19 +602,29 @@ const buildSkeleton = (drive: OpticsDrive, viewport: OpticsViewport): OpticalLay
 };
 
 /**
- * **② コア。** 中央の白熱。**白へ到達してよい唯一の層**で、
- * 脈動（`corePulse`）が上がるほど中心が飽和して白になる。
+ * **② コア。** 中央の白熱。**白へ到達してよい唯一の層**。
  *
- * 打撃の 1 ティックだけ出て消える（光は連続量として動かさない）。
+ * **強い打撃のときだけ大きく強く光る。** 弱い打撃で毎回明るく出ると
+ * 「常に光っている」ように見えてしまうので、閾値は `OpticsAudioDrive` 側で切り、
+ * ここへ来る `corePulse` は既に「閾値を越えたぶんを強い側へ寄せた」値である。
+ *
+ * 形状族は `drive.coreShape`（打撃ごとに seed が選ぶ）。
+ * **−1 は素の芯**で、静止画スタディの既定の見え方をそのまま保つ。
  */
 const buildCore = (drive: OpticsDrive): OpticalLayerTraits[] => {
   const pulse = clamp01(drive.corePulse);
   if (pulse <= 0) return [];
+  const shapeIndex = Math.round(drive.coreShape);
+  const shape =
+    shapeIndex >= 0 && shapeIndex < CORE_SHAPE_PARAMS.length
+      ? CORE_SHAPE_PARAMS[shapeIndex]!
+      : ([-1, 0, 0, 1] as const);
   return [
     layer({
       kind: 'core',
       position: [0, 0, -5.6],
       // 大きさも打撃の強さで決まる。**表示のたびに確定し、その表示中は動かない。**
+      // 強い側の強調は `OpticsAudioDrive` の曲線が済ませてあるので、ここは線形でよい。
       half: [mix(0.34, 0.5, pulse), mix(0.34, 0.5, pulse)],
       preferredRoles: ['layered-sheets', 'curved-volume'],
       fallbackTile: 3,
@@ -597,6 +635,8 @@ const buildCore = (drive: OpticsDrive): OpticalLayerTraits[] => {
       // 頂点で中心の芯だけが確実に飽和するだけの利得（白はここで生まれる）。
       // 大きくしすぎると白が塊になるので、白は芯の項に持たせて広い項は抑える。
       intensity: mix(0.4, 1.55, pulse),
+      // [形状族, 横フレアの利得, 縦スパイクの利得, 芯の強さ倍率]
+      shape: [shape[0], shape[1], shape[2], shape[3]],
       whiteAllowed: true,
       ceiling: 1,
       channel: [1, 1, 0, 0],

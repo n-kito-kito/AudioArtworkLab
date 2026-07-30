@@ -1,6 +1,6 @@
 import type { AudioParameters, SpectrumFrame } from '../audio/AudioEngine';
 import { BandLightEventDetector } from '../engine/bandLightEvents';
-import { RESPONSE_SECONDS, STROBE, type OpticsDrive } from './lightOpticsMapping';
+import { CORE_SHAPES, RESPONSE_SECONDS, STROBE, type OpticsDrive } from './lightOpticsMapping';
 
 /**
  * **音 → `OpticsDrive` の変換アダプタ（Light Element Lab 2）。**
@@ -22,6 +22,8 @@ import { RESPONSE_SECONDS, STROBE, type OpticsDrive } from './lightOpticsMapping
  *   `BandLightEventDetector` の発火 1 回につき **1 脈動**。
  *   **光は連続量として動かさない**ので、打撃の瞬間にその強さで現れ、
  *   1 ティック（実フレーム 2〜3 枚）で消える。フェードはしない。
+ *   **強い打撃だけがコアを出す**（閾値 + 強い側を強調する曲線）。
+ *   形状族は打撃の音のシードが選ぶので「毎回同じコア」にならない。
  * - **Step 3（未配線）** 帯域イベント → `fragmentEnergy`。断片の誕生。
  * - **Step 4（未配線）** 強 onset の閾値 → `fanGate`。放射の扇。
  * - **Step 5（未配線）** 音色の持続値 → `huePhase`。**補間せずイベント的に切り替える。**
@@ -34,9 +36,18 @@ import { RESPONSE_SECONDS, STROBE, type OpticsDrive } from './lightOpticsMapping
 /** この変換の定数。**対応の数値はすべてここに集める。** */
 const DRIVE = {
   /**
-   * 脈動の下限。検出器が拾った以上は必ず目に見える明るさにする。
+   * **コアを出す打撃の閾値。** これ未満の打撃ではコアを出さない。
+   * 弱い打撃でも毎回光ると「常に光っている」ように見えて、
+   * 強打の頂点が頂点に見えなくなる。
    */
-  corePulseFloor: 0.22,
+  coreStrengthGate: 0.55,
+  /**
+   * 閾値を越えたぶんを **強い側へ寄せる曲線**の指数（> 1 で強調）。
+   * ぎりぎり越えた打撃は控えめ、満点の打撃だけが白熱の頂点へ届く。
+   */
+  coreCurveExponent: 1.6,
+  /** 閾値をぎりぎり越えた打撃の明るさ。 */
+  coreMinimumPulse: 0.28,
   /**
    * コアを出しておく実フレーム数の下限。ティックの終わり際に来た打撃でも
    * 1 フレームで消えないようにするだけの保険。
@@ -73,6 +84,8 @@ export interface OpticsDriveLevels {
   /** 直近の打撃の強さと帯域。 */
   readonly lastStrength: number;
   readonly lastBand: string | null;
+  /** 直近に選ばれたコアの形状族（−1 は素の芯）。 */
+  readonly coreShape: number;
   /** 光学クロックのティック番号（−1 は連続表示）。 */
   readonly tick: number;
 }
@@ -122,6 +135,7 @@ export class OpticsAudioDrive {
   private heldHaze = 0;
   /** コアは打撃の 1 ティックだけ出る。値は打撃の瞬間に確定する。 */
   private heldCorePulse = 0;
+  private heldCoreShape = -1;
   private coreTicksLeft = 0;
   private coreFramesLeft = 0;
 
@@ -148,6 +162,7 @@ export class OpticsAudioDrive {
     this.heldCurtain = 0;
     this.heldHaze = 0;
     this.heldCorePulse = 0;
+    this.heldCoreShape = -1;
     this.coreTicksLeft = 0;
     this.coreFramesLeft = 0;
   }
@@ -223,12 +238,21 @@ export class OpticsAudioDrive {
     );
 
     for (const event of events) {
-      const strength = Math.max(clamp01(event.strength), DRIVE.corePulseFloor);
+      const strength = clamp01(event.strength);
       this.strikeCount += 1;
       this.lastStrength = strength;
       this.lastBand = event.band;
+      // **強い音のときだけ光る。** 閾値未満はコアを出さない。
+      if (strength < DRIVE.coreStrengthGate) continue;
+      const above = (strength - DRIVE.coreStrengthGate) / (1 - DRIVE.coreStrengthGate);
+      const pulse =
+        DRIVE.coreMinimumPulse +
+        (1 - DRIVE.coreMinimumPulse) * Math.pow(clamp01(above), DRIVE.coreCurveExponent);
       // **表示のたびに確定する。** この表示期間のあいだ、値は動かない。
-      this.heldCorePulse = Math.max(this.heldCorePulse, strength);
+      this.heldCorePulse = Math.max(this.heldCorePulse, pulse);
+      // 形状族は打撃の音のシードで選ぶ。層化して引くので「毎回同じコア」にならない。
+      const offset = Math.floor(clamp01(event.snapshot.audioSeed) * CORE_SHAPES.length);
+      this.heldCoreShape = (event.eventIndex + offset) % CORE_SHAPES.length;
       this.coreTicksLeft = 1;
       this.coreFramesLeft = DRIVE.coreMinimumFrames;
       this.pulseCount += 1;
@@ -263,6 +287,7 @@ export class OpticsAudioDrive {
       pulseCount: this.pulseCount,
       lastStrength: this.lastStrength,
       lastBand: this.lastBand,
+      coreShape: this.publishedCorePulse() > 0 ? this.heldCoreShape : -1,
       tick: this.strobeEnabled ? this.tickIndex : -1,
     };
   }
@@ -295,6 +320,7 @@ export class OpticsAudioDrive {
       huePhase: manual.huePhase,
       seed: manual.seed,
       tick: this.strobeEnabled ? this.tickIndex : -1,
+      coreShape: pulse > 0 ? this.heldCoreShape : -1,
       // 奥行き計測つまみは音とは無関係の開発用なので、常に開発つまみの値。
       depthProbe: manual.depthProbe,
     };

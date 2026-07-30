@@ -6,6 +6,7 @@ import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
 import {
+  CORE_SHAPES,
   CURTAIN_FAMILIES,
   FRAGMENT_FAMILIES,
   KIND_INDEX,
@@ -155,6 +156,11 @@ export class LightElementLab2 implements LabExpression {
    * 膜あり・なしを往復して黒の面積と濁りを比べるために置いてある。
    */
   private hazeVisible = true;
+  /**
+   * 静止画スタディで見せるコアの形状族。**−1 は素の芯**（既定）。
+   * Audio では打撃ごとに音のシードが選ぶので、ここは効かない。
+   */
+  private coreShape = -1;
   /** ストロボ（光学クロックの量子化）。A/B 比較のために切れる。 */
   private strobeEnabled = true;
   private strobeRate: number = STROBE.defaultRate;
@@ -271,6 +277,7 @@ export class LightElementLab2 implements LabExpression {
       seed: this.params.fragmentSeed,
       // 静止画スタディは計測器なので連続表示のまま（ストロボは Audio 側の仕事）。
       tick: -1,
+      coreShape: this.coreShape,
       depthProbe: this.params.depthProbe,
     };
   }
@@ -596,7 +603,14 @@ export class LightElementLab2 implements LabExpression {
           // 白は「芯」だけが持つ。素材ぶんは白へ届かない高さに抑える。
           float nucleus = exp(-radial2 * mix(52.0, 14.0, soft));
           float wide = exp(-radial2 * mix(4.2, 1.6, soft));
-          return softEdge * (atlasLight(p, channel) * 0.8 + nucleus * 1.7 + wide * 0.05);
+          float body = atlasLight(p, channel) * 0.8 + nucleus * 1.7 * vShape.w + wide * 0.05;
+          // 形状族のフレア。vShape.x < 0 は素の芯（静止画スタディの既定）。
+          if (vShape.x >= 0.0) {
+            float flareH = exp(-p.y * p.y * 220.0) * exp(-p.x * p.x * 1.1);
+            float flareV = exp(-p.x * p.x * 220.0) * exp(-p.y * p.y * 1.1);
+            body += flareH * vShape.y + flareV * vShape.z;
+          }
+          return softEdge * body;
         }
 
         void main() {
@@ -870,7 +884,7 @@ export class LightElementLab2 implements LabExpression {
     const levels = this.audioDrive.levels();
     const drive =
       this.driveMode === 'audio'
-        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / tick ${levels.tick}`
+        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / tick ${levels.tick}`
         : `manual pulse ${this.params.corePulse.toFixed(2)}`;
     return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
   }
@@ -936,6 +950,16 @@ export class LightElementLab2 implements LabExpression {
         max: 60,
         step: 1,
         value: this.strobeRate,
+      },
+      {
+        key: 'coreShape',
+        label: 'Core shape (Manual)',
+        type: 'select',
+        options: [
+          { value: '-1', label: 'Plain' },
+          ...CORE_SHAPES.map((name, index) => ({ value: String(index), label: name })),
+        ],
+        value: String(this.coreShape),
       },
       // ---- 音が注ぎ込むもの（Audio では未配線のものだけつまみが効く）----
       row('huePhase', 'Global hue H'),
@@ -1035,6 +1059,13 @@ export class LightElementLab2 implements LabExpression {
       if (!Number.isFinite(rate)) return;
       this.strobeRate = clamp(Math.round(rate), 6, 60);
       this.audioDrive.setStrobe(this.strobeEnabled, this.strobeRate);
+      return;
+    }
+    if (key === 'coreShape') {
+      const index = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(index)) return;
+      this.coreShape = clamp(Math.round(index), -1, CORE_SHAPES.length - 1);
+      this.rebuildRig();
       return;
     }
     const numeric = typeof value === 'number' ? value : Number(value);
