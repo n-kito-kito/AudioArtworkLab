@@ -564,8 +564,48 @@ RecordingController・QualityMonitor は再接続済み。
         （膜は骨格と同じ入力なので一緒に消える = 無音は黒）/
         既存表現は無影響（Element Lab V1 Core / Composite・Reactive Lab Composite・
         Spatial Study・Cymatics V1・Modular V1。数値は追加前と一致）
+  - [x] Light Element Lab 2 — **カーテン（`kind: 'curtain'`）の追加と、断片の形状多様化**。
+        ① **カーテン** — 膜よりはっきりした形を持つが薄い層。旧 Light Element Lab V1 の
+        Depth に相当する要素がリグに無く、要素が黒に浮いて孤立していたため足した。
+        **形状族 3 つ**（`CURTAIN_FAMILIES`）— standing-veil（縦に立つ襞のあるヴェール）/
+        drifting-band（斜めに流れる帯）/ folded-ribbon（折れたリボン状）。
+        3 枚で、族・位置・大きさ・傾き・襞の周期・折れの量は **seed が決める**。
+        素材はアトラスの `parallel-curtains` / `filament-and-curtain` / `wide-caustic` /
+        `folded-ribbon` / `curved-volume` を族ごとに選び分ける。z は −8.2〜−11.8（中間〜遠め。
+        断片と膜の間）。**天井 0.20**（膜 0.11 と断片 0.30 の間）で白へは到達しない。
+        音入力は増やさず、骨格と同じ `skeletonLevel` を受ける
+        （時定数は `RESPONSE_SECONDS.curtain = 1.4s`。膜 2.6 > **カーテン 1.4** > 骨格 0.9 >
+        コア 0.12 > 断片 0.05）。
+        ② **断片の形状多様化** — 三角 1 種類だと「同じ形が飛び回っている」ようにしか
+        見えなかったので、輪郭の作り方から **4 族**にした（`FRAGMENT_FAMILIES`）—
+        shard（三角シャード）/ sliver（細長いスリヴァー。2 円の交わりで両端が尖る）/
+        plate（不等辺の四辺形の板片）/ chip（角の欠けた小片）。
+        伸び（縦横比）は板が持ち、輪郭だけを族が作る。個体差は縦横比・形の中の伸び・
+        欠けの深さ・傾き。
+        **族の抽選は層化した** — 素のハッシュだと seed によっては 6 枚とも同じ族になり
+        （実測: seed 0 で shard × 6・全 36 枚で shard 19 / chip 2 と偏った）、
+        意味がなくなる。並び順を seed でずらしつつ、ときどき 1 つ飛ばして規則性も消す。
+        層化後の実測（6 seed × 6 枚 = 36 枚）: plate 10 / sliver 10 / chip 8 / shard 8 と
+        ほぼ均等、1 seed あたりの族数は 3〜4（全部同じ族になる seed は無い）。
+        カーテンも同様に層化（6 seed × 3 枚 = 18 枚で folded 7 / standing 6 / drifting 5）。
+        なお `whiteAllowed` の真偽値は前段で層ごとの `ceiling` に置き換え済みで、
+        **明るさの階層**は コア 1.0 > 断片・骨格・扇 0.30 > **カーテン 0.20** > 膜 0.11。
+        検証: カーテン単独で **白画素 0**（Intensity 最大 4.0 でも 0・ピーク 68）、
+        ピーク 29〜64 で膜（22）と断片（40〜77）の間 / 同 seed で画素ハッシュ再現・
+        別 seed で別の族構成 / H を 0 / 0.25 / 0.5 / 0.75 と回すとカーテンも協調してスライド
+        （All との差は −3.9〜+13.1°。断片の ±23° より狭い）/
+        断片単独も全 seed で白画素 0 / **All（9:16・seed 7）は 16 層**
+        （膜 2 + カーテン 3 + 骨格 3 + 断片 6 + 扇 1 + コア 1）で
+        黒 0.7088 → **0.7173**・白 1133 → 1223・全画面平均輝度 9.93 → 10.94（+0.4%）
+        — 暗部の支配は保たれ、白の箱は中央のまま（頂点フレームの構図は不変）/
+        画角 3 種すべて **Draw Call 1**（三角 32）・黒 0.717〜0.753 /
+        決定論一致・表現往復で geometries 1・textures 2 のまま /
+        1 フレーム p50 0.0ms・p90 0.1ms・最大 0.2ms / コンソールエラー 0 /
+        全ドライブ 0 + 扇ゲート閉で層 0 枚・黒 100% /
+        既存表現は無影響（Element Lab V1 Core / Composite・Reactive Lab Composite・
+        Spatial Study・Cymatics V1・Modular V1。数値は追加前と一致）
   - [ ] Light Element Lab 2 の次段階 — `OpticsDrive` の 6 入力へ実際の音を配線する。
-        膜と骨格は同じ `skeletonLevel` を `RESPONSE_SECONDS` の別々の時定数で受ける。
+        膜・カーテン・骨格は同じ `skeletonLevel` を `RESPONSE_SECONDS` の別々の時定数で受ける。
         Bass / Mid / Treble → R / G / B の発色駆動、オフセット量と非相関量を
         どの特徴に結ぶか、H のイベント的切替をどの持続値で撃つかは未決
   - [ ] Spatial Study の次段階 — 空間の手掛かり（グリッドや床）/ カメラのゆっくりした動き /
