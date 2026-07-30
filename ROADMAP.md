@@ -604,10 +604,47 @@ RecordingController・QualityMonitor は再接続済み。
         全ドライブ 0 + 扇ゲート閉で層 0 枚・黒 100% /
         既存表現は無影響（Element Lab V1 Core / Composite・Reactive Lab Composite・
         Spatial Study・Cymatics V1・Modular V1。数値は追加前と一致）
-  - [ ] Light Element Lab 2 の次段階 — `OpticsDrive` の 6 入力へ実際の音を配線する。
-        膜・カーテン・骨格は同じ `skeletonLevel` を `RESPONSE_SECONDS` の別々の時定数で受ける。
+  - [x] Light Element Lab 2 の音接続 **Step 0 — ドライブ切替の骨組み**（見た目の変化なし）。
+        開発ブロックに **`Drive: Manual / Audio`** を追加（既定 Manual）。
+        **音 → `OpticsDrive` の変換は新設した `opticsAudioDrive.ts` 1 ファイルに集約**し、
+        リグ（`lightOpticsMapping.ts`）も描画（`LightElementLab2.ts`）も
+        `AudioParameters` を直接読まない構造にした。Step 0 の時点では層を出すドライブを
+        すべて 0 で返す骨組みで、Step 1〜5 の配線予定はファイル冒頭に書いてある。
+        `OpticsDrive` に `curtainLevel` / `hazeLevel` を足したが、**音の入力が増えたのではない**
+        — 骨格・カーテン・膜は同じソースを受け、**時定数だけが違う**（`RESPONSE_SECONDS`）。
+        検証: **Manual の画素ハッシュが実装前と全 7 Version で完全一致**
+        （Haze / Curtain / Skeleton / Core / Fragment / Fan / All）。
+        Manual → Audio → Manual の往復後も一致。Audio + 無音は層 0 枚・黒 100%
+  - [x] Light Element Lab 2 の音接続 **Step 1 — 音量の持続 → 骨格・カーテン・膜の基礎輝度**。
+        `AudioEngine` の `volume`（正規化済み）を 1 つのソースとし、
+        **3 層が同じソースをそれぞれの時定数で受ける**（骨格 0.9s / カーテン 1.4s / 膜 2.6s）。
+        平滑は **dt ベースの指数平滑** `alpha = 1 − exp(−dt/τ)` でフレームレート非依存。
+        `active !== 1` ではソース 0 になり、3 層が各時定数で黒へ沈む（PRD D5）。
+        onset・帯域イベント・H・断片・扇・コアは**まだ繋がない**
+        （Audio では corePulse / fragmentEnergy / fanGate は 0、huePhase と seed は開発つまみの値）。
+        検証（合成の持続音・時計を手で進めて実測）:
+        **立ち上がりの 63% 到達 = 骨格 0.90s / カーテン 1.40s / 膜 2.60s**（設計値と一致）、
+        **減衰の 63% も同じ 0.90 / 1.40 / 2.60**。
+        音を切ってから画素が消えるまで（0.031 = 8/255 相当を下回るまで）は
+        骨格 3.13s → カーテン 4.87s → **膜 8.98s** で、**膜が最後に消える**。
+        ちらつき耐性: volume を毎フレーム 0〜1 で乱高下させても 1 フレームあたりの変化は
+        骨格 0.0111 / カーテン 0.0078 / 膜 0.0048（≦ 1.1%）で滑らか。
+        フレームレート非依存: dt = 1/30・1/60・1/120・1/240 のいずれでも
+        3 秒後の値が **小数 4 桁まで一致**（0.9643 / 0.8827 / 0.6846）。
+        reference.wav の実再生でも曲の強弱に追従し
+        （持続部で骨格 0.43 / カーテン 0.43 / 膜 0.41、静かな区間で 3 層とも減衰して
+        **膜だけが 0.173 と最後まで残る**、強打で骨格 0.699 がいちばん速く跳ねる）、
+        停止後は黒へ戻る。Audio では層は 8 枚（骨格 3 + カーテン 3 + 膜 2）だけが出る。
+        回帰: **Manual の静止画スタディは全 7 Version で画素ハッシュ不変** /
+        画角 3 種すべて Draw Call 1（三角 32）・黒 0.717〜0.753 /
+        1 フレーム p50 0.1ms・p90 0.3ms / コンソールエラー 0 /
+        既存表現は無影響（Element Lab V1 Core / Composite・Reactive Lab Composite・
+        Spatial Study・Cymatics V1・Modular V1。数値は追加前と一致）
+  - [ ] Light Element Lab 2 の音接続 Step 2〜5 — onset 強度 → コア脈動 /
+        帯域イベント → 断片 / 強 onset 閾値 → 扇 / 音色の持続値 → H のイベント的切替と
+        音由来の seed。配線はすべて `opticsAudioDrive.ts` の中だけで進める。
         Bass / Mid / Treble → R / G / B の発色駆動、オフセット量と非相関量を
-        どの特徴に結ぶか、H のイベント的切替をどの持続値で撃つかは未決
+        どの特徴に結ぶかは未決
   - [ ] Spatial Study の次段階 — 空間の手掛かり（グリッドや床）/ カメラのゆっくりした動き /
         軌跡の太さを音へ結ぶか / バーストの自己励起（クラスター化）を入れるか
   - [ ] 同時発光時の位置設計（2D 側）— floor を下げると複数 Core が同じ centroid に重なる（未決）
