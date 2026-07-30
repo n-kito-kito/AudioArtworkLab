@@ -180,6 +180,13 @@ export class LightElementLab2 implements LabExpression {
    */
   private coreThreshold: number = OPTICS_THRESHOLDS.core;
   private fanThreshold: number = OPTICS_THRESHOLDS.fan;
+  /**
+   * **H の切替の粘り（開発つまみ・Audio のみ）。**
+   * 確認時間を短くすると音色の揺れで色が動きやすくなり、
+   * 最短保持を長くすると「1 つの色の回」が長くなる。
+   */
+  private hueConfirm: number = OPTICS_THRESHOLDS.hueConfirm;
+  private hueHold: number = OPTICS_THRESHOLDS.hueHold;
   /** ドライブの供給元。既定は Manual（静止画スタディの見え方を変えないため）。 */
   private driveMode: DriveMode = 'manual';
   /** 音 → ドライブの変換。対応の記述はこのアダプタ 1 つに集約する。 */
@@ -304,6 +311,15 @@ export class LightElementLab2 implements LabExpression {
       armSeed: this.params.fragmentSeed,
       depthProbe: this.params.depthProbe,
     };
+  }
+
+  /**
+   * **いま効いているグローバル波長 H。**
+   * Manual は開発つまみ（静止画スタディの見え方を変えない）、
+   * Audio は音色の持続値が選んだ離散状態（Step 5）。
+   */
+  private activeHue(): number {
+    return this.driveMode === 'audio' ? this.audioDrive.huePhase() : this.params.huePhase;
   }
 
   /** いま採用するドライブ。供給元を切り替えるだけで、リグ側は何も変わらない。 */
@@ -796,7 +812,7 @@ export class LightElementLab2 implements LabExpression {
       material.uniforms.uOffset!.value = this.params.channelOffset;
       material.uniforms.uOffsetMode!.value = this.offsetMode === 'radial' ? 0 : 1;
       material.uniforms.uDecorrelation!.value = this.params.decorrelation;
-      material.uniforms.uHue!.value = this.params.huePhase;
+      material.uniforms.uHue!.value = this.activeHue();
       material.uniforms.uTint!.value = this.globalTint ? 1 : 0;
     }
     const audio = this.context?.audioEngine.getParameters() ?? {};
@@ -916,11 +932,11 @@ export class LightElementLab2 implements LabExpression {
   }
 
   getPhase(): string {
-    const hue = this.params.huePhase.toFixed(2);
+    const hue = this.activeHue().toFixed(2);
     const levels = this.audioDrive.levels();
     const drive =
       this.driveMode === 'audio'
-        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / arms ${levels.armMask} / frag ${levels.visibleFragments}/${levels.liveFragments} (×${levels.fragmentBirths}) / fan ${levels.fanPower.toFixed(2)} ×${levels.fanCount} / tick ${levels.tick}`
+        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / arms ${levels.armMask} / frag ${levels.visibleFragments}/${levels.liveFragments} (×${levels.fragmentBirths}) / fan ${levels.fanPower.toFixed(2)} ×${levels.fanCount} / tone ${levels.timbre.toFixed(2)} → H${levels.hueState} ×${levels.hueSwitches} / tick ${levels.tick}`
         : `manual pulse ${this.params.corePulse.toFixed(2)}`;
     return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
   }
@@ -931,7 +947,8 @@ export class LightElementLab2 implements LabExpression {
       group: this.group,
       layers: this.layers.length,
       whiteAllowedLayers: this.layers.filter((entry) => entry.whiteAllowed).length,
-      huePhase: this.params.huePhase,
+      // **いま効いている H**（Manual はつまみ・Audio は音色が選んだ状態）。
+      huePhase: this.activeHue(),
       depth: this.layers.map((entry) => ({
         kind: entry.kind,
         z: entry.position[2],
@@ -1003,6 +1020,23 @@ export class LightElementLab2 implements LabExpression {
         max: 1,
         step: 0.01,
         value: this.fanThreshold,
+      },
+      // ---- H の切替の粘り（Audio のみ。Manual のつまみは下の Global hue H）----
+      {
+        key: 'hueConfirm',
+        label: 'Hue confirm (s)',
+        min: 0.2,
+        max: 3,
+        step: 0.05,
+        value: this.hueConfirm,
+      },
+      {
+        key: 'hueHold',
+        label: 'Hue hold (s)',
+        min: 1,
+        max: 12,
+        step: 0.5,
+        value: this.hueHold,
       },
       {
         key: 'coreShape',
@@ -1141,6 +1175,18 @@ export class LightElementLab2 implements LabExpression {
       } else {
         this.fanThreshold = clamp(gate, 0, 1);
         this.audioDrive.setFanThreshold(this.fanThreshold);
+      }
+      return;
+    }
+    if (key === 'hueConfirm' || key === 'hueHold') {
+      const seconds = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(seconds)) return;
+      if (key === 'hueConfirm') {
+        this.hueConfirm = clamp(seconds, 0.2, 3);
+        this.audioDrive.setHueConfirm(this.hueConfirm);
+      } else {
+        this.hueHold = clamp(seconds, 1, 12);
+        this.audioDrive.setHueHold(this.hueHold);
       }
       return;
     }

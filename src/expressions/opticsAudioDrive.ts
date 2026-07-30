@@ -43,8 +43,12 @@ import {
  *   打撃ティックで即出現し、2〜4 ティックの寿命のあいだ on / off を交互に繰り返して、
  *   最後のティックで**フェードせずに**消える。広がり・強さは打撃の強さに追従し、
  *   向きと角度幅には打撃のシード由来の個体差が入る（下向き基本は動かさない）。
- * - **Step 5（未配線）** 音色の持続値 → `huePhase`。**補間せずイベント的に切り替える。**
- *   同じく音由来のシード → `seed`（断片・カーテンの散らばり）。
+ * - **Step 5（実装済み）** 音色の持続値 → `huePhase`。**補間せずイベント的に切り替える。**
+ *   H は連続では動かさない。**8 個の離散状態**のどれかに留まり、
+ *   音色（帯域の傾き + centroid の持続値）が別の区画へはっきり移り、
+ *   さらに**確認時間**と**最短保持**を満たしたときだけ、ティック境界で瞬時に跳ぶ。
+ *   微小な揺らぎでは同じ H に留まる（ヒステリシス）。
+ *   音由来のシード → `seed`（断片・カーテンの散らばり）は未配線のまま。
  *
  * 未配線のものは 0 を返すか、開発つまみの値をそのまま通す。
  * 段階を進めるときはこのファイルだけを触る。
@@ -101,6 +105,56 @@ const DRIVE = {
    */
   fanMinimumFrames: 2,
 
+  // ---- 音色 → グローバル波長 H（Step 5）----
+  /**
+   * **H の候補状態の数。** H は 0〜1 の連続量として動かさず、
+   * この数だけの離散状態のどれかに留まる（連続ドリフト禁止）。
+   */
+  hueStates: 8,
+  /** 状態 0 の H。**静止画スタディの既定値と同じ**にしてある。 */
+  hueBase: 0.62,
+  /**
+   * 状態番号 → 色相環の歩幅。状態数 8 と互いに素なので 8 状態すべてが別の色になり、
+   * **隣り合う音色でも色は大きく変わる**（「緑の回・赤の回」が丸ごと入れ替わる）。
+   */
+  hueStride: 3,
+  /**
+   * **音色の持続値の時定数（秒）。** 膜（2.6s）と同じくらい遅い。
+   * 打撃 1 発では動かず、曲の区間くらいの速さでしか動かない。
+   */
+  hueTimbreSeconds: 1.6,
+  /**
+   * 音色の測り方。**帯域の傾き**（treble 寄りか bass 寄りか）と **centroid** を混ぜる。
+   * どちらも「高域寄りか」を測る量なので、混ぜると片方の癖に振り回されない。
+   */
+  hueTiltWeight: 0.62,
+  /**
+   * 傾きの利得。生の傾きは 0.5 のまわりに固まりやすいので、区画を跨げるだけ広げる。
+   * 広げすぎると端に張り付くので 1 を少し超える程度に留める。
+   */
+  hueToneGain: 1.5,
+  /**
+   * **ヒステリシス。** いまの区画から**この割合ぶん外へ出る**まで候補を変えない
+   * （区画幅に対する比）。境界上の揺らぎでフリップフロップしないための余白。
+   */
+  hueHysteresis: 0.35,
+  /**
+   * **落ち着き**の判定（音色の変化率・毎秒）。
+   * 音色が大きく動いている最中は確認を数えない。こうしないと、音色が区画を
+   * 横断していく途中の区画で**寄り道の色**が出てしまう（切替そのものは瞬時でも、
+   * 行き先でない色が数秒出るのは「明確な変化でだけ切り替わる」に反する）。
+   *
+   * 揺らぎと横断を見分けるため、測るのは**符号つきのずれ**（`raw − timbre`）である。
+   * 揺らぎは正負に散って 0 の周りに均されるが、横断は符号が揃うので残る。
+   */
+  hueSettleRate: 0.05,
+  /** そのずれを均す時定数（秒）。 */
+  hueDriftSeconds: 0.6,
+  /** **確認時間**（秒）。候補がこれだけ続かないと切り替えない。開発つまみ `Hue confirm`。 */
+  hueConfirmSeconds: 1,
+  /** **最短保持**（秒）。いまの H をこれだけ保つまで次へ移らない。開発つまみ `Hue hold`。 */
+  hueHoldSeconds: 6,
+
   /**
    * **断片の誕生（Step 3）。** 1 イベントで何枚生まれるか。
    * 打撃の強さと新奇性で増え、上限で頭打ちになる。
@@ -143,6 +197,9 @@ const DRIVE = {
 export const OPTICS_THRESHOLDS = {
   core: DRIVE.coreStrengthGate,
   fan: DRIVE.fanStrengthGate,
+  /** H の切替の粘り（Step 5）。開発つまみ `Hue confirm` / `Hue hold` の初期値。 */
+  hueConfirm: DRIVE.hueConfirmSeconds,
+  hueHold: DRIVE.hueHoldSeconds,
 } as const;
 
 /** 平滑された各層のドライブ。開発・検証用に外へ見せる。 */
@@ -185,6 +242,18 @@ export interface OpticsDriveLevels {
   /** いま効いている閾値（開発つまみの確認用）。 */
   readonly coreThreshold: number;
   readonly fanThreshold: number;
+  /** **音色の持続値**（0..1・高域寄りほど大きい）。H の状態を選ぶ元。 */
+  readonly timbre: number;
+  /** いま留まっている H の状態番号と、その H。 */
+  readonly hueState: number;
+  readonly huePhase: number;
+  /** 確認中の候補（現状と同じなら候補なし）と、その確認が続いた秒数。 */
+  readonly hueCandidate: number;
+  readonly hueConfirmed: number;
+  /** いまの状態を保っている秒数。 */
+  readonly hueHeld: number;
+  /** H が切り替わった回数。 */
+  readonly hueSwitches: number;
 }
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -194,6 +263,16 @@ const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
  * フレームレートが変わっても同じ時間で同じところへ着く。
  * τ は「目標との差が 1/e（≒ 37%）まで縮む時間」＝ 63% 到達時間である。
  */
+/**
+ * **状態番号 → グローバル波長 H。**
+ * 色相環を状態数で等分し、状態数と互いに素な歩幅で歩く。
+ * 歩幅のおかげで、音色が隣の区画へ移っただけでも色は大きく変わる。
+ */
+export const hueOfState = (state: number): number => {
+  const index = ((Math.round(state) % DRIVE.hueStates) + DRIVE.hueStates) % DRIVE.hueStates;
+  return (DRIVE.hueBase + (index * DRIVE.hueStride) / DRIVE.hueStates) % 1;
+};
+
 const smooth = (current: number, target: number, deltaSeconds: number, tau: number): number => {
   if (tau <= 0) return target;
   const alpha = 1 - Math.exp(-Math.max(deltaSeconds, 0) / tau);
@@ -286,6 +365,37 @@ export class OpticsAudioDrive {
   private coreGate: number = DRIVE.coreStrengthGate;
   private fanGate: number = DRIVE.fanStrengthGate;
 
+  // ---- 音色 → グローバル波長 H（Step 5）----
+  /**
+   * **音色の持続値**（0..1）。帯域の傾きと centroid をゆっくり平滑した値で、
+   * 打撃では動かない。**H を連続で動かす量ではなく、状態を選ぶための量**である。
+   */
+  private timbre = 0;
+  /** 音色を一度でも測ったか。最初のフレームは平滑を待たずに値を入れる。 */
+  private timbreSeen = false;
+  /**
+   * **符号つきの流れ**（`raw − timbre` を均したもの）。
+   * 揺らぎは 0 の周りに均されるが、音色が横断しているあいだは符号が揃って残る。
+   * これが小さいときだけ「落ち着いた」と見なして確認を数える。
+   */
+  private timbreDrift = 0;
+  /** いま留まっている H の状態番号。 */
+  private hueState = 0;
+  /** 確認中の候補と、その確認が続いた秒数。 */
+  private hueCandidate = 0;
+  private hueConfirmed = 0;
+  /** いまの状態を保っている秒数。最短保持の判定に使う。 */
+  private hueHeld = 0;
+  /**
+   * 確認と最短保持を満たして**次のティック境界で移る**状態（−1 は予約なし）。
+   * 切り替えをティック境界に揃えると、光の出し入れと同じ規律になる。
+   */
+  private huePending = -1;
+  private hueSwitches = 0;
+  /** 確認時間と最短保持（開発つまみ）。 */
+  private hueConfirmSeconds: number = DRIVE.hueConfirmSeconds;
+  private hueHoldSeconds: number = DRIVE.hueHoldSeconds;
+
   /** ストロボの入り切りと速度（開発つまみ）。A/B 比較のために外から触れる。 */
   setStrobe(enabled: boolean, rate: number): void {
     this.strobeEnabled = enabled;
@@ -300,6 +410,21 @@ export class OpticsAudioDrive {
   /** 扇を開く打撃の閾値（開発つまみ）。**コアより高く保つのが本来の階層。** */
   setFanThreshold(value: number): void {
     this.fanGate = clamp01(value);
+  }
+
+  /** H の確認時間（秒・開発つまみ）。短くすると音色の揺れで色が動きやすくなる。 */
+  setHueConfirm(seconds: number): void {
+    this.hueConfirmSeconds = Math.max(seconds, 0);
+  }
+
+  /** H の最短保持（秒・開発つまみ）。長くすると「色の回」が長くなる。 */
+  setHueHold(seconds: number): void {
+    this.hueHoldSeconds = Math.max(seconds, 0);
+  }
+
+  /** いま効いているグローバル波長 H。**状態番号からしか作らない**（連続量ではない）。 */
+  huePhase(): number {
+    return hueOfState(this.hueState);
   }
 
   /** 表現を開き直したときに呼ぶ。前の曲の余韻も統計も持ち越さない。 */
@@ -339,6 +464,15 @@ export class OpticsAudioDrive {
     this.fanCount = 0;
     this.fanVisibleFrames = 0;
     this.frameCount = 0;
+    this.timbre = 0;
+    this.timbreSeen = false;
+    this.timbreDrift = 0;
+    this.hueState = 0;
+    this.hueCandidate = 0;
+    this.hueConfirmed = 0;
+    this.hueHeld = 0;
+    this.huePending = -1;
+    this.hueSwitches = 0;
   }
 
   /**
@@ -365,6 +499,9 @@ export class OpticsAudioDrive {
     this.skeleton = smooth(this.skeleton, this.source, deltaSeconds, RESPONSE_SECONDS.skeleton);
     this.curtain = smooth(this.curtain, this.source, deltaSeconds, RESPONSE_SECONDS.curtain);
     this.haze = smooth(this.haze, this.source, deltaSeconds, RESPONSE_SECONDS.haze);
+
+    // ---- 音色 → H（Step 5）: 状態機械を回す。切替の適用はティック境界 ----
+    this.updateHue(audio, playing, deltaSeconds);
 
     if (this.coreFramesLeft > 0) this.coreFramesLeft -= 1;
     if (this.armFramesLeft > 0) this.armFramesLeft -= 1;
@@ -488,6 +625,99 @@ export class OpticsAudioDrive {
   }
 
   /**
+   * **音色の持続値 → グローバル波長 H の状態（Step 5）。**
+   *
+   * H は連続量として動かさない。音色をゆっくり平滑した値がどの区画に入るかで
+   * 状態が決まり、**区画を余白ぶん外れ**（ヒステリシス）、**確認時間**続き、
+   * いまの状態を**最短保持**したときにだけ、次のティック境界で瞬時に跳ぶ。
+   * 目に見えるのは「緑の回」「赤の回」が丸ごと入れ替わることだけで、
+   * 途中の中間色は 1 フレームも出ない。
+   *
+   * **無音では最後の H を保つ**（どうせ黒）。確認だけ捨てるので、
+   * 再開時はそのときの音色から数え直しになる。
+   */
+  private updateHue(audio: AudioParameters, playing: boolean, deltaSeconds: number): void {
+    const dt = Math.max(deltaSeconds, 0);
+    if (!playing) {
+      // 音色も H も凍らせる。**確認だけ捨てる**ので、再開は現在の音色からやり直し。
+      this.hueCandidate = this.hueState;
+      this.hueConfirmed = 0;
+      this.hueHeld += dt;
+      return;
+    }
+
+    // 音色 = 帯域の傾き（高域寄りか低域寄りか）と centroid の混合。
+    const bass = clamp01(audio.bass ?? 0);
+    const mid = clamp01(audio.mid ?? 0);
+    const treble = clamp01(audio.treble ?? 0);
+    const centroid = clamp01(audio.centroid ?? 0);
+    const total = bass + mid + treble;
+    // 傾きは −1（低域だけ）〜 +1（高域だけ）。無音に近いときは中立に置く。
+    const tilt = total > 1e-4 ? (treble - bass) / total : 0;
+    const tone = clamp01(0.5 + 0.5 * tilt * DRIVE.hueToneGain);
+    const raw = clamp01(DRIVE.hueTiltWeight * tone + (1 - DRIVE.hueTiltWeight) * centroid);
+    // **持続値**。1 発の打撃では動かず、区間くらいの速さでしか動かない。
+    const previous = this.timbre;
+    this.timbre = this.timbreSeen
+      ? smooth(this.timbre, raw, dt, DRIVE.hueTimbreSeconds)
+      : raw;
+    this.timbreDrift = this.timbreSeen
+      ? smooth(this.timbreDrift, raw - previous, dt, DRIVE.hueDriftSeconds)
+      : 0;
+    this.timbreSeen = true;
+    // 音色がまだ横断している最中は確認を数えない（寄り道の色を出さない）。
+    const settled = Math.abs(this.timbreDrift) / DRIVE.hueTimbreSeconds <= DRIVE.hueSettleRate;
+
+    const candidate = this.hueCandidateFor(this.timbre);
+    if (candidate === this.hueState) {
+      // 区画へ戻ってきた。確認は捨てる（往復で切り替わらない）。
+      this.hueCandidate = candidate;
+      this.hueConfirmed = 0;
+      this.huePending = -1;
+    } else {
+      if (candidate !== this.hueCandidate) {
+        this.hueCandidate = candidate;
+        this.hueConfirmed = 0;
+      }
+      this.hueConfirmed = settled ? this.hueConfirmed + dt : 0;
+      if (this.hueConfirmed >= this.hueConfirmSeconds && this.hueHeld >= this.hueHoldSeconds) {
+        // 適用はティック境界。光の出し入れと同じ規律に揃える。
+        this.huePending = candidate;
+      }
+    }
+    this.hueHeld += dt;
+    // ストロボを切っているあいだはティックが来ないので、その場で適用する。
+    if (!this.strobeEnabled) this.commitHue();
+  }
+
+  /**
+   * いまの音色が指す状態。**いまの区画から余白ぶん外へ出るまでは現状に留まる**
+   * ので、境界の上で揺れてもフリップフロップしない。
+   */
+  private hueCandidateFor(timbre: number): number {
+    const states = DRIVE.hueStates;
+    const bare = Math.min(Math.max(Math.floor(timbre * states), 0), states - 1);
+    if (bare === this.hueState) return bare;
+    const low = (this.hueState - DRIVE.hueHysteresis) / states;
+    const high = (this.hueState + 1 + DRIVE.hueHysteresis) / states;
+    return timbre > low && timbre < high ? this.hueState : bare;
+  }
+
+  /** 予約されていた H の切替を確定する。**補間はしない**（1 フレームで切り替わる）。 */
+  private commitHue(): void {
+    if (this.huePending < 0 || this.huePending === this.hueState) {
+      this.huePending = -1;
+      return;
+    }
+    this.hueState = this.huePending;
+    this.huePending = -1;
+    this.hueCandidate = this.hueState;
+    this.hueConfirmed = 0;
+    this.hueHeld = 0;
+    this.hueSwitches += 1;
+  }
+
+  /**
    * **1 イベントから断片を生む。**
    *
    * 枚数は打撃の強さと新奇性で増え、上限で頭打ちになる。
@@ -536,6 +766,8 @@ export class OpticsAudioDrive {
     this.heldSkeleton = this.skeleton;
     this.heldCurtain = this.curtain;
     this.heldHaze = this.haze;
+    // **H の切替もティック境界でだけ起きる。** 中間色は 1 フレームも出ない。
+    this.commitHue();
     if (this.coreTicksLeft > 0) {
       this.coreTicksLeft -= 1;
       if (this.coreTicksLeft <= 0 && this.coreFramesLeft <= 0) this.heldCorePulse = 0;
@@ -617,6 +849,13 @@ export class OpticsAudioDrive {
       fanSeed: this.publishedFanPower() > 0 ? this.heldFanSeed : -1,
       coreThreshold: this.coreGate,
       fanThreshold: this.fanGate,
+      timbre: this.timbre,
+      hueState: this.hueState,
+      huePhase: this.huePhase(),
+      hueCandidate: this.hueCandidate,
+      hueConfirmed: this.hueConfirmed,
+      hueHeld: this.hueHeld,
+      hueSwitches: this.hueSwitches,
     };
   }
 
@@ -664,8 +903,9 @@ export class OpticsAudioDrive {
       // 強打だけが開く扇（Step 4）。強さも個体差も打撃の瞬間に確定する。
       fanGate: this.publishedFanPower(),
       fanSeed: this.heldFanSeed,
-      // Step 5 で配線する。それまでは開発つまみの値をそのまま使う。
-      huePhase: manual.huePhase,
+      // 音色の持続値が選んだ離散状態の H（Step 5）。**つまみは Manual だけに効く。**
+      huePhase: this.huePhase(),
+      // 音由来の seed は未配線。それまでは開発つまみの値をそのまま使う。
       seed: manual.seed,
       tick: this.strobeEnabled ? this.tickIndex : -1,
       coreShape: pulse > 0 ? this.heldCoreShape : -1,
