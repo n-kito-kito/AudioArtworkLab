@@ -161,6 +161,8 @@ export class LightElementLab2 implements LabExpression {
    * Audio では打撃ごとに音のシードが選ぶので、ここは効かない。
    */
   private coreShape = -1;
+  /** 静止画スタディで見せるアームの方向（0 = 出さない。既定）。 */
+  private manualArmMask = 0;
   /** ストロボ（光学クロックの量子化）。A/B 比較のために切れる。 */
   private strobeEnabled = true;
   private strobeRate: number = STROBE.defaultRate;
@@ -280,6 +282,10 @@ export class LightElementLab2 implements LabExpression {
       // 静止画スタディは計測器なので連続表示のまま（ストロボは Audio 側の仕事）。
       tick: -1,
       coreShape: this.coreShape,
+      // 静止画スタディはアームを持たない（打撃に同期する光なので Audio 側の仕事）。
+      armMask: this.manualArmMask,
+      armStrength: this.params.corePulse,
+      armSeed: this.params.fragmentSeed,
       depthProbe: this.params.depthProbe,
     };
   }
@@ -484,6 +490,18 @@ export class LightElementLab2 implements LabExpression {
         float elementMask(vec2 p, float channel) {
           float kind = vTone.z;
           float soft = vDepth.y;
+
+          // ---- アーム: 打撃に同期した一時的な光条。コアから片側だけへ伸びる ----
+          if (kind > 5.5) {
+            if (p.x <= 0.0) return 0.0;
+            float across = p.y / max(vShape.x, 1e-4);
+            float spine = exp(-across * across);
+            float halo = exp(-across * across * 0.06) * vShape.y;
+            // 根元は芯に隠す。ここを 0 にしておくと複数のアームが中心で重ならない。
+            float root = smoothstep(0.0, 0.09, p.x);
+            float taper = 1.0 - smoothstep(vShape.z, vShape.w, p.x);
+            return (spine + halo) * root * taper;
+          }
 
           // ---- カーテン: 膜よりはっきりした形を持つが、あくまで薄い層 ----
           // 形状族は 3 つ。族と個体差は seed が選び、ここは受け取った値を描くだけ。
@@ -886,7 +904,7 @@ export class LightElementLab2 implements LabExpression {
     const levels = this.audioDrive.levels();
     const drive =
       this.driveMode === 'audio'
-        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / frag ${levels.visibleFragments}/${levels.liveFragments} (×${levels.fragmentBirths}) / tick ${levels.tick}`
+        ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / arms ${levels.armMask} / frag ${levels.visibleFragments}/${levels.liveFragments} (×${levels.fragmentBirths}) / tick ${levels.tick}`
         : `manual pulse ${this.params.corePulse.toFixed(2)}`;
     return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
   }
@@ -962,6 +980,24 @@ export class LightElementLab2 implements LabExpression {
           ...CORE_SHAPES.map((name, index) => ({ value: String(index), label: name })),
         ],
         value: String(this.coreShape),
+      },
+      {
+        key: 'manualArms',
+        label: 'Arms (Manual)',
+        type: 'select',
+        options: [
+          { value: '0', label: 'None' },
+          { value: '1', label: 'Up' },
+          { value: '2', label: 'Right' },
+          { value: '4', label: 'Down' },
+          { value: '8', label: 'Left' },
+          { value: '3', label: 'Up + Right' },
+          { value: '12', label: 'Down + Left' },
+          { value: '10', label: 'Left + Right' },
+          { value: '5', label: 'Up + Down' },
+          { value: '15', label: 'All' },
+        ],
+        value: String(this.manualArmMask),
       },
       // ---- 音が注ぎ込むもの（Audio では未配線のものだけつまみが効く）----
       row('huePhase', 'Global hue H'),
@@ -1061,6 +1097,13 @@ export class LightElementLab2 implements LabExpression {
       if (!Number.isFinite(rate)) return;
       this.strobeRate = clamp(Math.round(rate), 6, 60);
       this.audioDrive.setStrobe(this.strobeEnabled, this.strobeRate);
+      return;
+    }
+    if (key === 'manualArms') {
+      const mask = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(mask)) return;
+      this.manualArmMask = clamp(Math.round(mask), 0, 15);
+      this.rebuildRig();
       return;
     }
     if (key === 'coreShape') {

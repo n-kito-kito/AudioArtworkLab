@@ -1,6 +1,7 @@
 import type { AudioParameters, SpectrumFrame } from '../audio/AudioEngine';
 import { BandLightEventDetector } from '../engine/bandLightEvents';
 import {
+  ARM_SETS,
   CORE_SHAPES,
   RESPONSE_SECONDS,
   STROBE,
@@ -120,6 +121,8 @@ export interface OpticsDriveLevels {
   readonly coreShape: number;
   /** 光学クロックのティック番号（−1 は連続表示）。 */
   readonly tick: number;
+  /** 打撃に同期したアームの方向ビット（0 は出ていない）。 */
+  readonly armMask: number;
   /** 生きている断片の数と、このティックで点いている数。 */
   readonly liveFragments: number;
   readonly visibleFragments: number;
@@ -176,6 +179,15 @@ export class OpticsAudioDrive {
   private heldCoreShape = -1;
   private coreTicksLeft = 0;
   private coreFramesLeft = 0;
+  /**
+   * 打撃に同期したアーム。**コアと一緒に閃き、コアと同じか 1 ティック長く残る。**
+   * 方向の組み合わせは打撃のシードが選ぶので、毎回同じ十字にならない。
+   */
+  private heldArmMask = 0;
+  private heldArmStrength = 0;
+  private heldArmSeed = 0;
+  private armTicksLeft = 0;
+  private armFramesLeft = 0;
 
   /**
    * 生きている断片。**寿命はティックで数える**（秒ではない）。
@@ -225,6 +237,11 @@ export class OpticsAudioDrive {
     this.heldCoreShape = -1;
     this.coreTicksLeft = 0;
     this.coreFramesLeft = 0;
+    this.heldArmMask = 0;
+    this.heldArmStrength = 0;
+    this.heldArmSeed = 0;
+    this.armTicksLeft = 0;
+    this.armFramesLeft = 0;
     this.liveFragments.length = 0;
     this.pendingFragments.length = 0;
     this.fragmentBirths = 0;
@@ -256,6 +273,7 @@ export class OpticsAudioDrive {
     this.haze = smooth(this.haze, this.source, deltaSeconds, RESPONSE_SECONDS.haze);
 
     if (this.coreFramesLeft > 0) this.coreFramesLeft -= 1;
+    if (this.armFramesLeft > 0) this.armFramesLeft -= 1;
 
     // ---- 光学クロック: ティックを跨いだら表示状態を再サンプルする ----
     if (this.strobeEnabled) {
@@ -281,6 +299,9 @@ export class OpticsAudioDrive {
       this.heldCorePulse = 0;
       this.coreTicksLeft = 0;
       this.coreFramesLeft = 0;
+      this.heldArmMask = 0;
+      this.armTicksLeft = 0;
+      this.armFramesLeft = 0;
       // 無音では断片も生まれず、生きているものも消える（無音 = 黒）。
       this.liveFragments.length = 0;
       this.pendingFragments.length = 0;
@@ -328,6 +349,18 @@ export class OpticsAudioDrive {
       this.coreTicksLeft = 1;
       this.coreFramesLeft = DRIVE.coreMinimumFrames;
       this.pulseCount += 1;
+
+      // ---- 打撃に同期したアーム ----
+      // 方向の組み合わせは重み表から層化して引く（歩幅が表長と互いに素なので
+      // 同じ組が続けて出ない）。位相だけを音のシードがずらす。
+      const armOffset = Math.floor(clamp01(event.snapshot.audioSeed) * ARM_SETS.length);
+      this.heldArmMask =
+        ARM_SETS[(event.eventIndex * 7 + armOffset) % ARM_SETS.length] ?? 0;
+      this.heldArmStrength = Math.max(this.heldArmStrength, pulse);
+      this.heldArmSeed = (Math.round(clamp01(event.snapshot.audioSeed) * 65537) + event.eventIndex * 31) | 0;
+      // 強い打撃だけ 1 ティック長く残す。
+      this.armTicksLeft = pulse > 0.75 ? 2 : 1;
+      this.armFramesLeft = DRIVE.coreMinimumFrames;
     }
   }
 
@@ -386,6 +419,12 @@ export class OpticsAudioDrive {
     } else {
       this.heldCorePulse = 0;
     }
+    if (this.armTicksLeft > 0) {
+      this.armTicksLeft -= 1;
+      if (this.armTicksLeft <= 0 && this.armFramesLeft <= 0) this.heldArmMask = 0;
+    } else {
+      this.heldArmMask = 0;
+    }
     // 断片の寿命はティックで数える。**寿命が尽きたらフェードせずに消える。**
     let write = 0;
     for (let read = 0; read < this.liveFragments.length; read++) {
@@ -430,6 +469,7 @@ export class OpticsAudioDrive {
       lastBand: this.lastBand,
       coreShape: this.publishedCorePulse() > 0 ? this.heldCoreShape : -1,
       tick: this.strobeEnabled ? this.tickIndex : -1,
+      armMask: this.publishedArmMask(),
       liveFragments: this.liveFragments.length,
       visibleFragments: this.visibleFragments().length,
       fragmentBirths: this.fragmentBirths,
@@ -440,6 +480,11 @@ export class OpticsAudioDrive {
   /** コアが出ているのは、打撃のティックのあいだだけ。 */
   private publishedCorePulse(): number {
     return this.coreTicksLeft > 0 || this.coreFramesLeft > 0 ? this.heldCorePulse : 0;
+  }
+
+  /** アームもコアと同じ規律で、打撃のティックのあいだだけ出る。 */
+  private publishedArmMask(): number {
+    return this.armTicksLeft > 0 || this.armFramesLeft > 0 ? this.heldArmMask : 0;
   }
 
   /**
@@ -468,6 +513,9 @@ export class OpticsAudioDrive {
       seed: manual.seed,
       tick: this.strobeEnabled ? this.tickIndex : -1,
       coreShape: pulse > 0 ? this.heldCoreShape : -1,
+      armMask: this.publishedArmMask(),
+      armStrength: this.heldArmStrength,
+      armSeed: this.heldArmSeed,
       // 奥行き計測つまみは音とは無関係の開発用なので、常に開発つまみの値。
       depthProbe: manual.depthProbe,
     };

@@ -29,7 +29,7 @@
  */
 
 /** 描画側のフラグメント分岐と 1 対 1 で対応する形の種別。 */
-export type OpticalKind = 'core' | 'beam' | 'veil' | 'fan' | 'haze' | 'curtain';
+export type OpticalKind = 'core' | 'beam' | 'veil' | 'fan' | 'haze' | 'curtain' | 'arm';
 
 /** Version ボタンと 1 対 1。各層をそれぞれ単独で確かめるための単位。 */
 export type OpticalGroup =
@@ -49,7 +49,44 @@ export const KIND_INDEX: Readonly<Record<OpticalKind, number>> = {
   fan: 3,
   haze: 4,
   curtain: 5,
+  arm: 6,
 };
+
+/**
+ * **アームの方向。** ビットで持ち、打撃ごとに部分集合が選ばれる。
+ * 毎回上下左右すべてに出すと、どの打撃も同じ十字になってしまう。
+ */
+export const ARM_UP = 1;
+export const ARM_RIGHT = 2;
+export const ARM_DOWN = 4;
+export const ARM_LEFT = 8;
+export const ARM_ALL = ARM_UP | ARM_RIGHT | ARM_DOWN | ARM_LEFT;
+
+/**
+ * 方向の組み合わせの重み表。**1〜2 方向が出やすく、全方向はたまに**。
+ * 重みぶん並べた平坦な表にしてあるので、層化して引けば偏らない。
+ */
+export const ARM_SETS: readonly number[] = [
+  // 1 方向（各 3）
+  ARM_UP, ARM_UP, ARM_UP,
+  ARM_RIGHT, ARM_RIGHT, ARM_RIGHT,
+  ARM_DOWN, ARM_DOWN, ARM_DOWN,
+  ARM_LEFT, ARM_LEFT, ARM_LEFT,
+  // 2 方向（各 2）
+  ARM_UP | ARM_RIGHT, ARM_UP | ARM_RIGHT,
+  ARM_RIGHT | ARM_DOWN, ARM_RIGHT | ARM_DOWN,
+  ARM_DOWN | ARM_LEFT, ARM_DOWN | ARM_LEFT,
+  ARM_LEFT | ARM_UP, ARM_LEFT | ARM_UP,
+  ARM_UP | ARM_DOWN, ARM_UP | ARM_DOWN,
+  ARM_LEFT | ARM_RIGHT, ARM_LEFT | ARM_RIGHT,
+  // 3 方向（各 1）
+  ARM_UP | ARM_RIGHT | ARM_DOWN,
+  ARM_RIGHT | ARM_DOWN | ARM_LEFT,
+  ARM_DOWN | ARM_LEFT | ARM_UP,
+  ARM_LEFT | ARM_UP | ARM_RIGHT,
+  // 全方向（1）
+  ARM_ALL,
+];
 
 /**
  * **カーテンの形状族。** seed が族と個体差の両方を選ぶ。
@@ -103,6 +140,21 @@ const CORE_SHAPE_PARAMS: readonly (readonly [number, number, number, number])[] 
   [1, 0.14, 0.92, 0.92], // 縦スパイク優勢
   [2, 0.92, 0.14, 0.92], // 横フレア優勢
   [3, 0.1, 0.1, 1.4], // コンパクトな星形バースト
+];
+
+/**
+ * **形状族 → アームのスタイル**（長さ倍率・太さ倍率・ハローの利得）。
+ *
+ * 役割を分けてある: **形状族はアームの太さ・長さの「質」を決め、
+ * どの方向へ出るかは独立に打撃のシードが決める。**
+ * 芯まわりの小さなフレア（`CORE_SHAPE_PARAMS`）はアームの根元にあたり、
+ * アームが出ている軸だけが光るように絞られる（重複しない）。
+ */
+const ARM_STYLE: readonly (readonly [number, number, number])[] = [
+  [1, 1, 0.1], // 十字フレア: 標準
+  [1.35, 0.6, 0.06], // 縦スパイク: 細く長い
+  [0.9, 1.5, 0.14], // 横フレア: 太く短い
+  [0.55, 0.9, 0.18], // コンパクト: 短く芯寄り
 ];
 
 /**
@@ -193,6 +245,15 @@ export interface OpticsDrive {
    * 0 以上は `CORE_SHAPES` の番号。打撃ごとに seed が選ぶ。
    */
   readonly coreShape: number;
+  /**
+   * **打撃に同期したアームの方向**（`ARM_UP` などのビット和）。
+   * 0 でアームを出さない（Manual の静止画スタディの既定）。
+   */
+  readonly armMask: number;
+  /** アームの明るさ（0..1）。コアと同じ閾値・曲線の世界から来る。 */
+  readonly armStrength: number;
+  /** アーム 1 本ごとの個体差の元（整数）。毎回同じ十字にしないため。 */
+  readonly armSeed: number;
   /**
    * 開発用の奥行き計測つまみ。0 で作者指定の z をそのまま使う。
    * 0 より大きいと、**見かけの位置と大きさを保ったまま**全層をその正規化深度へ移す。
@@ -285,6 +346,11 @@ export const OPTICS = {
    * 膜よりはっきりした形を持つが、あくまで薄い層である。
    */
   curtainCeiling: 0.2,
+  /**
+   * **アームの天井。** コア（1.0）と他の層（0.30）の間。
+   * コアの閃光の一部なので明るくてよいが、白（250/255）へは届かせない。
+   */
+  armCeiling: 0.62,
   /** 断片の枚数。 */
   fragmentCount: 6,
   /** カーテンの枚数。 */
@@ -640,6 +706,13 @@ const buildCore = (drive: OpticsDrive): OpticalLayerTraits[] => {
     shapeIndex >= 0 && shapeIndex < CORE_SHAPE_PARAMS.length
       ? CORE_SHAPE_PARAMS[shapeIndex]!
       : ([-1, 0, 0, 1] as const);
+  const mask = Math.round(drive.armMask);
+  // 芯まわりのフレアはアームの根元。**アームが出ている軸だけ光らせる**ので、
+  // 方向のランダム化と矛盾しない（mask が 0 の Manual では従来どおり）。
+  const flareH =
+    mask === 0 ? shape[1] : (mask & (ARM_LEFT | ARM_RIGHT)) !== 0 ? shape[1] : 0;
+  const flareV =
+    mask === 0 ? shape[2] : (mask & (ARM_UP | ARM_DOWN)) !== 0 ? shape[2] : 0;
   return [
     layer({
       kind: 'core',
@@ -657,12 +730,65 @@ const buildCore = (drive: OpticsDrive): OpticalLayerTraits[] => {
       // 大きくしすぎると白が塊になるので、白は芯の項に持たせて広い項は抑える。
       intensity: mix(0.4, 1.55, pulse),
       // [形状族, 横フレアの利得, 縦スパイクの利得, 芯の強さ倍率]
-      shape: [shape[0], shape[1], shape[2], shape[3]],
+      shape: [shape[0], flareH, flareV, shape[3]],
       whiteAllowed: true,
       ceiling: 1,
       channel: [1, 1, 0, 0],
     }),
+    ...buildArms(drive, shapeIndex),
   ];
+};
+
+/** アームの向き（ローカル +x がこの向きになるよう板ごと回す）。 */
+const ARM_DIRECTIONS: readonly { readonly bit: number; readonly spin: number }[] = [
+  { bit: ARM_RIGHT, spin: 0 },
+  { bit: ARM_UP, spin: Math.PI / 2 },
+  { bit: ARM_LEFT, spin: Math.PI },
+  { bit: ARM_DOWN, spin: -Math.PI / 2 },
+];
+
+/**
+ * **打撃に同期したアームの閃光。**
+ *
+ * 骨格の常設の十字（音量で光る層）とは別物で、**打撃の瞬間だけ重なる一時的な光条**。
+ * どの方向へ出るかは打撃のシードが選んだ `armMask` が決め、
+ * 太さ・長さの質はコアの形状族が決める（役割が重複しない）。
+ * 長さと強さには 1 本ごとの個体差を入れて、毎回同じ十字にならないようにする。
+ */
+const buildArms = (drive: OpticsDrive, shapeIndex: number): OpticalLayerTraits[] => {
+  const mask = Math.round(drive.armMask);
+  const power = clamp01(drive.armStrength);
+  if (mask === 0 || power <= 0) return [];
+  const style = ARM_STYLE[shapeIndex >= 0 && shapeIndex < ARM_STYLE.length ? shapeIndex : 0]!;
+  const seed = Math.round(drive.armSeed);
+  const out: OpticalLayerTraits[] = [];
+  for (let index = 0; index < ARM_DIRECTIONS.length; index++) {
+    const direction = ARM_DIRECTIONS[index]!;
+    if ((mask & direction.bit) === 0) continue;
+    const a = hash01(seed, index * 3 + 1);
+    const b = hash01(seed, index * 3 + 2);
+    // 強い打撃ほど長く、1 本ごとに少しばらつく。
+    const length = 1.55 * style[0] * (0.78 + 0.44 * a) * (0.62 + 0.6 * power);
+    const thickness = 0.06 * style[1] * (0.85 + 0.3 * b);
+    out.push(
+      layer({
+        kind: 'arm',
+        position: [0, 0, -5.62],
+        half: [length, thickness],
+        spin: direction.spin,
+        hueDelta: 0.01,
+        hueSpan: 0.07,
+        gradientForm: 0,
+        intensity: (0.5 + 0.85 * power) * (0.82 + 0.3 * a),
+        // [芯の半幅, ハローの利得, 減衰の始まり, 減衰の終わり]
+        shape: [0.22, style[2], 0.2 + 0.25 * b, 1],
+        axis: [0, 1],
+        ceiling: OPTICS.armCeiling,
+        channel: [1, 1, 0.02, 0.1],
+      }),
+    );
+  }
+  return out;
 };
 
 /**
