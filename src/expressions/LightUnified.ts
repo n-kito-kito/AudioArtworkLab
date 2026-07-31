@@ -1006,7 +1006,15 @@ export class LightUnified implements LabExpression {
             float core = 1.0 - smoothstep(vShape.x * 0.4, vShape.x + halo, abs(p.y));
             float glow = exp(-abs(p.y) / max(vShape.y + halo, 1e-3)) * 0.5;
             float along = 1.0 - smoothstep(vShape.z, vShape.w, abs(p.x));
-            return (core + glow) * along;
+            /**
+             * **片側化と根元のフェード。**
+             * 打撃の閃光を両側に描くと、4 本が中心で重なって**点が 4 重に加算**され、
+             * 「面」ではなく「点」が強調される。片側だけへ伸ばし、根元も芯に隠す。
+             * 常設の骨格（性格 0）は十字の桁なので両側のまま。
+             */
+            float oneSided = clamp(vAxis.w, 0.0, 1.0);
+            float root = mix(1.0, smoothstep(0.0, 0.09, p.x), oneSided);
+            return (core + glow) * along * root;
           }
 
           // ---- 核 ----

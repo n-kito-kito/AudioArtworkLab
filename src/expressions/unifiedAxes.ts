@@ -191,6 +191,13 @@ export interface UnifiedAxes {
    */
   crossRotation: number;
   /**
+   * **十字を十字でなくす。**
+   *
+   * 0 = 上下左右に固定（十字）⇄ 1 = 1 本ずつ ±π まで自由な向き。
+   * 向きは打撃のシードから決まるので決定論。中間では「少しだけ傾いた十字」になる。
+   */
+  crossAngle: number;
+  /**
    * **光の数。** 1 バーストあたりの要素数・同時バースト数・
    * コアの再発火の速さを同時にスケールする。
    */
@@ -238,6 +245,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'skeleton', label: 'Skeleton', group: '構成', low: '無し', high: 'はっきり' },
   { id: 'beamLength', label: 'Beam length', group: '構成', low: '短い', high: '貫通' },
   { id: 'crossRotation', label: 'Cross rotation', group: '構成', low: '現状の向き', high: 'π 回転' },
+  { id: 'crossAngle', label: 'Cross angle', group: '構成', low: '上下左右', high: '自由な向き' },
   { id: 'density', label: 'Density', group: '構成', low: '少ない', high: '多い' },
   { id: 'motion', label: 'Motion', group: '動き', low: '静止', high: '漂う' },
   { id: 'trace', label: 'Trace', group: '動き', low: '無し', high: '強い' },
@@ -279,6 +287,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   skeleton: 0.4,
   beamLength: 0.55,
   crossRotation: 0,
+  crossAngle: 0,
   density: 0.55,
   motion: 0.35,
   trace: 0.4,
@@ -325,6 +334,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     skeleton: 0.12,
     beamLength: 0.6,
     crossRotation: 0,
+    crossAngle: 0,
     density: 0.85,
     motion: 0.5,
     trace: 0.35,
@@ -362,6 +372,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     skeleton: 0.15,
     beamLength: 0.45,
     crossRotation: 0,
+    crossAngle: 0,
     density: 0.8,
     motion: 0.3,
     trace: 0.5,
@@ -399,6 +410,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     skeleton: 1,
     beamLength: 1,
     crossRotation: 0,
+    crossAngle: 0,
     density: 0.5,
     motion: 0.05,
     trace: 0.2,

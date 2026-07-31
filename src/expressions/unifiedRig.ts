@@ -589,6 +589,27 @@ const crossGain = (axes: UnifiedAxes): number => smoothstep(0, 0.12, clamp01(axe
 const crossRoll = (axes: UnifiedAxes): number => clamp01(axes.crossRotation) * Math.PI;
 
 /**
+ * **1 本ごとの向きのばらつき。**
+ *
+ * 0 なら上下左右のまま（十字）、1 なら ±π まで自由に散る。
+ * どちらへ散るかは打撃のシードが決めるので、同じ音なら同じ向きになる。
+ */
+const crossSkew = (axes: UnifiedAxes, seed: number, index: number): number =>
+  (hash01(Math.round(seed) + 900, index) * 2 - 1) * Math.PI * clamp01(axes.crossAngle);
+
+/**
+ * **閃光の性格（核の形状族ごと）。** [長さ, 太さ, ハローの利得]。
+ * Lab 2 の `ARM_STYLE` をそのまま引き継ぐ。族 0 は従来と同じ値なので、
+ * 既定の見え方は変わらない。
+ */
+const ARM_STYLE: readonly (readonly [number, number, number])[] = [
+  [1, 1, 0.1], // 十字フレア: 標準
+  [1.35, 0.6, 0.06], // 縦スパイク: 細く長い
+  [0.9, 1.5, 0.14], // 横フレア: 太く短い
+  [0.55, 0.9, 0.18], // コンパクト: 短く芯寄り
+];
+
+/**
  * **核が自分で描く貫通線（十字）の明るさ。**
  *
  * 核の中の縦横の線は、これまで `Beam length` にも `Skeleton` にも繋がっておらず、
@@ -985,7 +1006,7 @@ const buildBeams = (
         kind: 'beam',
         position: [anchor.x, anchor.y, z],
         half: [reach, index === 0 ? 0.34 : index === 1 ? 0.3 : 0.9],
-        spin: (index === 0 ? Math.PI / 2 : 0) + roll,
+        spin: (index === 0 ? Math.PI / 2 : 0) + roll + crossSkew(axes, drive.beamSeed, index),
         tiltX: 0,
         tiltY: 0,
         hue: hueOf(axes, drive.hue, drive.seed, 40 + index),
@@ -1028,14 +1049,22 @@ const buildBeams = (
       if ((mask & direction.bit) === 0) continue;
       const a = hash01(seed, index * 3 + 1);
       const b = hash01(seed, index * 3 + 2);
+      // 閃光の質は**核の形状族**が決める（役割が重複しない）。族 0 は従来と同じ値。
+      const family = Math.round(drive.coreShape);
+      const style = ARM_STYLE[family >= 0 && family < ARM_STYLE.length ? family : 0]!;
       const length =
-        1.55 * (0.78 + 0.44 * a) * (0.62 + 0.6 * power) * mix(0.7, 1.5, share) * beamReach(axes);
-      const thickness = 0.06 * (0.85 + 0.3 * b) * mix(1.4, 0.7, share);
+        1.55 *
+        style[0] *
+        (0.78 + 0.44 * a) *
+        (0.62 + 0.6 * power) *
+        mix(0.7, 1.5, share) *
+        beamReach(axes);
+      const thickness = 0.06 * style[1] * (0.85 + 0.3 * b) * mix(1.4, 0.7, share);
       out.push({
         kind: 'beam',
         position: [anchor.x, anchor.y, z - 0.02],
         half: [length, thickness],
-        spin: direction.spin + roll,
+        spin: direction.spin + roll + crossSkew(axes, seed, index + 4),
         tiltX: 0,
         tiltY: 0,
         hue: hueOf(axes, drive.hue, seed, index),
@@ -1044,11 +1073,13 @@ const buildBeams = (
         gradientForm: 0,
         intensity:
           (0.5 + 0.85 * power) * (0.82 + 0.3 * a) * cross * blinkOf(axes, drive, 'beam', index + 3),
-        shape: [0.22, 0.1, 0.2 + 0.25 * b, 1],
+        shape: [0.22, style[2], 0.2 + 0.25 * b, 1],
         edge: clamp01(axes.blur),
         halo: haloOf(axes, 'beam'),
         pad: padOf(axes),
-        character: 0,
+        // 光条では「性格」は片側かどうかを表す。閃光は**片側だけ**へ伸びる
+        // （両側で描くと 4 本が中心で重なり、点が 4 重に強調される）。
+        character: 1,
         material: materialOf(axes, 'beam', seed, index),
         whiteAllowed: false,
         ceiling: UNIFIED.beamCeiling,
@@ -1118,7 +1149,8 @@ const buildCore = (
         z - index * 0.01,
       ],
       half: [size * mix(1, UNIFIED.coreShapeAxis.wide, form), size * mix(1, UNIFIED.coreShapeAxis.tall, form)],
-      spin: roll,
+      // 核の中の十字は板ごと回す（斜めの十字が作れる）。
+      spin: roll + crossSkew(axes, seed, 20 + index),
       tiltX: 0,
       tiltY: 0,
       hue: drive.hue,
