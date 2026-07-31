@@ -290,7 +290,8 @@ export const UNIFIED = {
    * 素材で削ると芯が消える。膜と靄は素材そのものが見え方の本体。
    */
   grainByKind: {
-    core: 0.22,
+    // 核だけは素材を**加算**する（削るのではない）。ここは加算の量。
+    core: 1,
     beam: 0.45,
     membrane: 1,
     haze: 1,
@@ -372,6 +373,13 @@ export const UNIFIED = {
    * **明るい核だけ**が滲む（膜や靄は素通し）。
    */
   bloom: { threshold: 0.22, strengthAtOne: 0.92, radius: 0.48, exposureAtOne: 0.95 },
+  /**
+   * **核へ足す素材の量。** 他の種別は素材で**削る**（乗算）が、核だけは足す。
+   * 削るだけだと芯が痩せるだけで質感が乗らない — Lab 2 は 0.8・Reactive は 1.38 の加算。
+   */
+  coreMaterialGain: 0.8,
+  /** 核の楕円窓（この半径から外へ向けて 0 へ）。板の縁の手前で溶ける。 */
+  coreWindow: { start: 0.58, end: 1.03 },
   /** 場の利得。音量の持続をそのまま輝度にすると暗すぎるので 1 本だけ通す。 */
   fieldGain: 1.6,
   /**

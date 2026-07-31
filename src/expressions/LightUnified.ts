@@ -787,6 +787,14 @@ export class LightUnified implements LabExpression {
           ),
         },
         uGrainGain: { value: UNIFIED.grain.gain },
+        // [核へ足す素材の量, 楕円窓の始まり, 同・終わり]
+        uCoreMaterial: {
+          value: new THREE.Vector3(
+            UNIFIED.coreMaterialGain,
+            UNIFIED.coreWindow.start,
+            UNIFIED.coreWindow.end,
+          ),
+        },
         // アトラスが届くまでは 0。**素材が無い間は手続きの形だけで描く**
         //（1x1 の黒を掛けて画面が消えないようにするため）。
         uHasAtlas: { value: 0 },
@@ -874,6 +882,7 @@ export class LightUnified implements LabExpression {
         uniform vec3 uChannelGain;
         uniform vec4 uGrain;
         uniform float uGrainGain;
+        uniform vec3 uCoreMaterial;
         uniform float uHasAtlas;
         uniform sampler2D uMask;
         uniform vec2 uMaskGrid;
@@ -925,6 +934,11 @@ export class LightUnified implements LabExpression {
           if (form < 1.5) return clamp(length(p), 0.0, 1.0);
           if (form < 2.5) return p.y * 0.5 + 0.5;
           return atan(p.y, p.x) / TAU + 0.5;
+        }
+
+        /** 核の緩い楕円窓。板の縁より内側で 0 になるので、四角い枠が出ない。 */
+        float coreWindow(vec2 p) {
+          return 1.0 - smoothstep(uCoreMaterial.y, uCoreMaterial.z, length(p));
         }
 
         /** **縁の柔らかさ。** Blur 軸が 0 なら鋭く、1 なら広くにじむ。 */
@@ -1045,7 +1059,8 @@ export class LightUnified implements LabExpression {
           float flakes = exp(-r * mix(22.0, 2.6, vEdge)) *
                          (0.35 + 0.65 * abs(sin(atan(p.y, p.x) * 5.0 + r * 9.0))) *
                          mix(0.18, 0.45, vEdge);
-          return centre + spark + lineH + lineV + flakes;
+          // **緩い楕円窓。** 縁を板の内側で溶かす。芯には届かない広さに取ってある。
+          return (centre + spark + lineH + lineV + flakes) * coreWindow(p);
         }
 
         /**
@@ -1112,8 +1127,15 @@ export class LightUnified implements LabExpression {
           // 黒浮きを加算の前に落とす。これが無いと薄い霧が画面全体を灰色に持ち上げる。
           luminance *= smoothstep(uGrain.x, uGrain.x + uGrain.y, luminance);
           luminance = pow(max(luminance, 0.0), uGrain.z) * uGrainGain;
+          /**
+           * **核だけは素材を「足す」。**
+           * 他の種別は素材で削る（乗算）が、核でそれをやると芯が痩せるだけで
+           * 質感が乗らない。核では乗算を 1 に固定し、下で加算する。
+           * 分岐は**種別だけ**で、軸はどちらの経路でも係数のまま。
+           */
+          float isCore = 1.0 - step(0.5, vTone.z);
           // 0 でぴったり 1（＝素材を 1 画素も読まない手続きの形だけ）。
-          float material = mix(1.0, clamp(luminance, 0.0, 2.2), grain);
+          float material = mix(1.0, clamp(luminance, 0.0, 2.2), grain * (1.0 - isCore));
 
           // 色。層ごとの色相はリグが決めてある（要素ごと ⇄ 全体 1 色の混合済み）。
           float gradient = gradientAt(q, vTone.w);
@@ -1147,6 +1169,9 @@ export class LightUnified implements LabExpression {
 
           vec3 colour = channels * uChannelGain * tint;
           colour *= uIntensity * vAxis.x * material * silhouette;
+          // **核へ素材を加算する。** 楕円窓の内側だけなので、板の四角さは出ない。
+          colour += tint * uChannelGain * uIntensity * vAxis.x * frame *
+                    isCore * grain * uCoreMaterial.x * clamp(luminance, 0.0, 2.2) * coreWindow(p);
           // **白の予算。** 核以外はここで頭を押さえる。
           colour = min(colour, vec3(vAxis.y));
           gl_FragColor = vec4(colour, 1.0);
