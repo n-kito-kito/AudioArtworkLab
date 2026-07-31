@@ -10,6 +10,7 @@ import { LightElementLab2 } from './LightElementLab2';
 import type { OpticalGroup } from './lightOpticsMapping';
 import { LightReactiveLab, type ReactiveMode } from './LightReactiveLab';
 import { LightSpatialStudy } from './LightSpatialStudy';
+import { LightUnified } from './LightUnified';
 import { LightTraces } from './LightTraces';
 import { ModularPatternField } from './ModularPatternField';
 import { ReactiveGeometry } from './ReactiveGeometry';
@@ -48,6 +49,7 @@ export type ExpressionId =
   | 'light-reactive-texture-v1'
   | 'light-reactive-variation-v1'
   | 'light-reactive-composite-v1'
+  | 'light-unified-v1'
   | 'reactive-geometry-v1';
 
 export interface ExpressionVersion {
@@ -103,6 +105,13 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
     id: 'modular',
     label: 'Modular Pattern Field',
     versions: [{ id: 'modular-v1', label: 'V1' }],
+  },
+  // 3 つの Light 表現を連続軸で行き来する統合表現。既存 3 表現は比較用に無改変で残す。
+  // 軸の中間に、どれでもない見え方が現れることが狙い。
+  {
+    id: 'light-unified',
+    label: 'Light Unified',
+    versions: [{ id: 'light-unified-v1', label: 'V1' }],
   },
   {
     id: 'light-traces',
@@ -238,6 +247,7 @@ export function createExpression(
   if (lightElement2Group) return new LightElementLab2(id, lightElement2Group, effects, theme);
   const reactiveMode = LIGHT_REACTIVE_MODES[id];
   if (reactiveMode) return new LightReactiveLab(id, reactiveMode, effects, theme);
+  if (id === 'light-unified-v1') return new LightUnified(id, effects, theme);
   if (id === 'reactive-geometry-v1') return new ReactiveGeometry(effects, theme);
   applyTuning(id);
   const field = id === 'cymatics-v2' ? new CymaticsV2() : new Cymatics();
