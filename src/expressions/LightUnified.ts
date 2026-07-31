@@ -7,6 +7,7 @@ import type { CompositionContext, DesignLayerCanvases } from '../compositions/Co
 import type { ExpressionParam, LabExpression } from './Expression';
 import type { ExpressionId } from './catalog';
 import { OpticsAudioDrive } from './opticsAudioDrive';
+import type { FragmentSpawn } from './lightOpticsMapping';
 import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
 import {
   AXIS_DECLS,
@@ -22,6 +23,7 @@ import {
   type UnifiedDrive,
   type UnifiedLayer,
 } from './unifiedRig';
+import { EmissionShape } from './unifiedTime';
 
 /**
  * **Light Unified — 3 つの Light 表現を連続軸で行き来する統合表現。**
@@ -40,6 +42,8 @@ import {
 const LIMITS = {
   /** インスタンスの上限。靄 1 + 膜 4 + 光条 7 + 破片 8 + 扇 1 + 核 1 に余裕を持たせる。 */
   maximumLayers: 32,
+  /** 尾を引いている破片も保持するので、生きている枚数より少し多く持つ。 */
+  maximumFragmentShapes: 24,
   nearPlane: 0.1,
   farPlane: 90,
   atlas: { manifestUrl: 'assets/light-traces/manifest.json', cellPixels: 384, columns: 4 },
@@ -47,6 +51,26 @@ const LIMITS = {
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
+
+/** 散らばりのシード。**固定値**（同じ音なら必ず同じ絵になる）。 */
+const UNIFIED_SEED = 7;
+
+/** 無音の駆動。**1 画素も出ない**状態。 */
+const SILENT_DRIVE: UnifiedDrive = {
+  fieldLevel: 0,
+  corePulse: 0,
+  coreShape: -1,
+  beamMask: 0,
+  beamStrength: 0,
+  beamSeed: 0,
+  fanPower: 0,
+  fanSeed: -1,
+  fragments: [],
+  hue: 0,
+  tick: 0,
+  time: 0,
+  seed: UNIFIED_SEED,
+};
 
 export interface LightUnifiedState {
   readonly layers: number;
@@ -76,6 +100,23 @@ export class LightUnified implements LabExpression {
   private shelf: AudioSourceShelf | null = null;
   private previousElapsed = -1;
 
+  /**
+   * 時間軸（Strobe / Attack / Decay）が作る発光の形。
+   * `hold` は**尾を引いているあいだも同じ形・同じ向きで消える**ように覚えておく値。
+   */
+  private readonly fieldShape = new EmissionShape();
+  private readonly coreLight = { emission: new EmissionShape(), hold: -1 };
+  private readonly fanLight = { emission: new EmissionShape(), hold: -1 };
+  private readonly beamShape = new EmissionShape();
+  private beamMaskHeld = 0;
+  private beamSeedHeld = 0;
+  /** 破片 1 枚ごとの時間の形（死んでも尾のあいだは残す）。 */
+  private readonly fragmentShapes = new Map<
+    number,
+    { spawn: FragmentSpawn; emission: EmissionShape; alive: boolean }
+  >();
+
+  private drive: UnifiedDrive = SILENT_DRIVE;
   private layers: readonly UnifiedLayer[] = [];
   private context: CompositionContext | null = null;
   private scene: THREE.Scene | null = null;
@@ -90,7 +131,7 @@ export class LightUnified implements LabExpression {
 
   // ---- インスタンス属性 ----
   private readonly offsets = new Float32Array(LIMITS.maximumLayers * 3);
-  private readonly sizes = new Float32Array(LIMITS.maximumLayers * 3);
+  private readonly sizes = new Float32Array(LIMITS.maximumLayers * 4);
   private readonly spins = new Float32Array(LIMITS.maximumLayers * 3);
   private readonly tones = new Float32Array(LIMITS.maximumLayers * 4);
   private readonly shapes = new Float32Array(LIMITS.maximumLayers * 4);
@@ -131,8 +172,9 @@ export class LightUnified implements LabExpression {
     this.shelf = getSourceShelf(context.audioEngine);
     this.audioDrive.setShelf(this.shelf);
 
+    this.resetShapes();
     this.buildMesh();
-    this.rebuild(0);
+    this.rebuild();
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
@@ -154,48 +196,112 @@ export class LightUnified implements LabExpression {
     });
   }
 
-  /** 音の状態を統合の駆動へ写す。**生成核は 3 表現と同じ**（検出も結線も共有）。 */
-  private driveOf(elapsed: number): UnifiedDrive {
-    const levels = this.audioDrive.levels();
-    const optics = this.audioDrive.toDrive({
-      skeletonLevel: 0,
-      curtainLevel: 0,
-      hazeLevel: 0,
-      corePulse: 0,
-      fragmentEnergy: 0,
-      fragments: [],
-      fanGate: 0,
-      fanSeed: -1,
-      huePhase: 0,
-      seed: 7,
-      tick: -1,
-      coreShape: -1,
-      armMask: 0,
-      armStrength: 0,
-      armSeed: 0,
-      depthProbe: 0,
-    });
-    return {
-      fieldLevel: Math.min(levels.skeleton * 1.6, 1),
-      corePulse: levels.corePulse,
-      coreShape: levels.coreShape,
-      beamMask: levels.armMask,
-      beamStrength: optics.armStrength,
-      beamSeed: optics.armSeed,
-      fanPower: levels.fanPower,
-      fanSeed: levels.fanSeed,
-      fragments: optics.fragments,
-      hue: levels.huePhase,
-      tick: levels.tick,
+  /**
+   * **音の状態を統合の駆動へ写す。**
+   *
+   * 生成核（検出・結線・痕跡場）は 3 表現と共有だが、**時間の形はここで作る**。
+   * `Attack` / `Decay` は素の held 値を追うエンベロープの時定数、
+   * `Strobe` はティックへのラッチ量（ここ）と off ティックの消灯深さ（層ごと・リグ側）
+   * という**連続な係数**として掛かる（`unifiedTime.ts`）。門の入り切りではない。
+   */
+  private advanceDrive(elapsed: number, delta: number): void {
+    const raw = this.audioDrive.sustained();
+    const { attack, decay, strobe } = this.axes;
+    const tick = raw.tick;
+
+    // ---- 場 ----
+    this.fieldShape.advance(raw.field, delta, tick, attack, decay);
+    const field = Math.min(this.fieldShape.read(strobe) * UNIFIED.fieldGain, 1);
+
+    // ---- 核: 生きているあいだの形状族を覚えておき、尾のあいだも同じ形で消える ----
+    if (raw.coreAlive) this.coreLight.hold = raw.coreShape;
+    this.coreLight.emission.advance(
+      raw.coreAlive ? raw.corePulse : 0,
+      delta,
+      tick,
+      attack,
+      decay,
+    );
+    const corePulse = this.coreLight.emission.read(strobe);
+
+    // ---- 扇 ----
+    if (raw.fanAlive) this.fanLight.hold = raw.fanSeed;
+    this.fanLight.emission.advance(raw.fanAlive ? raw.fanPower : 0, delta, tick, attack, decay);
+    const fanPower = this.fanLight.emission.read(strobe);
+
+    // ---- 光条の閃光 ----
+    if (raw.armAlive) {
+      this.beamMaskHeld = raw.armMask;
+      this.beamSeedHeld = raw.armSeed;
+    }
+    this.beamShape.advance(raw.armAlive ? raw.armStrength : 0, delta, tick, attack, decay);
+    const beamStrength = this.beamShape.read(strobe);
+
+    // ---- 破片: 1 枚ずつが自分のエンベロープを持つ。**死んでも尾のあいだは残す** ----
+    for (const entry of this.fragmentShapes.values()) entry.alive = false;
+    for (const live of raw.fragments) {
+      const key = Math.round(live.spawn.seed) * 32 + Math.round(live.spawn.slot);
+      let entry = this.fragmentShapes.get(key);
+      if (!entry) {
+        if (this.fragmentShapes.size >= LIMITS.maximumFragmentShapes) continue;
+        entry = { spawn: live.spawn, emission: new EmissionShape(), alive: true };
+        this.fragmentShapes.set(key, entry);
+      }
+      entry.spawn = live.spawn;
+      entry.alive = true;
+      entry.emission.advance(1, delta, tick, attack, decay);
+    }
+    // 生きているものを先に置く。**尾を引いている破片が枠を占めて新しい破片を
+    // 締め出さない**ようにするためで、どちらの並びも誕生順（決定論）のまま。
+    const fragments: UnifiedDrive['fragments'][number][] = [];
+    const tails: UnifiedDrive['fragments'][number][] = [];
+    for (const [key, entry] of this.fragmentShapes) {
+      if (!entry.alive) {
+        entry.emission.advance(0, delta, tick, attack, decay);
+        if (entry.emission.level <= 0) {
+          this.fragmentShapes.delete(key);
+          continue;
+        }
+      }
+      const gain = entry.emission.read(strobe);
+      if (gain <= 0) continue;
+      (entry.alive ? fragments : tails).push({ ...entry.spawn, gain });
+    }
+    for (const tail of tails) fragments.push(tail);
+
+    this.drive = {
+      fieldLevel: field,
+      corePulse,
+      coreShape: corePulse > 0 ? this.coreLight.hold : -1,
+      beamMask: beamStrength > 0 ? this.beamMaskHeld : 0,
+      beamStrength,
+      beamSeed: this.beamSeedHeld,
+      fanPower,
+      fanSeed: fanPower > 0 ? this.fanLight.hold : -1,
+      fragments,
+      hue: this.audioDrive.huePhase(),
+      tick,
       time: elapsed,
-      seed: 7,
+      seed: UNIFIED_SEED,
     };
   }
 
-  private rebuild(elapsed: number): void {
-    const rig = buildUnifiedRig(this.driveOf(elapsed), this.axes, {
-      aspectRatio: this.aspectRatio,
-    });
+  /** 時間の形を初期化する。前の曲の尾を持ち越さない。 */
+  private resetShapes(): void {
+    this.fieldShape.reset();
+    this.coreLight.emission.reset();
+    this.coreLight.hold = -1;
+    this.fanLight.emission.reset();
+    this.fanLight.hold = -1;
+    this.beamShape.reset();
+    this.fragmentShapes.clear();
+    this.beamMaskHeld = 0;
+    this.beamSeedHeld = 0;
+    this.drive = SILENT_DRIVE;
+  }
+
+  private rebuild(): void {
+    const rig = buildUnifiedRig(this.drive, this.axes, { aspectRatio: this.aspectRatio });
     this.layers = rig.slice(0, LIMITS.maximumLayers);
     this.writeLayers();
   }
@@ -216,7 +322,7 @@ export class LightUnified implements LabExpression {
       this.attributes[name] = attribute;
     };
     add('aOffset', this.offsets, 3);
-    add('aSize', this.sizes, 3);
+    add('aSize', this.sizes, 4);
     add('aSpin', this.spins, 3);
     add('aTone', this.tones, 4);
     add('aShape', this.shapes, 4);
@@ -241,7 +347,7 @@ export class LightUnified implements LabExpression {
       toneMapped: false,
       vertexShader: /* glsl */ `
         attribute vec3 aOffset;
-        attribute vec3 aSize;
+        attribute vec4 aSize;
         attribute vec3 aSpin;
         attribute vec4 aTone;
         attribute vec4 aShape;
@@ -253,6 +359,7 @@ export class LightUnified implements LabExpression {
         varying vec4 vAxis;
         varying vec4 vChannel;
         varying float vEdge;
+        varying float vHalo;
 
         void main() {
           vUv = uv;
@@ -261,6 +368,7 @@ export class LightUnified implements LabExpression {
           vAxis = aAxis;
           vChannel = aChannel;
           vEdge = aSize.z;
+          vHalo = aSize.w;
 
           vec3 local = vec3(position.xy * aSize.xy, 0.0);
           // 面内回転
@@ -292,6 +400,7 @@ export class LightUnified implements LabExpression {
         varying vec4 vAxis;
         varying vec4 vChannel;
         varying float vEdge;
+        varying float vHalo;
 
         const float TAU = 6.28318530718;
 
@@ -314,7 +423,7 @@ export class LightUnified implements LabExpression {
         }
 
         /** 要素ごとの形。**分岐は種別だけで、軸は係数として入っている。** */
-        float elementMask(vec2 p) {
+        float baseMask(vec2 p) {
           float kind = vTone.z;
           float halo = mix(0.04, 0.4, clamp(vEdge, 0.0, 1.0));
 
@@ -386,6 +495,16 @@ export class LightUnified implements LabExpression {
           return centre + flareH + flareV + wide;
         }
 
+        /**
+         * **Blur 軸の 1 本が縁とハロを同時に動かす。**
+         * ハロ量は 0 でぴったり 0 なので、シャープ側では散乱が 1 画素も足されない。
+         */
+        float elementMask(vec2 p) {
+          float base = baseMask(p);
+          if (vHalo <= 0.0) return base;
+          return base + vHalo * exp(-dot(p, p) * mix(6.0, 1.6, clamp(vEdge, 0.0, 1.0)));
+        }
+
         void main() {
           vec2 p = vUv * 2.0 - 1.0;
           // チャンネル分離。中心からの放射方向へ 3 チャンネルをずらす。
@@ -410,7 +529,7 @@ export class LightUnified implements LabExpression {
           vec3 tint = spectrum(vTone.x + gradient * vTone.y);
           tint = mix(vec3(1.0), tint, uTint);
 
-          vec3 colour = channels * tint * vTone.z * 0.0 + channels * tint;
+          vec3 colour = channels * tint;
           colour *= uIntensity * vAxis.x * material;
           // **白の予算。** 核以外はここで頭を押さえる。
           colour = min(colour, vec3(vAxis.y));
@@ -431,9 +550,10 @@ export class LightUnified implements LabExpression {
       this.offsets[index * 3 + 0] = layer.position[0];
       this.offsets[index * 3 + 1] = layer.position[1];
       this.offsets[index * 3 + 2] = layer.position[2];
-      this.sizes[index * 3 + 0] = layer.half[0] * 2;
-      this.sizes[index * 3 + 1] = layer.half[1] * 2;
-      this.sizes[index * 3 + 2] = layer.edge;
+      this.sizes[index * 4 + 0] = layer.half[0] * 2;
+      this.sizes[index * 4 + 1] = layer.half[1] * 2;
+      this.sizes[index * 4 + 2] = layer.edge;
+      this.sizes[index * 4 + 3] = layer.halo;
       this.spins[index * 3 + 0] = layer.spin;
       this.spins[index * 3 + 1] = layer.tiltX;
       this.spins[index * 3 + 2] = layer.tiltY;
@@ -469,7 +589,8 @@ export class LightUnified implements LabExpression {
     this.shelf?.update(delta);
     this.audioDrive.update(audio, spectrum, elapsed, delta);
     this.previousElapsed = elapsed;
-    this.rebuild(elapsed);
+    this.advanceDrive(elapsed, delta);
+    this.rebuild();
 
     const material = this.material;
     if (material) {
@@ -570,7 +691,7 @@ export class LightUnified implements LabExpression {
       this.camera.aspect = ratio;
       this.camera.updateProjectionMatrix();
     }
-    this.rebuild(this.previousElapsed < 0 ? 0 : this.previousElapsed);
+    this.rebuild();
   }
 
   setDebugView(view: number): void {
@@ -643,7 +764,7 @@ export class LightUnified implements LabExpression {
         if (typeof next === 'number') this.axes[decl.id] = clamp(next, 0, 1);
       }
       this.audioDrive.setStrobe(true, tickRateOf(this.axes));
-      this.rebuild(this.previousElapsed < 0 ? 0 : this.previousElapsed);
+      this.rebuild();
       return;
     }
     const decl = AXIS_DECLS.find((entry) => entry.id === key);
@@ -653,7 +774,7 @@ export class LightUnified implements LabExpression {
     this.axes[decl.id] = clamp(next, 0, 1);
     if (decl.id === 'tickRate') this.audioDrive.setStrobe(true, tickRateOf(this.axes));
     if (decl.id === 'trace') this.audioDrive.setTraceAmount(this.axes.trace);
-    this.rebuild(this.previousElapsed < 0 ? 0 : this.previousElapsed);
+    this.rebuild();
   }
 
   dispose(): void {
@@ -665,6 +786,7 @@ export class LightUnified implements LabExpression {
     this.atlas?.texture.dispose();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
     this.layers = [];
+    this.fragmentShapes.clear();
     this.pipeline = null;
     this.geometry = null;
     this.material = null;

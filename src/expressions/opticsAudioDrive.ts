@@ -402,6 +402,39 @@ export interface OpticsDriveLevels {
   readonly channel: readonly [number, number, number];
 }
 
+/**
+ * **ストロボの門を通す前の素の値**（統合表現のための読み取り口）。
+ *
+ * `levels()` と `toDrive()` が返すのは「ティックの門を通した後」の値なので、
+ * 連続のエンベロープと明滅のあいだを**連続に混ぜたい**側からは使えない。
+ * ここは held の値と、ティック内の経過（`age`）をそのまま渡すだけで、
+ * **状態は 1 つも変えない**。読まない表現の見え方は 1 画素も変わらない。
+ */
+export interface OpticsSustained {
+  /** 連続の場（平滑値そのもの）。 */
+  readonly field: number;
+  /** ティックの頭で確定した場。 */
+  readonly fieldHeld: number;
+  /** 場の利得（`skeletonLevel` に掛かっているのと同じ倍率）。 */
+  readonly fieldGain: number;
+  readonly corePulse: number;
+  readonly coreShape: number;
+  readonly coreAge: number;
+  readonly coreAlive: boolean;
+  readonly fanPower: number;
+  readonly fanSeed: number;
+  readonly fanAge: number;
+  readonly fanAlive: boolean;
+  readonly armMask: number;
+  readonly armStrength: number;
+  readonly armSeed: number;
+  readonly armAlive: boolean;
+  /** 光学クロックのティック番号。 */
+  readonly tick: number;
+  /** 生きている断片（門を通していないので off ティックのものも含む）。 */
+  readonly fragments: readonly { readonly spawn: FragmentSpawn; readonly age: number }[];
+}
+
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
 
 /**
@@ -1423,6 +1456,32 @@ export class OpticsAudioDrive {
       traceAimed: this.traceAimed,
       bands: [this.bandLow, this.bandMid, this.bandHigh],
       channel: this.heldChannel,
+    };
+  }
+
+  /**
+   * **ストロボの門を通す前の素の値**（統合表現が読む）。
+   * 何も書き換えないので、これを読まない表現の見え方は 1 画素も変わらない。
+   */
+  sustained(): OpticsSustained {
+    return {
+      field: this.skeleton,
+      fieldHeld: this.heldSkeleton,
+      fieldGain: this.fieldGain,
+      corePulse: this.heldCorePulse,
+      coreShape: this.heldCoreShape,
+      coreAge: this.coreAge,
+      coreAlive: this.coreTicksLeft > 0 || this.coreFramesLeft > 0,
+      fanPower: this.heldFanPower,
+      fanSeed: this.heldFanSeed,
+      fanAge: this.fanAge,
+      fanAlive: this.fanTicksLeft > 0,
+      armMask: this.heldArmMask,
+      armStrength: this.heldArmStrength,
+      armSeed: this.heldArmSeed,
+      armAlive: this.armTicksLeft > 0 || this.armFramesLeft > 0,
+      tick: this.tickIndex,
+      fragments: this.liveFragments.map((entry) => ({ spawn: entry.spawn, age: entry.age })),
     };
   }
 

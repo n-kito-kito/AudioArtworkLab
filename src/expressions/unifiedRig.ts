@@ -1,4 +1,5 @@
 import { tickRateOf, type UnifiedAxes } from './unifiedAxes';
+import { strobePhaseGain } from './unifiedTime';
 
 /**
  * **統合表現の見え方の組み立て（Light Unified）。**
@@ -60,6 +61,11 @@ export interface UnifiedLayer {
   readonly shape: readonly [number, number, number, number];
   /** **縁の柔らかさ。** `blur` 軸が束ねる（0 でシャープ・1 でにじむ）。 */
   readonly edge: number;
+  /**
+   * **にじみのハロ（散乱）。** `blur` 軸が同じ 1 本で広げる。
+   * 0 なら 1 画素も足さないので、シャープ側では従来どおりの縁になる。
+   */
+  readonly halo: number;
   /** チャンネル分離の方向（ローカル平面）。 */
   readonly axis: readonly [number, number];
   /** **白の予算。** true は白へ届いてよい（核だけ）。 */
@@ -92,6 +98,8 @@ export interface UnifiedDrive {
     readonly band: string;
     readonly aim?: readonly [number, number] | null;
     readonly pull?: number;
+    /** 時間軸（Attack / Decay / Strobe）が作った明るさの係数。 */
+    readonly gain: number;
   }[];
   /** グローバル色相。 */
   readonly hue: number;
@@ -125,6 +133,20 @@ export const UNIFIED = {
   beamCount: 4,
   /** 波長の深さ。1 で純粋な分光、0 で白。 */
   tintDepth: 0.72,
+  /** 場の利得。音量の持続をそのまま輝度にすると暗すぎるので 1 本だけ通す。 */
+  fieldGain: 1.6,
+  /**
+   * **ハロの上限（種別ごと）。** `blur` 軸に掛けて散乱の量にする。
+   * 面が大きい膜と靄は、広げると画面全体が濁るので載せない。
+   */
+  halo: {
+    core: 0.55,
+    beam: 0.3,
+    fragment: 0.35,
+    fan: 0.28,
+    membrane: 0,
+    haze: 0,
+  },
 } as const;
 
 const TAU = Math.PI * 2;
@@ -238,6 +260,22 @@ const tiltOf = (
   };
 };
 
+/** **にじみのハロ。** `blur` 軸が種別ごとの上限まで散乱を広げる。 */
+const haloOf = (axes: UnifiedAxes, kind: keyof typeof UNIFIED.halo): number =>
+  clamp01(axes.blur) * UNIFIED.halo[kind];
+
+/**
+ * **明滅の利得。** 層ごとに位相をずらし、off の側を `strobe` の深さだけ暗くする。
+ * 0 で 1 倍（連続）・1 で完全に消える。**分岐ではなく係数**なので途中が実在する。
+ */
+const blinkOf = (
+  axes: UnifiedAxes,
+  drive: UnifiedDrive,
+  kind: UnifiedKind,
+  index: number,
+): number =>
+  strobePhaseGain(axes.strobe, drive.tick, drive.seed, UNIFIED_KIND_INDEX[kind], index);
+
 /** 光条の向き（ローカル +x をこの向きへ）。 */
 const BEAM_DIRECTIONS: readonly { readonly bit: number; readonly spin: number }[] = [
   { bit: 2, spin: 0 },
@@ -279,10 +317,11 @@ const buildHaze = (
       hue: hueOf(axes, drive.hue, drive.seed, 91),
       hueSpan: 0.05,
       gradientForm: 1,
-      intensity: 0.2 * level * depthDim(z),
+      intensity: 0.2 * level * depthDim(z) * blinkOf(axes, drive, 'haze', 0),
       // [減衰, 縁の始まり, 縁の終わり, 分光の深さ]
       shape: [mix(2.6, 1.4, clamp01(axes.blur)), 0.32, 0.78, 0.55],
       edge: clamp01(axes.blur),
+      halo: haloOf(axes, 'haze'),
       axis: [1, 0],
       whiteAllowed: false,
       ceiling: UNIFIED.hazeCeiling,
@@ -326,7 +365,8 @@ const buildMembranes = (
       hue: hueOf(axes, drive.hue, seed, index * 3 + 2),
       hueSpan: 0.11,
       gradientForm: 2,
-      intensity: (0.1 + 0.13 * share) * level * depthDim(z),
+      intensity:
+        (0.1 + 0.13 * share) * level * depthDim(z) * blinkOf(axes, drive, 'membrane', index),
       // [形状族, 襞の周期, 帯の半幅, 折れ]
       shape: [
         Math.floor(family * 3),
@@ -335,6 +375,7 @@ const buildMembranes = (
         (hash01(seed + 613, index * 11 + 10) - 0.5) * 0.9,
       ],
       edge: clamp01(axes.blur),
+      halo: haloOf(axes, 'membrane'),
       axis: [1, 0],
       whiteAllowed: false,
       ceiling: UNIFIED.membraneCeiling,
@@ -383,9 +424,11 @@ const buildBeams = (
         hue: hueOf(axes, drive.hue, drive.seed, 40 + index),
         hueSpan: 0.05 + index * 0.02,
         gradientForm: 2,
-        intensity: w[2] * level * skeleton * mix(0.7, 1.15, share),
+        intensity:
+          w[2] * level * skeleton * mix(0.7, 1.15, share) * blinkOf(axes, drive, 'beam', index),
         shape: [w[0], w[1], 0, 0],
         edge: clamp01(axes.blur),
+        halo: haloOf(axes, 'beam'),
         axis: [0, 1],
         whiteAllowed: false,
         ceiling: UNIFIED.nonCoreCeiling,
@@ -416,9 +459,11 @@ const buildBeams = (
         hue: hueOf(axes, drive.hue, seed, index),
         hueSpan: 0.07,
         gradientForm: 0,
-        intensity: (0.5 + 0.85 * power) * (0.82 + 0.3 * a),
+        intensity:
+          (0.5 + 0.85 * power) * (0.82 + 0.3 * a) * blinkOf(axes, drive, 'beam', index + 3),
         shape: [0.22, 0.1, 0.2 + 0.25 * b, 1],
         edge: clamp01(axes.blur),
+        halo: haloOf(axes, 'beam'),
         axis: [0, 1],
         whiteAllowed: false,
         ceiling: UNIFIED.beamCeiling,
@@ -450,9 +495,10 @@ const buildCore = (drive: UnifiedDrive, axes: UnifiedAxes): UnifiedLayer[] => {
       hue: drive.hue,
       hueSpan: 0.08,
       gradientForm: 1,
-      intensity: mix(0.4, 1.55, pulse),
+      intensity: mix(0.4, 1.55, pulse) * blinkOf(axes, drive, 'core', 0),
       shape: [shape[0], shape[1], shape[2], shape[3]],
       edge: clamp01(axes.blur),
+      halo: haloOf(axes, 'core'),
       axis: [1, 0],
       whiteAllowed: true,
       ceiling: 1,
@@ -472,6 +518,8 @@ const buildFragments = (
   const limit = Math.max(Math.round(UNIFIED.fragmentCount * amount), 1);
   const out: UnifiedLayer[] = [];
   for (const spawn of drive.fragments.slice(0, limit)) {
+    // 時間軸が完全に落とした破片は 1 画素も置かない（off ティックの消灯もここを通る）。
+    if (clamp01(spawn.gain) <= 0) continue;
     const seed = spawn.seed;
     const slot = spawn.slot;
     const b = hash01(seed, slot * 7 + 2);
@@ -502,10 +550,16 @@ const buildFragments = (
       hueSpan: 0.1,
       gradientForm: 3,
       intensity:
-        (0.14 + c * 0.13) * (0.62 + 0.5 * clamp01(spawn.strength)) * amount * depthDim(z),
+        (0.14 + c * 0.13) *
+        (0.62 + 0.5 * clamp01(spawn.strength)) *
+        clamp01(spawn.gain) *
+        amount *
+        depthDim(z) *
+        blinkOf(axes, drive, 'fragment', slot),
       // [縁, 形状族, 伸び, 欠け]
       shape: [0.34, family, 0.75 + h * 0.6, 0.04 + dd * 0.2],
       edge: clamp01(axes.blur),
+      halo: haloOf(axes, 'fragment'),
       axis: [1, 0],
       whiteAllowed: false,
       ceiling: UNIFIED.nonCoreCeiling,
@@ -535,7 +589,7 @@ const buildFan = (drive: UnifiedDrive, axes: UnifiedAxes): UnifiedLayer[] => {
       hue: hueOf(axes, drive.hue, seed, 3),
       hueSpan: 0.13,
       gradientForm: 3,
-      intensity: 0.44 * gate,
+      intensity: 0.44 * gate * blinkOf(axes, drive, 'fan', 0),
       // [基準角, 広がり, 本数, 到達]
       shape: [
         -1.42 + (a - 0.5) * 0.5,
@@ -544,6 +598,7 @@ const buildFan = (drive: UnifiedDrive, axes: UnifiedAxes): UnifiedLayer[] => {
         mix(0.46, 0.66, gate),
       ],
       edge: clamp01(axes.blur),
+      halo: haloOf(axes, 'fan'),
       axis: [1, 0],
       whiteAllowed: false,
       ceiling: UNIFIED.nonCoreCeiling,
