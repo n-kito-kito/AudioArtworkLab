@@ -538,6 +538,14 @@ const beamReach = (axes: UnifiedAxes): number => mix(0.3, 2.8, clamp01(axes.beam
 const crossGain = (axes: UnifiedAxes): number => smoothstep(0, 0.12, clamp01(axes.beamLength));
 
 /**
+ * **バースト全体の向き。**
+ *
+ * 原点を中心にする層（核・骨格・閃光・扇）の面内回転へ一律に足す角度。
+ * 形は変えず向きだけを連続に振るので、0 では従来とまったく同じ絵になる。
+ */
+const crossRoll = (axes: UnifiedAxes): number => clamp01(axes.crossRotation) * Math.PI;
+
+/**
  * **核が自分で描く貫通線（十字）の明るさ。**
  *
  * 核の中の縦横の線は、これまで `Beam length` にも `Skeleton` にも繋がっておらず、
@@ -909,6 +917,7 @@ const buildBeams = (
 
   // ---- 常設の軸（骨格）。`skeleton` か `Beam length` が 0 なら 1 枚も出ない ----
   const cross = crossGain(axes);
+  const roll = crossRoll(axes);
   if (level > 0 && skeleton > 0 && cross > 0) {
     const widths: readonly [number, number, number][] = [
       [0.012, 0.05, 0.36],
@@ -921,7 +930,7 @@ const buildBeams = (
         kind: 'beam',
         position: [anchor.x, anchor.y, z],
         half: [reach, index === 0 ? 0.34 : index === 1 ? 0.3 : 0.9],
-        spin: index === 0 ? Math.PI / 2 : 0,
+        spin: (index === 0 ? Math.PI / 2 : 0) + roll,
         tiltX: 0,
         tiltY: 0,
         hue: hueOf(axes, drive.hue, drive.seed, 40 + index),
@@ -965,7 +974,7 @@ const buildBeams = (
         kind: 'beam',
         position: [anchor.x, anchor.y, z - 0.02],
         half: [length, thickness],
-        spin: direction.spin,
+        spin: direction.spin + roll,
         tiltX: 0,
         tiltY: 0,
         hue: hueOf(axes, drive.hue, seed, index),
@@ -1025,7 +1034,7 @@ const buildCore = (
       kind: 'core',
       position: [anchor.x, anchor.y, z],
       half: [size, size],
-      spin: 0,
+      spin: crossRoll(axes),
       tiltX: 0,
       tiltY: 0,
       hue: drive.hue,
@@ -1142,7 +1151,7 @@ const buildFan = (
       kind: 'fan',
       position: [anchor.x, anchor.y, z],
       half: [2.5 * mix(0.82, 1, gate), 2.5 * mix(0.82, 1, gate)],
-      spin: 0,
+      spin: crossRoll(axes),
       tiltX: 0,
       tiltY: 0,
       hue: hueOf(axes, drive.hue, seed, 3),
@@ -1150,9 +1159,10 @@ const buildFan = (
       ...hueRamp(axes, hueOf(axes, drive.hue, seed, 3), 0.13, seed, 3),
       gradientForm: 3,
       intensity: 0.44 * gate * blinkOf(axes, drive, 'fan', 0),
-      // [基準角, 広がり, 本数, 到達]
+      // [基準角, 広がり, 本数, 到達]。基準角は板ローカルなので、板ごと回すぶんを打ち消さない
+      // よう**ここにも足す**（扇の開く向きが `Cross rotation` に付いてくる）。
       shape: [
-        -1.42 + (a - 0.5) * 0.5,
+        -1.42 + (a - 0.5) * 0.5 + crossRoll(axes),
         0.82 + (b - 0.5) * 0.4,
         3.2 + (c - 0.5) * 1.2,
         mix(0.46, 0.66, gate),

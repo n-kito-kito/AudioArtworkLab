@@ -154,6 +154,12 @@ export interface UnifiedAxes {
   /** 0 = 短い光条 ⇄ 1 = 画面の外まで貫通する極細線。 */
   beamLength: number;
   /**
+   * **十字ごと回す。** 0 = 現状の向き ⇄ 1 = π（180°）回転。
+   * バーストの原点を中心にする層（核・骨格・閃光・扇）の面内回転へ一律に足す。
+   * 十字の形は変えず、**画の向きだけ**を連続に振る。
+   */
+  crossRotation: number;
+  /**
    * **光の数。** 1 バーストあたりの要素数・同時バースト数・
    * コアの再発火の速さを同時にスケールする。
    */
@@ -197,6 +203,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
   { id: 'skeleton', label: 'Skeleton', group: '構成', low: '無し', high: 'はっきり' },
   { id: 'beamLength', label: 'Beam length', group: '構成', low: '短い', high: '貫通' },
+  { id: 'crossRotation', label: 'Cross rotation', group: '構成', low: '現状の向き', high: 'π 回転' },
   { id: 'density', label: 'Density', group: '構成', low: '少ない', high: '多い' },
   { id: 'motion', label: 'Motion', group: '動き', low: '静止', high: '漂う' },
   { id: 'trace', label: 'Trace', group: '動き', low: '無し', high: '強い' },
@@ -234,6 +241,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   hazeFloor: 0.45,
   skeleton: 0.4,
   beamLength: 0.55,
+  crossRotation: 0,
   density: 0.55,
   motion: 0.35,
   trace: 0.4,
@@ -276,6 +284,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     // 十字は空間の見え方では脇役。長い光条が画面を貫くと図形が主役になる。
     skeleton: 0.12,
     beamLength: 0.6,
+    crossRotation: 0,
     density: 0.85,
     motion: 0.5,
     trace: 0.35,
@@ -309,6 +318,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     hazeFloor: 0.5,
     skeleton: 0.15,
     beamLength: 0.45,
+    crossRotation: 0,
     density: 0.8,
     motion: 0.3,
     trace: 0.5,
@@ -342,6 +352,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     hazeFloor: 0.4,
     skeleton: 1,
     beamLength: 1,
+    crossRotation: 0,
     density: 0.5,
     motion: 0.05,
     trace: 0.2,
