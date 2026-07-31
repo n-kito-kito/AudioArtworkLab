@@ -93,6 +93,14 @@ export interface UnifiedAxes {
    * 空間に散る見え方の本体はここで、明るさの天井と帯の厚みも同じ 1 本で広がる。
    */
   membraneScale: number;
+  /**
+   * **質感の量。**
+   *
+   * 0 = 手続きで描いた形だけ ⇄ 1 = アトラスの素材が濃淡を支配する。
+   * 素材は「完成した絵」ではなく輝度マスクとして読み、タイル・クロップ・
+   * 回転・反転は**要素ごとに**決まる（10 枚を切り替えているようには見えない）。
+   */
+  textureGrain: number;
   /** 破片の量。 */
   fragments: number;
   /**
@@ -141,6 +149,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'channelBalance', label: 'Channel balance', group: '色', low: 'R 優勢', high: 'B 優勢' },
   { id: 'membraneBeam', label: 'Membrane–Beam', group: '構成', low: '膜', high: '光条' },
   { id: 'membraneScale', label: 'Membrane scale', group: '構成', low: '画面基準', high: 'ワールド固定' },
+  { id: 'textureGrain', label: 'Texture grain', group: '構成', low: '手続き形状', high: '素材が支配' },
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
@@ -173,6 +182,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   channelBalance: 0.5,
   membraneBeam: 0.5,
   membraneScale: 0.45,
+  textureGrain: 0.4,
   fragments: 0.5,
   fragmentCharacter: 0.4,
   hazeFloor: 0.45,
@@ -208,6 +218,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     channelBalance: 0.42,
     membraneBeam: 0.55,
     membraneScale: 0.9,
+    textureGrain: 0.85,
     fragments: 0.6,
     fragmentCharacter: 0.85,
     hazeFloor: 0.35,
@@ -236,6 +247,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     channelBalance: 0.62,
     membraneBeam: 0.15,
     membraneScale: 0.6,
+    textureGrain: 0.6,
     fragments: 0.6,
     fragmentCharacter: 0.7,
     hazeFloor: 0.5,
@@ -264,6 +276,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     channelBalance: 0.5,
     membraneBeam: 0.5,
     membraneScale: 0.1,
+    textureGrain: 0.15,
     fragments: 0.55,
     fragmentCharacter: 0.15,
     hazeFloor: 0.4,

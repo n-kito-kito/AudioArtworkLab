@@ -54,7 +54,11 @@ const LIMITS = {
   maximumFragmentShapes: 40,
   nearPlane: 0.1,
   farPlane: 90,
-  atlas: { manifestUrl: 'assets/light-traces/manifest.json', cellPixels: 384, columns: 4 },
+  /**
+   * 素材アトラス。**列数は素材の枚数を割り切れること。** 10 枚を 4 列で並べると
+   * 3 行目に空きマスが 2 つ残り、そこを引いたインスタンスが**真っ黒**になる。
+   */
+  atlas: { manifestUrl: 'assets/light-traces/manifest.json', cellPixels: 384, columns: 5 },
 } as const;
 
 const clamp = (value: number, min: number, max: number): number =>
@@ -174,6 +178,12 @@ export class LightUnified implements LabExpression {
   private readonly shapes = new Float32Array(LIMITS.maximumLayers * 4);
   private readonly axesAttr = new Float32Array(LIMITS.maximumLayers * 4);
   private readonly channels = new Float32Array(LIMITS.maximumLayers * 4);
+  /** 素材の切り出し [中心 u, 中心 v, 半径 u, 半径 v]。 */
+  private readonly crops = new Float32Array(LIMITS.maximumLayers * 4);
+  /** 素材の向き [cos, sin, 反転 X, 反転 Y]。 */
+  private readonly orients = new Float32Array(LIMITS.maximumLayers * 4);
+  /** 素材の読み方 [タイル番号, 量, 素材色の残し, 予備]。 */
+  private readonly textures = new Float32Array(LIMITS.maximumLayers * 4);
   private readonly attributes: Record<string, THREE.InstancedBufferAttribute> = {};
 
   constructor(id: ExpressionId, effects: Effect[] = [], theme?: Theme) {
@@ -237,6 +247,7 @@ export class LightUnified implements LabExpression {
       if (this.material) {
         this.material.uniforms.uAtlas!.value = atlas.texture;
         this.material.uniforms.uGrid!.value.set(atlas.columns, atlas.rows);
+        this.material.uniforms.uHasAtlas!.value = 1;
       }
       this.writeLayers();
     });
@@ -423,6 +434,9 @@ export class LightUnified implements LabExpression {
     add('aShape', this.shapes, 4);
     add('aAxis', this.axesAttr, 4);
     add('aChannel', this.channels, 4);
+    add('aCrop', this.crops, 4);
+    add('aOrient', this.orients, 4);
+    add('aTexture', this.textures, 4);
     geometry.instanceCount = 0;
 
     this.material = new THREE.ShaderMaterial({
@@ -434,6 +448,19 @@ export class LightUnified implements LabExpression {
         uDecorrelation: { value: 0.25 },
         uTint: { value: UNIFIED.tintDepth },
         uChannelGain: { value: new THREE.Vector3(1, 1, 1) },
+        // [黒浮きの敷居, 同・幅, 輝度の曲げ, マスの内側へ寄せる余白]
+        uGrain: {
+          value: new THREE.Vector4(
+            UNIFIED.grain.blackFloor,
+            UNIFIED.grain.blackFloorWidth,
+            UNIFIED.grain.gamma,
+            UNIFIED.grain.inset,
+          ),
+        },
+        uGrainGain: { value: UNIFIED.grain.gain },
+        // アトラスが届くまでは 0。**素材が無い間は手続きの形だけで描く**
+        //（1x1 の黒を掛けて画面が消えないようにするため）。
+        uHasAtlas: { value: 0 },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -449,17 +476,26 @@ export class LightUnified implements LabExpression {
         attribute vec4 aShape;
         attribute vec4 aAxis;
         attribute vec4 aChannel;
+        attribute vec4 aCrop;
+        attribute vec4 aOrient;
+        attribute vec4 aTexture;
         varying vec2 vUv;
         varying vec4 vTone;
         varying vec4 vShape;
         varying vec4 vAxis;
         varying vec4 vChannel;
+        varying vec4 vCrop;
+        varying vec4 vOrient;
+        varying vec4 vTexture;
         varying float vEdge;
         varying float vHalo;
         varying float vPad;
 
         void main() {
           vUv = uv;
+          vCrop = aCrop;
+          vOrient = aOrient;
+          vTexture = aTexture;
           vTone = aTone;
           vShape = aShape;
           vAxis = aAxis;
@@ -493,11 +529,17 @@ export class LightUnified implements LabExpression {
         uniform float uDecorrelation;
         uniform float uTint;
         uniform vec3 uChannelGain;
+        uniform vec4 uGrain;
+        uniform float uGrainGain;
+        uniform float uHasAtlas;
         varying vec2 vUv;
         varying vec4 vTone;
         varying vec4 vShape;
         varying vec4 vAxis;
         varying vec4 vChannel;
+        varying vec4 vCrop;
+        varying vec4 vOrient;
+        varying vec4 vTexture;
         varying float vEdge;
         varying float vHalo;
         varying float vPad;
@@ -663,15 +705,49 @@ export class LightUnified implements LabExpression {
           ), 0.0) * frame;
           if (channels.r + channels.g + channels.b <= 0.0) discard;
 
-          // 素材を薄く混ぜる（無ければ 1 のまま）。
-          vec2 cell = fract(vUv);
-          vec3 tex = texture2D(uAtlas, (cell + vec2(0.0)) / max(uGrid, vec2(1.0))).rgb;
-          float material = 0.55 + 0.45 * dot(tex, vec3(0.333));
+          /**
+           * **素材（アトラス）。**
+           * 板の座標を要素ごとの角度で回して反転し、要素ごとのクロップで切り出す。
+           * 同じ素材でも切り口と向きが毎回違うので、10 枚を切り替えているようには見えない。
+           * 素材は絵ではなく**輝度マスク**として読む。
+           */
+          float grain = clamp(vTexture.y, 0.0, 1.0) * uHasAtlas;
+          vec2 tq = vec2(q.x * vOrient.x - q.y * vOrient.y, q.x * vOrient.y + q.y * vOrient.x);
+          tq *= vec2(vOrient.z, vOrient.w);
+          vec2 cell = clamp(vCrop.xy + tq * vCrop.zw, uGrain.w, 1.0 - uGrain.w);
+          float column = mod(vTexture.x, max(uGrid.x, 1.0));
+          /**
+           * **行は下から数える。** アトラスは Canvas から作るので flipY が効いており、
+           * テクスチャの v = 0 はキャンバスの**いちばん下の行**にあたる。
+           * 上から数えると素材の割り当てが行ごと入れ替わる。
+           */
+          float row = max(uGrid.y - 1.0, 0.0) - floor(vTexture.x / max(uGrid.x, 1.0));
+          vec3 raw = texture2D(uAtlas, (vec2(column, row) + cell) / max(uGrid, vec2(1.0))).rgb;
+          /**
+           * **素材を人の目の尺度へ戻す。**
+           * アトラスは sRGB として読み込むので、シェーダーへ届く時点で線形になっている
+           * （0.1 の階調が 0.009 まで沈む）。敷居も曲げも「見た目の明るさ」で決めたいので、
+           * ここで一度 sRGB へ戻す。**戻さないと敷居がほぼ全画素を切り落として真っ黒になる。**
+           */
+          vec3 tex = pow(max(raw, 0.0), vec3(0.4545));
+          float luminance = dot(tex, vec3(0.2126, 0.7152, 0.0722));
+          // 黒浮きを加算の前に落とす。これが無いと薄い霧が画面全体を灰色に持ち上げる。
+          luminance *= smoothstep(uGrain.x, uGrain.x + uGrain.y, luminance);
+          luminance = pow(max(luminance, 0.0), uGrain.z) * uGrainGain;
+          // 0 でぴったり 1（＝素材を 1 画素も読まない手続きの形だけ）。
+          float material = mix(1.0, clamp(luminance, 0.0, 2.2), grain);
 
           // 色。層ごとの色相はリグが決めてある（要素ごと ⇄ 全体 1 色の混合済み）。
           float gradient = gradientAt(q, vTone.w);
           vec3 tint = spectrum(vTone.x + gradient * vTone.y);
           tint = mix(vec3(1.0), tint, uTint);
+          /**
+           * **素材の色を捨てない。** 灰色にしてしまうと、羽毛状・引っ掻き傷状の
+           * 見えが「明るさの揺らぎ」に痩せる。素材の色みは正規化して比率だけを取り、
+           * 音から作った色と割合で混ぜる（明るさは上の輝度マスクが持つ）。
+           */
+          vec3 sourceHue = tex / max(max(tex.r, max(tex.g, tex.b)), 1e-4);
+          tint = mix(tint, sourceHue, clamp(vTexture.z, 0.0, 1.0) * grain);
 
           // **チャンネルの偏り。** 最大は常に 1 なので、白の予算は動かない。
           vec3 colour = channels * uChannelGain * tint;
@@ -686,6 +762,31 @@ export class LightUnified implements LabExpression {
     this.geometry = geometry;
     this.mesh = new THREE.Mesh(geometry, this.material);
     this.mesh.frustumCulled = false;
+  }
+
+  /**
+   * **役割の希望からタイル番号を解く。**
+   *
+   * アトラスは非同期に届くので、リグはタイルの中身を知らない。ここでだけ
+   * manifest の役割と重みを見て、希望に合う素材を重みつきで引く。
+   * 希望から外れた素材にも余地を残す（0 にすると同じ数枚しか出ない）。
+   */
+  private resolveTile(roles: readonly string[], pick: number): number {
+    const tiles = this.atlas?.tiles;
+    if (!tiles || tiles.length === 0) return 0;
+    let total = 0;
+    const weights = tiles.map((tile) => {
+      const weight = tile.weight * (roles.includes(tile.role) ? 1 : UNIFIED.grain.offRoleWeight);
+      total += weight;
+      return weight;
+    });
+    if (total <= 0) return 0;
+    let remaining = clamp(pick, 0, 1) * total;
+    for (let index = 0; index < weights.length; index++) {
+      remaining -= weights[index]!;
+      if (remaining <= 0) return index;
+    }
+    return weights.length - 1;
   }
 
   private writeLayers(): void {
@@ -719,6 +820,19 @@ export class LightUnified implements LabExpression {
       this.channels[index * 4 + 1] = layer.channel[1];
       this.channels[index * 4 + 2] = layer.channel[2];
       this.channels[index * 4 + 3] = layer.channel[3];
+      const material = layer.material;
+      this.crops[index * 4 + 0] = material.crop[0];
+      this.crops[index * 4 + 1] = material.crop[1];
+      this.crops[index * 4 + 2] = material.crop[2];
+      this.crops[index * 4 + 3] = material.crop[3];
+      this.orients[index * 4 + 0] = material.orient[0];
+      this.orients[index * 4 + 1] = material.orient[1];
+      this.orients[index * 4 + 2] = material.orient[2];
+      this.orients[index * 4 + 3] = material.orient[3];
+      this.textures[index * 4 + 0] = this.resolveTile(material.roles, material.pick);
+      this.textures[index * 4 + 1] = material.grain;
+      this.textures[index * 4 + 2] = material.sourceTint;
+      this.textures[index * 4 + 3] = 0;
     }
     if (this.geometry) this.geometry.instanceCount = count;
     for (const attribute of Object.values(this.attributes)) attribute.needsUpdate = true;

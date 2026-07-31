@@ -33,6 +33,28 @@ export const UNIFIED_KIND_INDEX: Readonly<Record<UnifiedKind, number>> = {
 /** 破片の形状族（4 つ）。 */
 export const UNIFIED_FRAGMENT_FAMILIES = ['shard', 'sliver', 'plate', 'chip'] as const;
 
+/**
+ * **1 層ぶんの素材の読み方。**
+ *
+ * アトラスは 10 枚あるのに、これまでは全種別・全インスタンスが
+ * **同じ 1 枚を同じ向き・同じ切り口**で使い、灰色にして明るさを ±22% 振るだけだった。
+ * ここでタイル・クロップ・回転・反転を要素ごとに散らす。
+ */
+export interface UnifiedMaterial {
+  /** 欲しい素材の役割（manifest の `role`）。番号ではなく希望だけを渡す。 */
+  readonly roles: readonly string[];
+  /** 役割の重みつき抽選に使う 0〜1。決定論。 */
+  readonly pick: number;
+  /** UV のクロップ [中心 u, 中心 v, 半径 u, 半径 v]。 */
+  readonly crop: readonly [number, number, number, number];
+  /** 向き [cos, sin, 反転 X(±1), 反転 Y(±1)]。 */
+  readonly orient: readonly [number, number, number, number];
+  /** この層に効く素材の量（軸 × 種別の重み）。0 なら 1 画素も素材を読まない。 */
+  readonly grain: number;
+  /** 素材そのものの色みを残す割合（0 で完全に音の色へ置き換える）。 */
+  readonly sourceTint: number;
+}
+
 /** 1 層ぶんの見え方。描画クラスはこれを描くだけで、音も軸も見ない。 */
 export interface UnifiedLayer {
   readonly kind: UnifiedKind;
@@ -74,6 +96,13 @@ export interface UnifiedLayer {
   readonly pad: number;
   /** 破片の性格（0 = 破片 ⇄ 1 = 羽毛・筋）。他の種別では 0。 */
   readonly character: number;
+  /**
+   * **素材（アトラス）の読み方。** `textureGrain` 軸が量を、要素ごとの seed が
+   * どのタイルをどこからどの向きで切り出すかを決める。
+   * リグはタイルの**番号を知らない**（アトラスは非同期に届くので、
+   * 役割の希望と 0〜1 の抽選値だけを渡し、番号は描画クラスが解く）。
+   */
+  readonly material: UnifiedMaterial;
   /** **白の予算。** true は白へ届いてよい（核だけ）。 */
   readonly whiteAllowed: boolean;
   readonly ceiling: number;
@@ -176,6 +205,68 @@ export const UNIFIED = {
   padAtFullBlur: 1.4,
   /** 波長の深さ。1 で純粋な分光、0 で白。 */
   tintDepth: 0.72,
+  /**
+   * **素材の読み方の定数（`Texture grain` 軸）。**
+   * 素材は絵ではなく**輝度マスク**として読む。値は Spatial の実測（10 枚の平均輝度は
+   * 0.017〜0.066 しかなく、見せたい膜は 0.05〜0.3 に居る）から持ってきている。
+   */
+  grain: {
+    /**
+     * 黒浮きを加算の前に落とす敷居と幅。これが無いと画面全体が灰色に浮く。
+     * **実測が効いている値。** アトラス 10 枚の輝度は中央値 0.004・p90 0.103 しかない
+     * （＝ほとんどが黒）ので、Spatial の 0.017 では見せたい筋まで落ちる。
+     */
+    blackFloor: 0.01,
+    blackFloorWidth: 0.03,
+    /** 素材の輝度の曲げ。1 未満で暗部を持ち上げる（膜は元が暗い）。 */
+    gamma: 0.45,
+    /**
+     * 持ち上げたあとの利得。**マスクの平均がおよそ 1 になる高さ**に実測で置いた
+     * （軸 0 の平均輝度 17.2 に対し、この値で軸 1 は 20 前後）。
+     * こうすると軸を上げても総量はおよそ保たれ、**明るさが筋へ集まる**だけになる。
+     */
+    gain: 2.4,
+    /** UV をマスの内側へ寄せる余白。隣の素材へ滲ませない。 */
+    inset: 0.006,
+    /** クロップの半径。小さいほど素材の一部を大きく引き伸ばす。 */
+    cropMinimum: 0.22,
+    cropMaximum: 0.6,
+    /** 役割が合わない素材が選ばれる余地。0 にすると同じ数枚しか出ない。 */
+    offRoleWeight: 0.14,
+    /** 素材そのものの色みを残す割合の幅。**色を捨てない**ための一手。 */
+    tintKeepMinimum: 0.18,
+    tintKeepMaximum: 0.52,
+  },
+  /**
+   * **種別ごとの素材の効き。** 核は白へ届いてよい唯一の層なので、
+   * 素材で削ると芯が消える。膜と靄は素材そのものが見え方の本体。
+   */
+  grainByKind: {
+    core: 0.22,
+    beam: 0.45,
+    membrane: 1,
+    haze: 1,
+    fragment: 0.9,
+    fan: 0.7,
+  } as Readonly<Record<UnifiedKind, number>>,
+  /**
+   * **種別ごとに欲しい素材の役割。** manifest の `role` をそのまま書く。
+   * アトラスに無い役割は単に選ばれないので、素材が増減しても壊れない。
+   */
+  rolesByKind: {
+    membrane: ['layered-sheets', 'parallel-curtains', 'wide-haze', 'curved-volume'],
+    haze: ['wide-haze', 'wide-caustic', 'curved-volume'],
+    fragment: ['fine-filaments', 'segmented-rays', 'filament-and-curtain'],
+    beam: ['segmented-rays', 'fine-filaments', 'parallel-curtains'],
+    fan: ['caustic-fan', 'wide-caustic'],
+    core: ['wide-caustic', 'caustic-fan'],
+  } as Readonly<Record<UnifiedKind, readonly string[]>>,
+  /** 破片だけは**発火した帯域**が素材の系統を決める（Spatial と同じ流儀）。 */
+  rolesByBand: {
+    bass: ['wide-haze', 'wide-caustic', 'parallel-curtains', 'layered-sheets'],
+    mid: ['layered-sheets', 'parallel-curtains', 'caustic-fan'],
+    treble: ['segmented-rays', 'fine-filaments', 'filament-and-curtain'],
+  } as Readonly<Record<string, readonly string[]>>,
   /** 核の大きさの幅（半径・ワールド）。小さい側は針の先、大きい側は画面を占める塊。 */
   coreSmall: 0.2,
   coreLarge: 2.3,
@@ -429,11 +520,45 @@ const buildHaze = (
       halo: haloOf(axes, 'haze'),
       pad: padOf(axes),
       character: 0,
+      material: materialOf(axes, 'haze', drive.seed, 91),
       whiteAllowed: false,
       ceiling: UNIFIED.hazeCeiling,
       channel: [1.2, 1.5, 0.04, 0.35],
     },
   ];
+};
+
+/**
+ * **素材の読み方を 1 層ぶん作る。**
+ *
+ * タイル・クロップ・回転・反転をすべて要素ごとの seed から引くので、
+ * 同じ素材でも別の切り口・別の向きで出る（10 枚を切り替えているようには見えない）。
+ * 量は `textureGrain` 軸 × 種別の重みで、0 なら素材を 1 画素も読まない。
+ */
+const materialOf = (
+  axes: UnifiedAxes,
+  kind: UnifiedKind,
+  seed: number,
+  index: number,
+  band?: string,
+): UnifiedMaterial => {
+  const g = UNIFIED.grain;
+  const h = (salt: number): number => hash01(Math.round(seed) + 2213, index * 13 + salt);
+  const halfCrop = mix(g.cropMinimum, g.cropMaximum, h(1));
+  const margin = 0.02;
+  const centre = (value: number): number =>
+    halfCrop + margin + value * Math.max(1 - halfCrop * 2 - margin * 2, 0);
+  const angle = h(4) * TAU;
+  const roles =
+    band && UNIFIED.rolesByBand[band] ? UNIFIED.rolesByBand[band]! : UNIFIED.rolesByKind[kind];
+  return {
+    roles,
+    pick: h(7),
+    crop: [centre(h(2)), centre(h(3)), halfCrop, halfCrop],
+    orient: [Math.cos(angle), Math.sin(angle), h(5) < 0.5 ? -1 : 1, h(6) < 0.5 ? -1 : 1],
+    grain: clamp01(axes.textureGrain) * UNIFIED.grainByKind[kind],
+    sourceTint: mix(g.tintKeepMinimum, g.tintKeepMaximum, h(8)),
+  };
 };
 
 /**
@@ -516,6 +641,7 @@ const buildMembranes = (
       halo: haloOf(axes, 'membrane'),
       pad: padOf(axes),
       character: 0,
+      material: materialOf(axes, 'membrane', seed + 613, index),
       whiteAllowed: false,
       ceiling: mix(UNIFIED.membraneCeiling, UNIFIED.membraneCeilingWide, scale),
       channel: [1.3, 1.5, 0.045, 0.28],
@@ -572,6 +698,7 @@ const buildBeams = (
         halo: haloOf(axes, 'beam'),
         pad: padOf(axes),
         character: 0,
+        material: materialOf(axes, 'beam', drive.seed, 40 + index),
         whiteAllowed: false,
         ceiling: UNIFIED.nonCoreCeiling,
         channel: [1, 1, 0.02, 0.12],
@@ -609,6 +736,7 @@ const buildBeams = (
         halo: haloOf(axes, 'beam'),
         pad: padOf(axes),
         character: 0,
+        material: materialOf(axes, 'beam', seed, index),
         whiteAllowed: false,
         ceiling: UNIFIED.beamCeiling,
         channel: [1, 1, 0.02, 0.1],
@@ -663,6 +791,7 @@ const buildCore = (
       halo: haloOf(axes, 'core') * Math.min(UNIFIED.coreSmall * 2.4 / Math.max(size, 1e-3), 1),
       pad: padOf(axes),
       character: 0,
+      material: materialOf(axes, 'core', drive.beamSeed, 5),
       whiteAllowed: true,
       ceiling: 1,
       channel: [1, 1, 0, 0],
@@ -735,6 +864,7 @@ const buildFragments = (
       halo: haloOf(axes, 'fragment'),
       pad: padOf(axes),
       character,
+      material: materialOf(axes, 'fragment', seed, slot, spawn.band),
       whiteAllowed: false,
       ceiling: UNIFIED.nonCoreCeiling,
       channel: [1.4, 1.6, 0.05, 0.3],
@@ -780,6 +910,7 @@ const buildFan = (
       halo: haloOf(axes, 'fan'),
       pad: padOf(axes),
       character: 0,
+      material: materialOf(axes, 'fan', seed, 3),
       whiteAllowed: false,
       ceiling: UNIFIED.nonCoreCeiling,
       channel: [1.3, 1.4, 0.04, 0.22],
