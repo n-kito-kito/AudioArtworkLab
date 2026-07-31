@@ -939,7 +939,15 @@ export class LightUnified implements LabExpression {
            * 同じ 1 本の式で、係数だけが Blur 軸に沿って動く。
            */
           float r = length(p);
-          float centre = exp(-r * r * mix(120.0, 7.0, vEdge)) * vShape.w;
+          /**
+           * **頂の平らさ（超ガウス）。**
+           * 指数が 1 のときは普通のガウス（＝点が光る）。1 を超えると
+           * **頂が平らになり縁が急に落ちる** ＝ 面が光る見えになる。
+           * 芯の白い点（下の spark）は 1 のまま残すので、面の中に芯が居る形になる。
+           */
+          float form = clamp(vAxis.w, 0.0, 1.0);
+          float rr = max(r * r, 1e-6);
+          float centre = exp(-pow(rr, mix(1.0, 1.9, form)) * mix(120.0, 7.0, vEdge)) * vShape.w;
           // 芯の白熱。シャープ側ほど小さく強い点になる。
           float spark = exp(-r * r * mix(900.0, 40.0, vEdge)) * mix(1.4, 0.35, vEdge);
           // 貫通線。シャープ側は極細で遠くまで、にじみ側は太く短い。

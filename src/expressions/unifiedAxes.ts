@@ -151,6 +151,14 @@ export interface UnifiedAxes {
    * 既定のままなら 1 画素も変わらない。
    */
   coreSize: number;
+  /**
+   * **核の形。**
+   *
+   * 0 = 等方の点（真円・ガウス）⇄ 1 = **横長の面**（縦横比 1.45 : 0.78）で
+   * **頂が平ら**（超ガウス）。平頂 + 急な縁は「点が光る」ではなく「面が光る」見えになる。
+   * 芯の白い点（spark）はそのまま残るので、面の中に白熱した芯がある形になる。
+   */
+  coreShape: number;
   /** 破片の量。 */
   fragments: number;
   /**
@@ -211,6 +219,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'textureGrain', label: 'Texture grain', group: '構成', low: '手続き形状', high: '素材が支配' },
   { id: 'silhouette', label: 'Silhouette', group: '構成', low: '素の縁', high: '多角形で削る' },
   { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める' },
+  { id: 'coreShape', label: 'Core shape', group: '構成', low: '等方の点', high: '横長の平らな面' },
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
@@ -250,6 +259,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   textureGrain: 0.4,
   silhouette: 0.35,
   coreSize: 0.4,
+  coreShape: 0,
   fragments: 0.5,
   fragmentCharacter: 0.4,
   hazeFloor: 0.45,
@@ -293,6 +303,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     textureGrain: 0.82,
     silhouette: 0.7,
     coreSize: 0.4,
+    coreShape: 0,
     fragments: 0.6,
     fragmentCharacter: 0.85,
     hazeFloor: 0.3,
@@ -329,6 +340,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     textureGrain: 0.6,
     silhouette: 0.5,
     coreSize: 0.4,
+    coreShape: 0,
     fragments: 0.6,
     fragmentCharacter: 0.7,
     hazeFloor: 0.5,
@@ -364,6 +376,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     textureGrain: 0.12,
     silhouette: 0.08,
     coreSize: 0.4,
+    coreShape: 0,
     fragments: 0.55,
     fragmentCharacter: 0.15,
     hazeFloor: 0.4,

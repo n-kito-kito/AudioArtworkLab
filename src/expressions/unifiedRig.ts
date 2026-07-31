@@ -104,7 +104,11 @@ export interface UnifiedLayer {
    * 描画側はこの値で座標を割り直すので、余白を広げても要素の大きさは変わらない。
    */
   readonly pad: number;
-  /** 破片の性格（0 = 破片 ⇄ 1 = 羽毛・筋）。他の種別では 0。 */
+  /**
+   * **その種別の性格**（種別ごとに意味が違う 1 本）。
+   * 破片: 0 = 角のある破片 ⇄ 1 = 羽毛・筋 /
+   * 核: 0 = 等方の点 ⇄ 1 = 横長の平らな面（超ガウス）。他の種別では 0。
+   */
   readonly character: number;
   /**
    * **素材（アトラス）の読み方。** `textureGrain` 軸が量を、要素ごとの seed が
@@ -354,6 +358,11 @@ export const UNIFIED = {
     plateSizeFalloff: 0.55,
     plateOffset: 0.28,
   },
+  /**
+   * **`Core shape` 軸の実寸。** 縦横比はおよそ面積を保つ組にしてあるので、
+   * 横へ伸ばしても明るさの総量が跳ねない（1.45 × 0.78 = 1.13）。
+   */
+  coreShapeAxis: { wide: 1.45, tall: 0.78 },
   /** 場の利得。音量の持続をそのまま輝度にすると暗すぎるので 1 本だけ通す。 */
   fieldGain: 1.6,
   /**
@@ -1069,6 +1078,7 @@ const buildCore = (
   const base = coreSize(axes, seed) * mix(0.8, 1.15, pulse);
   const cross = coreCrossGain(axes);
   const roll = crossRoll(axes);
+  const form = clamp01(axes.coreShape);
   /**
    * **板の枚数。** 中心を 1 枚の点で描くと、どれだけ広げても「大きな点」にしかならない。
    * 大きい側では 1 → 3 枚を少しずつずらして重ね、**面として**光らせる。
@@ -1098,7 +1108,7 @@ const buildCore = (
         anchor.y + (h(3) - 0.5) * 2 * spread,
         z - index * 0.01,
       ],
-      half: [size, size],
+      half: [size * mix(1, UNIFIED.coreShapeAxis.wide, form), size * mix(1, UNIFIED.coreShapeAxis.tall, form)],
       spin: roll,
       tiltX: 0,
       tiltY: 0,
@@ -1117,7 +1127,8 @@ const buildCore = (
       // 大きい塊にさらに広いハロを足すと画面が白く埋まる。半径で割り戻す。
       halo: haloOf(axes, 'core') * Math.min((UNIFIED.coreSmall * 2.4) / Math.max(size, 1e-3), 1),
       pad: padOf(axes),
-      character: 0,
+      // 核では「性格」は点 ⇄ 面（頂の平らさ）を表す。
+      character: form,
       material: materialOf(axes, 'core', drive.beamSeed, 5 + index),
       whiteAllowed: true,
       ceiling: 1,
