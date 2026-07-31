@@ -132,6 +132,13 @@ export interface UnifiedAxes {
    * 回転・反転は**要素ごとに**決まる（10 枚を切り替えているようには見えない）。
    */
   textureGrain: number;
+  /**
+   * **板の四角さを削る。**
+   *
+   * 0 = 手続きで描いた形の縁そのまま ⇄ 1 = 非対称な多角形で外形を削る。
+   * 板の輪郭が読めてしまうのを隠しつつ、要素ごとに違う不揃いな縁を作る。
+   */
+  silhouette: number;
   /** 破片の量。 */
   fragments: number;
   /**
@@ -184,6 +191,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'membraneScale', label: 'Membrane scale', group: '構成', low: '画面基準', high: 'ワールド固定' },
   { id: 'eventMembrane', label: 'Event membrane', group: '構成', low: '固定の膜', high: '打撃ごとに生死' },
   { id: 'textureGrain', label: 'Texture grain', group: '構成', low: '手続き形状', high: '素材が支配' },
+  { id: 'silhouette', label: 'Silhouette', group: '構成', low: '素の縁', high: '多角形で削る' },
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
@@ -220,6 +228,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   membraneScale: 0.45,
   eventMembrane: 0.4,
   textureGrain: 0.4,
+  silhouette: 0.35,
   fragments: 0.5,
   fragmentCharacter: 0.4,
   hazeFloor: 0.45,
@@ -259,6 +268,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     membraneScale: 0.9,
     eventMembrane: 0.9,
     textureGrain: 0.85,
+    silhouette: 0.7,
     fragments: 0.6,
     fragmentCharacter: 0.85,
     hazeFloor: 0.35,
@@ -291,6 +301,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     membraneScale: 0.6,
     eventMembrane: 0.8,
     textureGrain: 0.6,
+    silhouette: 0.5,
     fragments: 0.6,
     fragmentCharacter: 0.7,
     hazeFloor: 0.5,
@@ -323,6 +334,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     membraneScale: 0.1,
     eventMembrane: 0.1,
     textureGrain: 0.15,
+    silhouette: 0.1,
     fragments: 0.55,
     fragmentCharacter: 0.15,
     hazeFloor: 0.4,

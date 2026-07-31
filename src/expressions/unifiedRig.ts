@@ -51,6 +51,9 @@ export interface UnifiedMaterial {
   readonly orient: readonly [number, number, number, number];
   /** この層に効く素材の量（軸 × 種別の重み）。0 なら 1 画素も素材を読まない。 */
   readonly grain: number;
+  /** 多角形マスクの抽選値（0〜1）と効き。`silhouette` 軸 × 種別の重み。 */
+  readonly maskPick: number;
+  readonly maskAmount: number;
   /** 素材そのものの色みを残す割合（0 で完全に音の色へ置き換える）。 */
   readonly sourceTint: number;
 }
@@ -300,6 +303,18 @@ export const UNIFIED = {
     fan: ['caustic-fan', 'wide-caustic'],
     core: ['wide-caustic', 'caustic-fan'],
   } as Readonly<Record<UnifiedKind, readonly string[]>>,
+  /**
+   * **種別ごとの多角形マスクの効き。** 核は削らない — 白へ届いてよい唯一の層で、
+   * 芯を欠けさせると「白熱した点」ではなくなる。
+   */
+  silhouetteByKind: {
+    core: 0,
+    beam: 0.35,
+    membrane: 1,
+    haze: 0.75,
+    fragment: 0.9,
+    fan: 0.85,
+  } as Readonly<Record<UnifiedKind, number>>,
   /** 破片だけは**発火した帯域**が素材の系統を決める（Spatial と同じ流儀）。 */
   rolesByBand: {
     bass: ['wide-haze', 'wide-caustic', 'parallel-curtains', 'layered-sheets'],
@@ -644,6 +659,8 @@ const materialOf = (
     crop: [centre(h(2)), centre(h(3)), halfCrop, halfCrop],
     orient: [Math.cos(angle), Math.sin(angle), h(5) < 0.5 ? -1 : 1, h(6) < 0.5 ? -1 : 1],
     grain: clamp01(axes.textureGrain) * UNIFIED.grainByKind[kind],
+    maskPick: h(9),
+    maskAmount: clamp01(axes.silhouette) * UNIFIED.silhouetteByKind[kind],
     sourceTint: mix(g.tintKeepMinimum, g.tintKeepMaximum, h(8)),
   };
 };

@@ -12,6 +12,7 @@ import { OpticsAudioDrive, hueOfPhase } from './opticsAudioDrive';
 import { channelBalanceGain } from './channelBalance';
 import type { FragmentSpawn } from './lightOpticsMapping';
 import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
+import { createPolygonAtlas, type PolygonAtlas } from './polygonAtlas';
 import {
   AXIS_DECLS,
   AXIS_PRESETS,
@@ -61,6 +62,24 @@ const LIMITS = {
    * 3 行目に空きマスが 2 つ残り、そこを引いたインスタンスが**真っ黒**になる。
    */
   atlas: { manifestUrl: 'assets/light-traces/manifest.json', cellPixels: 384, columns: 5 },
+  /**
+   * **板の四角さを削る多角形の帳面**（`Silhouette` 軸）。起動時に一度だけ焼く。
+   * 中身は符号つき距離場なので、どこまで拡大しても縁が鋭い。
+   */
+  maskAtlas: {
+    patterns: 12,
+    columns: 4,
+    cellPixels: 128,
+    vertexMinimum: 5,
+    vertexMaximum: 7,
+    radiusMinimum: 0.42,
+    radiusMaximum: 0.94,
+    angleJitter: 0.62,
+    distanceSpread: 0.7,
+    seedSalt: 0.2718281828,
+  },
+  /** 多角形の縁の柔らかさ。**硬い面には見せない**ので広くぼかす。 */
+  maskSoftness: 0.3,
 } as const;
 
 const clamp = (value: number, min: number, max: number): number =>
@@ -247,13 +266,15 @@ export class LightUnified implements LabExpression {
   private mesh: THREE.Mesh | null = null;
   private placeholder: THREE.DataTexture | null = null;
   private atlas: PrismAtlas | null = null;
+  private maskAtlas: PolygonAtlas | null = null;
   private pipeline: EffectPipeline | null = null;
   private disposed = false;
 
   // ---- インスタンス属性 ----
   private readonly offsets = new Float32Array(LIMITS.maximumLayers * 3);
   private readonly sizes = new Float32Array(LIMITS.maximumLayers * 4);
-  private readonly spins = new Float32Array(LIMITS.maximumLayers * 3);
+  /** [面内回転, 傾き X, 傾き Y, 多角形マスクの効き] */
+  private readonly spins = new Float32Array(LIMITS.maximumLayers * 4);
   private readonly tones = new Float32Array(LIMITS.maximumLayers * 4);
   private readonly shapes = new Float32Array(LIMITS.maximumLayers * 4);
   private readonly axesAttr = new Float32Array(LIMITS.maximumLayers * 4);
@@ -292,6 +313,8 @@ export class LightUnified implements LabExpression {
     this.camera.zoom = this.zoom;
     this.camera.updateProjectionMatrix();
 
+    // 多角形の帳面は起動時に一度だけ焼く（決定論。毎フレームの費用はゼロ）。
+    this.maskAtlas = createPolygonAtlas(LIMITS.maskAtlas);
     this.placeholder = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
     this.placeholder.colorSpace = THREE.SRGBColorSpace;
     this.placeholder.needsUpdate = true;
@@ -650,7 +673,7 @@ export class LightUnified implements LabExpression {
     };
     add('aOffset', this.offsets, 3);
     add('aSize', this.sizes, 4);
-    add('aSpin', this.spins, 3);
+    add('aSpin', this.spins, 4);
     add('aTone', this.tones, 4);
     add('aShape', this.shapes, 4);
     add('aAxis', this.axesAttr, 4);
@@ -686,6 +709,11 @@ export class LightUnified implements LabExpression {
         // アトラスが届くまでは 0。**素材が無い間は手続きの形だけで描く**
         //（1x1 の黒を掛けて画面が消えないようにするため）。
         uHasAtlas: { value: 0 },
+        uMask: { value: this.maskAtlas?.texture ?? this.placeholder },
+        uMaskGrid: {
+          value: new THREE.Vector2(this.maskAtlas?.columns ?? 1, this.maskAtlas?.rows ?? 1),
+        },
+        uMaskSoftness: { value: LIMITS.maskSoftness },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -696,7 +724,7 @@ export class LightUnified implements LabExpression {
       vertexShader: /* glsl */ `
         attribute vec3 aOffset;
         attribute vec4 aSize;
-        attribute vec3 aSpin;
+        attribute vec4 aSpin;
         attribute vec4 aTone;
         attribute vec4 aShape;
         attribute vec4 aAxis;
@@ -716,6 +744,7 @@ export class LightUnified implements LabExpression {
         varying vec4 vTexture;
         varying vec4 vHues;
         varying vec4 vSaturations;
+        varying float vMask;
         varying float vEdge;
         varying float vHalo;
         varying float vPad;
@@ -725,6 +754,7 @@ export class LightUnified implements LabExpression {
           vCrop = aCrop;
           vOrient = aOrient;
           vTexture = aTexture;
+          vMask = aSpin.w;
           vHues = aHues;
           vSaturations = aSaturations;
           vTone = aTone;
@@ -764,6 +794,9 @@ export class LightUnified implements LabExpression {
         uniform vec4 uGrain;
         uniform float uGrainGain;
         uniform float uHasAtlas;
+        uniform sampler2D uMask;
+        uniform vec2 uMaskGrid;
+        uniform float uMaskSoftness;
         varying vec2 vUv;
         varying vec4 vTone;
         varying vec4 vShape;
@@ -774,6 +807,7 @@ export class LightUnified implements LabExpression {
         varying vec4 vTexture;
         varying vec4 vHues;
         varying vec4 vSaturations;
+        varying float vMask;
         varying float vEdge;
         varying float vHalo;
         varying float vPad;
@@ -1002,8 +1036,20 @@ export class LightUnified implements LabExpression {
           tint = mix(tint, sourceHue, clamp(vTexture.z, 0.0, 1.0) * grain);
 
           // **チャンネルの偏り。** 最大は常に 1 なので、白の予算は動かない。
+          /**
+           * **多角形で外形を削る。** 板の四角い輪郭を隠しつつ、要素ごとに違う
+           * 不揃いな縁を作る。帳面は符号つき距離場（0.5 がちょうど輪郭）なので、
+           * どれだけ引き伸ばしても縁がぼけない。効きが 0 なら 1 画素も削らない。
+           */
+          vec2 maskCell = mix(vec2(0.004), vec2(0.996), clamp(q * 0.5 + 0.5, 0.0, 1.0));
+          float maskColumn = mod(vTexture.w, max(uMaskGrid.x, 1.0));
+          float maskRow = floor(vTexture.w / max(uMaskGrid.x, 1.0));
+          float sdf = texture2D(uMask, (vec2(maskColumn, maskRow) + maskCell) / max(uMaskGrid, vec2(1.0))).r;
+          float polygon = smoothstep(0.5 - uMaskSoftness, 0.5 + uMaskSoftness, sdf);
+          float silhouette = mix(1.0, polygon, clamp(vMask, 0.0, 1.0));
+
           vec3 colour = channels * uChannelGain * tint;
-          colour *= uIntensity * vAxis.x * material;
+          colour *= uIntensity * vAxis.x * material * silhouette;
           // **白の予算。** 核以外はここで頭を押さえる。
           colour = min(colour, vec3(vAxis.y));
           gl_FragColor = vec4(colour, 1.0);
@@ -1053,9 +1099,10 @@ export class LightUnified implements LabExpression {
       this.sizes[index * 4 + 1] = layer.half[1] * 2 * layer.pad;
       this.sizes[index * 4 + 2] = layer.edge;
       this.sizes[index * 4 + 3] = layer.halo;
-      this.spins[index * 3 + 0] = layer.spin;
-      this.spins[index * 3 + 1] = layer.tiltX;
-      this.spins[index * 3 + 2] = layer.tiltY;
+      this.spins[index * 4 + 0] = layer.spin;
+      this.spins[index * 4 + 1] = layer.tiltX;
+      this.spins[index * 4 + 2] = layer.tiltY;
+      this.spins[index * 4 + 3] = layer.material.maskAmount;
       this.tones[index * 4 + 0] = layer.hue;
       this.tones[index * 4 + 1] = layer.hueSpan;
       this.tones[index * 4 + 2] = UNIFIED_KIND_INDEX[layer.kind];
@@ -1084,7 +1131,12 @@ export class LightUnified implements LabExpression {
       this.textures[index * 4 + 0] = this.resolveTile(material.roles, material.pick);
       this.textures[index * 4 + 1] = material.grain;
       this.textures[index * 4 + 2] = material.sourceTint;
-      this.textures[index * 4 + 3] = 0;
+      this.textures[index * 4 + 3] = this.maskAtlas
+        ? Math.min(
+            Math.floor(clamp(material.maskPick, 0, 1) * this.maskAtlas.patterns),
+            this.maskAtlas.patterns - 1,
+          )
+        : 0;
       for (let stop = 0; stop < 4; stop++) {
         this.hues[index * 4 + stop] = layer.hues[stop]!;
         this.saturations[index * 4 + stop] = layer.saturations[stop]!;
@@ -1441,6 +1493,7 @@ export class LightUnified implements LabExpression {
     this.material?.dispose();
     this.placeholder?.dispose();
     this.atlas?.texture.dispose();
+    this.maskAtlas?.texture.dispose();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
     this.layers = [];
     this.fragmentShapes.clear();
@@ -1449,6 +1502,7 @@ export class LightUnified implements LabExpression {
     this.material = null;
     this.placeholder = null;
     this.atlas = null;
+    this.maskAtlas = null;
     this.mesh = null;
     this.scene = null;
     this.camera = null;
