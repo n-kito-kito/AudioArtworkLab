@@ -554,7 +554,21 @@ export class LightUnified implements LabExpression {
               d = max(max(dot(q, vec2(0.0, -1.0)), dot(q, vec2(0.8660254, 0.5))),
                       dot(q, vec2(-0.8660254, 0.5))) - 0.55 + vShape.w;
             }
-            return softEdge(d, vShape.x * 0.1);
+            float shard = softEdge(d, vShape.x * 0.1);
+            float character = clamp(vAxis.w, 0.0, 1.0);
+            if (character <= 0.0) return shard;
+            /**
+             * **引っ掻き傷（羽毛・筋）。**
+             * 芯は細く長く、伸びる向きに沿って羽毛のような濃淡が走る。
+             * 端は必ず 0 へ落ちる（板の縁とは無関係に、形そのものが閉じている）。
+             */
+            vec2 f = vec2(p.x, p.y * mix(1.0, 3.2, character));
+            float spine = exp(-abs(f.y) * mix(5.0, 2.0, vEdge));
+            float along = 1.0 - smoothstep(0.12, 0.96, abs(f.x));
+            float barbs = 0.45 + 0.55 * abs(sin(f.x * 7.0 + f.y * 3.0 + vShape.y));
+            float taper = 1.0 - smoothstep(0.0, 1.5, abs(f.y) * (0.35 + abs(f.x)));
+            float filament = spine * along * barbs * max(taper, 0.0);
+            return mix(shard, filament, character);
           }
 
           // ---- 靄 ----
@@ -582,14 +596,26 @@ export class LightUnified implements LabExpression {
           }
 
           // ---- 核 ----
+          /**
+           * **核。**
+           * シャープ側（vEdge 0）は「強烈な点 + 髪の毛のように細い貫通線 +
+           * わずかなフレア」、にじみ側（1）は「大きく滲んだ塊」。
+           * 同じ 1 本の式で、係数だけが Blur 軸に沿って動く。
+           */
           float r = length(p);
-          float centre = exp(-r * r * mix(26.0, 10.0, vEdge)) * vShape.w;
-          float flareH = exp(-abs(p.y) * mix(30.0, 12.0, vEdge)) *
-                         (1.0 - smoothstep(0.2, 1.0, abs(p.x))) * vShape.y;
-          float flareV = exp(-abs(p.x) * mix(30.0, 12.0, vEdge)) *
-                         (1.0 - smoothstep(0.2, 1.0, abs(p.y))) * vShape.z;
-          float wide = exp(-r * mix(7.0, 3.0, vEdge)) * 0.35;
-          return centre + flareH + flareV + wide;
+          float centre = exp(-r * r * mix(120.0, 7.0, vEdge)) * vShape.w;
+          // 芯の白熱。シャープ側ほど小さく強い点になる。
+          float spark = exp(-r * r * mix(900.0, 40.0, vEdge)) * mix(1.4, 0.35, vEdge);
+          // 貫通線。シャープ側は極細で遠くまで、にじみ側は太く短い。
+          float lineH = exp(-abs(p.y) * mix(220.0, 11.0, vEdge)) *
+                        (1.0 - smoothstep(mix(0.75, 0.2, vEdge), 1.0, abs(p.x))) * vShape.y;
+          float lineV = exp(-abs(p.x) * mix(220.0, 11.0, vEdge)) *
+                        (1.0 - smoothstep(mix(0.75, 0.2, vEdge), 1.0, abs(p.y))) * vShape.z;
+          // フレア片。シャープ側では点在する小さなかけら、にじみ側では広い裾。
+          float flakes = exp(-r * mix(22.0, 2.6, vEdge)) *
+                         (0.35 + 0.65 * abs(sin(atan(p.y, p.x) * 5.0 + r * 9.0))) *
+                         mix(0.18, 0.45, vEdge);
+          return centre + spark + lineH + lineV + flakes;
         }
 
         /**

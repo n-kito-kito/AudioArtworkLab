@@ -145,6 +145,9 @@ export const UNIFIED = {
   padAtFullBlur: 1.4,
   /** 波長の深さ。1 で純粋な分光、0 で白。 */
   tintDepth: 0.72,
+  /** 核の大きさの幅（半径・ワールド）。小さい側は針の先、大きい側は画面を占める塊。 */
+  coreSmall: 0.2,
+  coreLarge: 2.3,
   /** 場の利得。音量の持続をそのまま輝度にすると暗すぎるので 1 本だけ通す。 */
   fieldGain: 1.6,
   /**
@@ -339,6 +342,21 @@ const BEAM_DIRECTIONS: readonly { readonly bit: number; readonly spin: number }[
   { bit: 8, spin: Math.PI },
   { bit: 4, spin: -Math.PI / 2 },
 ];
+
+/**
+ * **核の大きさ。**
+ *
+ * 軸は足さない。**その打撃のシード**が大小を決め、`blur` が分布を寄せる。
+ * にじみ側では大きく滲んだ塊が出やすく、シャープ側では小さく強い点が出やすい。
+ * ＝ **同じ設定のまま**、あるときは画面を占める光の塊、あるときは針の先の白熱になる。
+ */
+const coreSize = (axes: UnifiedAxes, seed: number): number => {
+  const blur = clamp01(axes.blur);
+  const draw = hash01(seed + 4111, 5);
+  // 指数で分布を寄せる: シャープ側は 3.4 乗で小さい側へ、にじみ側は 0.75 乗で大きい側へ。
+  const t = Math.pow(draw, mix(3.4, 0.75, blur));
+  return mix(UNIFIED.coreSmall, UNIFIED.coreLarge, t);
+};
 
 /** 核の形状族ごとの [族, 横フレア, 縦スパイク, 芯の強さ]。 */
 const CORE_SHAPE_PARAMS: readonly (readonly [number, number, number, number])[] = [
@@ -564,21 +582,27 @@ const buildCore = (
       : ([-1, 0, 0, 1] as const);
   const z = depthOf(axes, 0.25);
   const anchor = burstAnchor(drive, axes, viewport, z);
+  const size = coreSize(axes, Math.round(drive.beamSeed)) * mix(0.8, 1.15, pulse);
+  // 大きい塊は 1 画素あたりを薄くする（**白の予算**は核だけのものだが、
+  // 画面の 1/4 が真っ白になっては光ではなく塗りになる）。
+  // 面積はおよそ二乗で増えるので、薄め方も半径に反比例させる。
+  const dilute = Math.min(UNIFIED.coreSmall / Math.max(size, 1e-3) + 0.1, 1);
   return [
     {
       kind: 'core',
       position: [anchor.x, anchor.y, z],
-      half: [mix(0.34, 0.5, pulse), mix(0.34, 0.5, pulse)],
+      half: [size, size],
       spin: 0,
       tiltX: 0,
       tiltY: 0,
       hue: drive.hue,
       hueSpan: 0.08,
       gradientForm: 1,
-      intensity: mix(0.4, 1.55, pulse) * blinkOf(axes, drive, 'core', 0),
+      intensity: mix(0.4, 1.55, pulse) * dilute * blinkOf(axes, drive, 'core', 0),
       shape: [shape[0], shape[1], shape[2], shape[3]],
       edge: clamp01(axes.blur),
-      halo: haloOf(axes, 'core'),
+      // 大きい塊にさらに広いハロを足すと画面が白く埋まる。半径で割り戻す。
+      halo: haloOf(axes, 'core') * Math.min(UNIFIED.coreSmall * 2.4 / Math.max(size, 1e-3), 1),
       pad: padOf(axes),
       character: 0,
       whiteAllowed: true,
@@ -622,7 +646,11 @@ const buildFragments = (
     const g = hash01(seed, slot * 7 + 6);
     const family = (slot + (g > 0.72 ? 1 : 0)) % UNIFIED_FRAGMENT_FAMILIES.length;
     const size = (0.2 + dd * 0.4) * (Math.abs(z) / 6);
-    const stretch = family === 1 ? 2.1 + h * 1.5 : family === 2 ? 1.1 + h * 0.7 : 0.85 + h * 0.5;
+    // 羽毛・筋の側では板そのものが長く伸びる（引っ掻き傷の形になる）。
+    const character = clamp01(axes.fragmentCharacter);
+    const stretch =
+      (family === 1 ? 2.1 + h * 1.5 : family === 2 ? 1.1 + h * 0.7 : 0.85 + h * 0.5) *
+      mix(1, 3.6, character);
     out.push({
       kind: 'fragment',
       position: [(nx + d.x) * e.w, (ny + d.y) * e.h, z],
@@ -640,13 +668,15 @@ const buildFragments = (
         amount *
         depthDim(z) *
         blinkOf(axes, drive, 'fragment', slot) *
-        countFade(wanted, placed, limit),
+        countFade(wanted, placed, limit) *
+        // 筋は面積が広がるぶん薄い。塗りにならないように。
+        mix(1, 0.78, clamp01(axes.fragmentCharacter)),
       // [縁, 形状族, 伸び, 欠け]
       shape: [0.34, family, 0.75 + h * 0.6, 0.04 + dd * 0.2],
       edge: clamp01(axes.blur),
       halo: haloOf(axes, 'fragment'),
       pad: padOf(axes),
-      character: 0,
+      character,
       whiteAllowed: false,
       ceiling: UNIFIED.nonCoreCeiling,
       channel: [1.4, 1.6, 0.05, 0.3],

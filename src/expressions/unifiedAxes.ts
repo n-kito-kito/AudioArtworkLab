@@ -85,6 +85,12 @@ export interface UnifiedAxes {
   membraneBeam: number;
   /** 破片の量。 */
   fragments: number;
+  /**
+   * **破片の性格。** 0 = 角のある破片 ⇄ 1 = 引っ掻き傷のような羽毛・筋。
+   * `Blur`（光学のにじみ）とは別軸にしてある — 鋭い筋と滲んだ破片を
+   * それぞれ独立に出せるようにするため。
+   */
+  fragmentCharacter: number;
   /** 靄の床（画面をまとめる最下段の明るさ）。 */
   hazeFloor: number;
   /** 常設の十字（骨格）の存在感。**バーストの原点で交差する。** */
@@ -125,6 +131,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'channelBalance', label: 'Channel balance', group: '色', low: 'R 優勢', high: 'B 優勢' },
   { id: 'membraneBeam', label: 'Membrane–Beam', group: '構成', low: '膜', high: '光条' },
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
+  { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
   { id: 'skeleton', label: 'Skeleton', group: '構成', low: '無し', high: 'はっきり' },
   { id: 'beamLength', label: 'Beam length', group: '構成', low: '短い', high: '貫通' },
@@ -155,6 +162,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   channelBalance: 0.5,
   membraneBeam: 0.5,
   fragments: 0.5,
+  fragmentCharacter: 0.4,
   hazeFloor: 0.45,
   skeleton: 0.4,
   beamLength: 0.55,
@@ -187,14 +195,15 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     dispersion: 0.4,
     channelBalance: 0.42,
     membraneBeam: 0.55,
-    fragments: 0.45,
+    fragments: 0.6,
+    fragmentCharacter: 0.85,
     hazeFloor: 0.35,
     skeleton: 0.25,
     beamLength: 0.9,
     density: 0.85,
     motion: 0.5,
     trace: 0.35,
-    intensity: 0.5,
+    intensity: 0.34,
   },
   /** Reactive Lab 風: 膜が優勢・長い尾・にじむ。 */
   reactive: {
@@ -213,7 +222,8 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     dispersion: 0.5,
     channelBalance: 0.62,
     membraneBeam: 0.15,
-    fragments: 0.5,
+    fragments: 0.6,
+    fragmentCharacter: 0.7,
     hazeFloor: 0.5,
     skeleton: 0.15,
     beamLength: 0.45,
@@ -240,6 +250,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     channelBalance: 0.5,
     membraneBeam: 0.5,
     fragments: 0.55,
+    fragmentCharacter: 0.15,
     hazeFloor: 0.4,
     skeleton: 1,
     beamLength: 1,
