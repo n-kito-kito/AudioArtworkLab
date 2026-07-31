@@ -85,8 +85,14 @@ export const ENVELOPE_PRESETS = {
 
 export type EnvelopePresetName = keyof typeof ENVELOPE_PRESETS;
 
-/** ゲートの既定の閾値。 */
-export const GATE_DEFAULT_THRESHOLD = 0.5;
+/**
+ * ゲートの既定の閾値。
+ *
+ * 実曲では包絡系の level が 0.5 まで届かないことが多く（実測で 2 秒包絡の
+ * 90 パーセンタイルが 0.33）、0.5 だと**繋いでも何も起きない**。
+ * 「連続値を引き金に落とす」既定として、鳴っていれば通る程度に置く。
+ */
+export const GATE_DEFAULT_THRESHOLD = 0.25;
 
 /** 結線の定数はここに集める（時定数・閾値・既定の深さ）。 */
 export const BINDING = {

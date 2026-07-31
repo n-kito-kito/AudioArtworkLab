@@ -56,10 +56,37 @@ export interface ExpressionActionParam extends ExpressionParamBase {
   readonly type: 'action';
 }
 
+/**
+ * **音 × パラメーターの結線（1 本ぶん）。**
+ *
+ * 「触る場所」と「繋ぐ場所」を分けないための型。UI は基準値スライダーの**そこに**
+ * ソース選択・深さ・変換を直付けし、動作中の実効値も同じスライダーの上で見せる。
+ */
+export interface ExpressionBindingParam extends ExpressionParamBase {
+  readonly type: 'binding';
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+  /** 基準値（ユーザーのスライダー位置）。結線していても生きている。 */
+  readonly value: number;
+  /** 繋いでいるソース（`null` で「なし」）。 */
+  readonly sourceId: string | null;
+  readonly depth: number;
+  /** 選べるソース。`kind` は表示に使う。 */
+  readonly sources: readonly { readonly id: string; readonly label: string; readonly kind: string }[];
+  /** 変換の表示名（自動挿入されたものも含む）と選択肢。 */
+  readonly transform: string;
+  readonly transformOptions: readonly ExpressionSelectOption[];
+  /** 動作中の実効値と、変換後の信号（0〜1）。スライダーの上に重ねて見せる。 */
+  readonly liveValue: number;
+  readonly liveSignal: number;
+}
+
 export type ExpressionParam =
   | ExpressionNumberParam
   | ExpressionSelectParam
-  | ExpressionActionParam;
+  | ExpressionActionParam
+  | ExpressionBindingParam;
 
 export interface LabExpression extends Composition {
   /** 表現の安定 id（保存データに入る）。 */

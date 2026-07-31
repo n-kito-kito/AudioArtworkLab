@@ -2554,3 +2554,40 @@ body[data-ui-variant='3'] .dev-hud__toggles {
   max-width: 560px;
   margin-bottom: 1.5rem;
 }
+
+
+/* ---- 結線 1 本ぶんの行（Audio Mapping の見た目を流用）------------------- */
+
+.binding-row__base {
+  align-items: center;
+}
+
+.binding-row__track {
+  position: relative;
+  display: block;
+}
+
+.binding-row__track input[type='range'] {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  background: transparent;
+}
+
+/* 動作中の実効値。基準の周りで揺れているのがそのまま見える。 */
+.binding-row__live {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 4px;
+  width: var(--live, 0%);
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: rgb(120 200 255 / 55%);
+  pointer-events: none;
+}
+
+.binding-row h4 {
+  color: #aab;
+  font-size: 9px;
+}

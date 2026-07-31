@@ -3,9 +3,13 @@ import { BandLightEventDetector } from '../engine/bandLightEvents';
 import { BindingResolver } from '../engine/binding/resolve';
 import type { AudioSourceShelf } from '../engine/binding/sources';
 import {
+  ENVELOPE_PRESETS,
   defaultTransformFor,
+  envelopeTransform,
+  gateTransform,
   type AudioSource,
   type Binding,
+  type EnvelopePresetName,
   type ParamDecl,
 } from '../engine/binding/types';
 import {
@@ -621,6 +625,39 @@ export class OpticsAudioDrive {
   /** 結線の読み書き（UI 用）。 */
   bindings(): BindingResolver {
     return this.resolver;
+  }
+
+  /** 変換の語（UI の表示・切替に使う）。`auto` は種類から自動で決める。 */
+  transformName(paramId: string): string {
+    const binding = this.resolver.getBinding(paramId);
+    if (!binding || !binding.transform) return 'none';
+    if (binding.transform.type === 'gate') return 'gate';
+    const { attack, decay } = binding.transform;
+    for (const [name, preset] of Object.entries(ENVELOPE_PRESETS)) {
+      if (preset.attack === attack && preset.decay === decay) return `envelope-${name}`;
+    }
+    return 'envelope-default';
+  }
+
+  /** 語から変換を作って張り替える。`auto` は種類不一致の既定挿入に戻す。 */
+  setTransform(paramId: string, name: string): void {
+    const binding = this.resolver.getBinding(paramId);
+    if (!binding || !binding.sourceId) return;
+    if (name === 'auto') {
+      this.connect(paramId, binding.sourceId, binding.depth);
+      return;
+    }
+    const transform =
+      name === 'none'
+        ? null
+        : name === 'gate'
+          ? gateTransform()
+          : envelopeTransform(
+              (name.replace('envelope-', '') as EnvelopePresetName) in ENVELOPE_PRESETS
+                ? (name.replace('envelope-', '') as EnvelopePresetName)
+                : 'default',
+            );
+    this.connect(paramId, binding.sourceId, binding.depth, transform);
   }
 
   /**

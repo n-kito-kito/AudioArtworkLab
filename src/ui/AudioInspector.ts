@@ -1,6 +1,6 @@
 import type { FileAudioEngine } from '../audio/FileAudioEngine';
 import { AudioFeatureView } from './AudioFeatureView';
-import type { LabExpression } from '../expressions/Expression';
+import type { ExpressionParam, LabExpression } from '../expressions/Expression';
 import { LightCoreStudy } from '../expressions/LightCoreStudy';
 import { LightElementLab2 } from '../expressions/LightElementLab2';
 import { LightSpatialStudy } from '../expressions/LightSpatialStudy';
@@ -107,6 +107,11 @@ export class AudioInspector {
   private readonly featureToggle = document.createElement('button');
   private readonly featureView = new AudioFeatureView('compact');
   private featuresCollapsed = true;
+  /** 結線行の実効値表示。毎フレーム書き換える。 */
+  private readonly bindingLive = new Map<
+    string,
+    { bar: HTMLElement; output: HTMLElement; parameter: Extract<ExpressionParam, { type: 'binding' }> }
+  >();
   private animationId: number | null = null;
   private collapsed = true;
   private previousOnset = 0;
@@ -145,6 +150,7 @@ export class AudioInspector {
   /** 表現が差し替わったときに、その表現用のブロックを組み直す。 */
   refresh(): void {
     this.coreBlock.replaceChildren();
+    this.bindingLive.clear();
     const composition = this.getComposition();
     const spatial = composition instanceof LightSpatialStudy;
     // Light Element Lab 2 は音へ繋がない静止画の検証なので、
@@ -177,6 +183,10 @@ export class AudioInspector {
 
     for (const parameter of composition.getExpressionParams()) {
       if (parameter.type === 'action') continue;
+      if (parameter.type === 'binding') {
+        this.coreBlock.append(this.binding(parameter, composition));
+        continue;
+      }
       if (parameter.type === 'select') {
         // 適応の on/off のような排他の切り替え。切り分け検証のために出す。
         this.coreBlock.append(
@@ -418,6 +428,89 @@ export class AudioInspector {
   }
 
   /** LabControls と同じ見た目のスライダー 1 本。 */
+  /**
+   * **結線 1 本ぶんの行。**
+   *
+   * 基準値スライダーの**そこに**ソース・深さ・変換を直付けする（下部パネルに分けない）。
+   * スライダーの溝には**動作中の実効値**を重ねて描くので、
+   * 「基準の周りで揺れている」ことがそのまま見える。
+   * 見た目は Effect 層の Audio Mapping（`effect-audio-mapping`）を流用する。
+   */
+  private binding(
+    parameter: Extract<ExpressionParam, { type: 'binding' }>,
+    composition: LabExpression,
+  ): HTMLElement {
+    const block = document.createElement('div');
+    block.className = 'effect-audio-mapping binding-row';
+
+    const heading = document.createElement('h4');
+    heading.textContent = parameter.label;
+    block.append(heading);
+
+    // ---- 基準値スライダー（結線中も操作できる）+ 実効値の重ね表示 ----
+    const baseRow = document.createElement('label');
+    baseRow.className = 'control-row control-row--range binding-row__base';
+    const baseName = document.createElement('span');
+    baseName.textContent = 'Base';
+    const baseOut = document.createElement('output');
+    baseOut.textContent = parameter.value.toFixed(2);
+    const track = document.createElement('div');
+    track.className = 'binding-row__track';
+    const live = document.createElement('i');
+    live.className = 'binding-row__live';
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = String(parameter.min);
+    input.max = String(parameter.max);
+    input.step = String(parameter.step);
+    input.value = String(parameter.value);
+    input.setAttribute('aria-label', `${parameter.label} base`);
+    input.addEventListener('input', () => {
+      baseOut.textContent = Number(input.value).toFixed(2);
+      composition.setExpressionParam?.(`bind:${parameter.key.slice(5)}`, Number(input.value));
+    });
+    track.append(live, input);
+    baseRow.append(baseName, baseOut, track);
+    block.append(baseRow);
+    this.bindingLive.set(parameter.key, { bar: live, output: baseOut, parameter });
+
+    // ---- ソース ----
+    const paramId = parameter.key.slice(5);
+    block.append(
+      this.select(
+        'Source',
+        [
+          { value: 'none', label: 'None' },
+          ...parameter.sources.map((source) => ({
+            value: source.id,
+            label: `${source.label} · ${source.kind}`,
+          })),
+        ],
+        parameter.sourceId ?? 'none',
+        (next) => {
+          composition.setExpressionParam?.(`bind:${paramId}:source`, next);
+          this.refresh();
+        },
+      ),
+    );
+
+    // ---- 深さ（−1..1・負で逆方向）----
+    block.append(
+      this.range('Depth', parameter.depth, -1, 1, 0.01, (next) =>
+        composition.setExpressionParam?.(`bind:${paramId}:depth`, next),
+      ),
+    );
+
+    // ---- 変換（自動挿入されたものも表示）----
+    block.append(
+      this.select('Transform', parameter.transformOptions, parameter.transform, (next) => {
+        composition.setExpressionParam?.(`bind:${paramId}:transform`, next);
+        this.refresh();
+      }),
+    );
+    return block;
+  }
+
   private range(
     labelText: string,
     value: number,
@@ -458,6 +551,23 @@ export class AudioInspector {
     // 畳んでいる間は書き込まない（見えない DOM を毎フレーム触らない）。
     if (!this.collapsed && !this.featuresCollapsed) {
       this.featureView.update(this.engine.getFeatures());
+    }
+    // 結線行の実効値。**基準の周りで揺れているのがスライダーの上で見える。**
+    if (!this.collapsed && this.bindingLive.size > 0) {
+      const composition = this.getComposition();
+      const current = composition.getExpressionParams?.() ?? [];
+      for (const entry of current) {
+        if (entry.type !== 'binding') continue;
+        const row = this.bindingLive.get(entry.key);
+        if (!row) continue;
+        const span = Math.max(entry.max - entry.min, 1e-6);
+        const amount = ((entry.liveValue - entry.min) / span) * 100;
+        row.bar.style.setProperty('--live', `${Math.min(Math.max(amount, 0), 100).toFixed(1)}%`);
+        row.output.textContent =
+          entry.sourceId === null
+            ? entry.value.toFixed(2)
+            : `${entry.value.toFixed(2)} → ${entry.liveValue.toFixed(2)}`;
+      }
     }
     const active = parameters.active === 1;
     const onset = Math.min(Math.max(parameters.onset ?? 0, 0), 1);

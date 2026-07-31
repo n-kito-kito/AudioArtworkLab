@@ -19,6 +19,7 @@ import {
   type OpticsDrive,
 } from './lightOpticsMapping';
 import {
+  OPTICS_PARAMS,
   OPTICS_THRESHOLDS,
   OpticsAudioDrive,
   type OpticsDriveLevels,
@@ -1034,6 +1035,47 @@ export class LightElementLab2 implements LabExpression {
    * `Red` `Green` `Blue` / `Offset direction` / `Global tint (H)` / `Depth probe`）は
    * この方針でここへ戻してある。**既定値は実楽曲での通し計測で決めた値のまま。**
    */
+  /**
+   * **結線のつまみ。** 宣言したパラメーターごとに 1 行、基準値スライダーの場所へ
+   * ソース選択・深さ・変換を直付けする。動作中の実効値も同じ行で返すので、
+   * UI は「基準の周りで揺れている」ことをスライダーの上で見せられる。
+   */
+  private bindingParams(): ExpressionParam[] {
+    const resolver = this.audioDrive.bindings();
+    const sources = resolver.listSources().map((source) => ({
+      id: source.id,
+      label: source.label,
+      kind: source.kind,
+    }));
+    return OPTICS_PARAMS.map((decl) => {
+      const binding = resolver.getBinding(decl.id);
+      const live = resolver.resolve(decl.id);
+      return {
+        key: `bind:${decl.id}`,
+        label: decl.label,
+        type: 'binding' as const,
+        min: decl.min,
+        max: decl.max,
+        step: 0.01,
+        value: resolver.getBase(decl.id),
+        sourceId: binding?.sourceId ?? null,
+        depth: binding?.depth ?? 1,
+        sources,
+        transform: this.audioDrive.transformName(decl.id),
+        transformOptions: [
+          { value: 'auto', label: 'Auto' },
+          { value: 'none', label: 'None' },
+          { value: 'gate', label: 'Gate' },
+          { value: 'envelope-sharp', label: 'Envelope · Sharp' },
+          { value: 'envelope-default', label: 'Envelope · Default' },
+          { value: 'envelope-soft', label: 'Envelope · Soft' },
+        ],
+        liveValue: live.value,
+        liveSignal: live.signal,
+      };
+    });
+  }
+
   getExpressionParams(): ExpressionParam[] {
     const row = (key: Lab2ParamKey, label: string): ExpressionParam => ({
       key,
@@ -1070,6 +1112,8 @@ export class LightElementLab2 implements LabExpression {
         step: 1,
         value: this.strobeRate,
       },
+      // ---- 結線（音 × パラメーター）。**触る場所と繋ぐ場所を分けない** ----
+      ...this.bindingParams(),
       // ---- 場の濃さと発光の閾値（Audio のみ）----
       {
         key: 'sustainGamma',
@@ -1223,6 +1267,38 @@ export class LightElementLab2 implements LabExpression {
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    // ---- 結線のつまみ（`bind:<paramId>:<what>`）----
+    if (key.startsWith('bind:')) {
+      const [, paramId, what] = key.split(':');
+      if (!paramId) return;
+      const resolver = this.audioDrive.bindings();
+      const binding = resolver.getBinding(paramId);
+      if (what === 'source') {
+        const next = String(value);
+        this.audioDrive.connect(paramId, next === 'none' ? null : next, binding?.depth ?? 1);
+        return;
+      }
+      if (what === 'depth') {
+        const depth = typeof value === 'number' ? value : Number(value);
+        if (!Number.isFinite(depth)) return;
+        this.audioDrive.connect(
+          paramId,
+          binding?.sourceId ?? null,
+          clamp(depth, -1, 1),
+          binding?.transform ?? undefined,
+        );
+        return;
+      }
+      if (what === 'transform') {
+        this.audioDrive.setTransform(paramId, String(value));
+        return;
+      }
+      // 基準値スライダー。**結線していても生きている。**
+      const base = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(base)) return;
+      resolver.setBase(paramId, base);
+      return;
+    }
     if (key === 'driveMode') {
       const next: DriveMode = value === 'audio' ? 'audio' : 'manual';
       if (next !== this.driveMode) {
