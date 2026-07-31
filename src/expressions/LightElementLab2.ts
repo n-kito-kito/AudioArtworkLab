@@ -19,12 +19,13 @@ import {
   type OpticsDrive,
 } from './lightOpticsMapping';
 import {
-  OPTICS_PARAMS,
   OPTICS_THRESHOLDS,
   OpticsAudioDrive,
   type OpticsDriveLevels,
 } from './opticsAudioDrive';
+import { BindingResolver } from '../engine/binding/resolve';
 import { getSourceShelf, type AudioSourceShelf } from '../engine/binding/sources';
+import { defaultTransformFor, type ParamDecl } from '../engine/binding/types';
 import { loadPrismAtlas, type PrismAtlas, type PrismTile } from './prismAtlas';
 
 /**
@@ -108,6 +109,26 @@ const LAB2 = {
 } as const;
 
 type Lab2ParamKey = keyof typeof LAB2.defaults;
+
+/**
+ * **既存スライダーに音を添えられるもの。**
+ * 行を増やさず、スライダーの隣にセレクトを 1 つ足すだけで繋がる。
+ * `huePhase` だけは特別で、**H の 8 状態機械の入力**（音色）を差し替える
+ * — つまり色は音で「切り替わる」のであって、連続にスライドはしない。
+ */
+const LOOK_PARAMS: readonly ParamDecl[] = [
+  { id: 'huePhase', label: 'Global hue H', min: 0, max: 1, default: 0.62, kind: 'continuous' },
+  { id: 'intensity', label: 'Intensity', min: 0, max: 4, default: 1.6, kind: 'continuous' },
+  {
+    id: 'decorrelation',
+    label: 'Channel decorrelation',
+    min: 0,
+    max: 1,
+    default: 0.25,
+    kind: 'continuous',
+  },
+  { id: 'depthProbe', label: 'Depth', min: 0, max: 1, default: 0, kind: 'continuous' },
+];
 
 /** 分離方向の決め方。 */
 type OffsetMode = 'radial' | 'axis';
@@ -219,6 +240,13 @@ export class LightElementLab2 implements LabExpression {
   private previousElapsed = -1;
   /** 結線に使える内部ソースの棚。engine ごとに 1 つなので解析は二重にならない。 */
   private shelf: AudioSourceShelf | null = null;
+  /**
+   * **見え方のつまみの結線。**
+   * 発光（リグの駆動）はアダプタ側の結線が受け持ち、こちらは
+   * 「既存スライダーに音を添える」ぶん — 色・強さ・非相関・奥行き。
+   * **新しい行は作らず、スライダーの隣にセレクトを 1 つ足すだけ**にしてある。
+   */
+  private readonly lookResolver = new BindingResolver();
 
   private layers: readonly OpticalLayerTraits[] = [];
 
@@ -282,6 +310,12 @@ export class LightElementLab2 implements LabExpression {
     // 内部ソースの棚を結線へ繋ぐ（アダプタ由来の信号と 1 つの棚になる）。
     this.shelf = getSourceShelf(context.audioEngine);
     this.audioDrive.setShelf(this.shelf);
+    this.lookResolver.declare(LOOK_PARAMS);
+    this.lookResolver.setSources(this.shelf.list());
+    this.lookResolver.reset();
+    for (const decl of LOOK_PARAMS) {
+      this.lookResolver.setBase(decl.id, this.params[decl.id as Lab2ParamKey]);
+    }
 
     this.buildMesh();
     this.rebuildRig();
@@ -338,7 +372,7 @@ export class LightElementLab2 implements LabExpression {
       armMask: this.manualArmMask,
       armStrength: this.params.corePulse,
       armSeed: this.params.fragmentSeed,
-      depthProbe: this.params.depthProbe,
+      depthProbe: this.lookValue('depthProbe'),
     };
   }
 
@@ -349,6 +383,17 @@ export class LightElementLab2 implements LabExpression {
    */
   private activeHue(): number {
     return this.driveMode === 'audio' ? this.audioDrive.huePhase() : this.params.huePhase;
+  }
+
+  /**
+   * **見え方のつまみの実効値。** 結線していなければ基準値そのまま
+   * （＝いまと 1 ビットも変わらない）。Audio でソースを選んだときだけ揺れる。
+   */
+  private lookValue(key: Lab2ParamKey): number {
+    if (this.driveMode !== 'audio') return this.params[key];
+    const binding = this.lookResolver.getBinding(key);
+    if (!binding || !binding.sourceId) return this.params[key];
+    return this.lookResolver.valueOf(key);
   }
 
   /**
@@ -849,6 +894,7 @@ export class LightElementLab2 implements LabExpression {
       const spectrum = engine?.getSpectrum?.() ?? null;
       // 棚を先に進める（同じフレームで二重に進むことはない）。
       this.shelf?.update(delta);
+      this.lookResolver.update(delta);
       this.audioDrive.update(audio, spectrum, elapsed, delta);
       this.rebuildRig();
     }
@@ -856,14 +902,14 @@ export class LightElementLab2 implements LabExpression {
 
     const material = this.material;
     if (material) {
-      material.uniforms.uIntensity!.value = this.params.intensity;
+      material.uniforms.uIntensity!.value = this.lookValue('intensity');
       // **チャンネル利得。** Audio では帯域バランスが色調を傾ける（Bass=R / Mid=G / Treble=B）。
       // つまみ 0 で手動のまま、1 で完全に帯域駆動、中間はブレンド。
       const tilt = this.channelTilt();
       (material.uniforms.uChannelGain!.value as THREE.Vector3).set(tilt[0], tilt[1], tilt[2]);
       material.uniforms.uOffset!.value = this.params.channelOffset;
       material.uniforms.uOffsetMode!.value = this.offsetMode === 'radial' ? 0 : 1;
-      material.uniforms.uDecorrelation!.value = this.params.decorrelation;
+      material.uniforms.uDecorrelation!.value = this.lookValue('decorrelation');
       material.uniforms.uHue!.value = this.activeHue();
       material.uniforms.uTint!.value = this.globalTint ? 1 : 0;
     }
@@ -1040,40 +1086,68 @@ export class LightElementLab2 implements LabExpression {
    * ソース選択・深さ・変換を直付けする。動作中の実効値も同じ行で返すので、
    * UI は「基準の周りで揺れている」ことをスライダーの上で見せられる。
    */
-  private bindingParams(): ExpressionParam[] {
-    const resolver = this.audioDrive.bindings();
-    const sources = resolver.listSources().map((source) => ({
+  /**
+   * **発光 (All) 1 行。** パーツごとに分けても判断できないという指摘を受け、
+   * 発光の結線はこの 1 本だけにした。選んだ音がリグ全体の発光を駆動する。
+   */
+  private emissionParam(): ExpressionParam {
+    const emission = this.audioDrive.emission();
+    const sources = (this.shelf?.visible() ?? []).map((source) => ({
       id: source.id,
       label: source.label,
       kind: source.kind,
     }));
-    return OPTICS_PARAMS.map((decl) => {
-      const binding = resolver.getBinding(decl.id);
-      const live = resolver.resolve(decl.id);
-      return {
-        key: `bind:${decl.id}`,
-        label: decl.label,
-        type: 'binding' as const,
-        min: decl.min,
-        max: decl.max,
-        step: 0.01,
-        value: resolver.getBase(decl.id),
-        sourceId: binding?.sourceId ?? null,
-        depth: binding?.depth ?? 1,
+    return {
+      key: 'emission',
+      label: '発光 All',
+      type: 'binding' as const,
+      min: 0,
+      max: 1,
+      step: 0.01,
+      value: this.audioDrive.bindings().getBase('fieldDrive'),
+      sourceId: emission.sourceId,
+      depth: emission.depth,
+      sources,
+      transform: this.audioDrive.transformName('fieldDrive'),
+      transformOptions: [
+        { value: 'auto', label: 'Auto' },
+        { value: 'none', label: 'None' },
+        { value: 'gate', label: 'Gate' },
+        { value: 'envelope-sharp', label: 'Envelope · Sharp' },
+        { value: 'envelope-default', label: 'Envelope · Default' },
+        { value: 'envelope-soft', label: 'Envelope · Soft' },
+      ],
+      liveValue: this.audioDrive.bindings().resolve('fieldDrive').value,
+      liveSignal: this.audioDrive.bindings().resolve('fieldDrive').signal,
+    };
+  }
+
+  /**
+   * 既存スライダーに音を添える。**行は増やさず**、`bind` を持たせるだけ。
+   * UI は未選択なら今までとほぼ同じ見た目で、選んだときだけ depth が現れる。
+   */
+  private withSource(key: Lab2ParamKey, label: string): ExpressionParam {
+    const sources = (this.shelf?.visible() ?? []).map((source) => ({
+      id: source.id,
+      label: source.label,
+      kind: source.kind,
+    }));
+    const isHue = key === 'huePhase';
+    const binding = isHue ? null : this.lookResolver.getBinding(key);
+    const hue = this.audioDrive.hueBinding();
+    return {
+      key,
+      label,
+      ...LAB2.ranges[key],
+      value: this.params[key],
+      bind: {
+        paramId: key,
+        sourceId: isHue ? hue.sourceId : (binding?.sourceId ?? null),
+        depth: isHue ? hue.depth : (binding?.depth ?? 1),
         sources,
-        transform: this.audioDrive.transformName(decl.id),
-        transformOptions: [
-          { value: 'auto', label: 'Auto' },
-          { value: 'none', label: 'None' },
-          { value: 'gate', label: 'Gate' },
-          { value: 'envelope-sharp', label: 'Envelope · Sharp' },
-          { value: 'envelope-default', label: 'Envelope · Default' },
-          { value: 'envelope-soft', label: 'Envelope · Soft' },
-        ],
-        liveValue: live.value,
-        liveSignal: live.signal,
-      };
-    });
+        liveValue: isHue ? this.activeHue() : this.lookValue(key),
+      },
+    };
   }
 
   getExpressionParams(): ExpressionParam[] {
@@ -1112,8 +1186,8 @@ export class LightElementLab2 implements LabExpression {
         step: 1,
         value: this.strobeRate,
       },
-      // ---- 結線（音 × パラメーター）。**触る場所と繋ぐ場所を分けない** ----
-      ...this.bindingParams(),
+      // ---- 発光の結線は 1 本だけ。**触る場所と繋ぐ場所を分けない** ----
+      this.emissionParam(),
       // ---- 場の濃さと発光の閾値（Audio のみ）----
       {
         key: 'sustainGamma',
@@ -1209,7 +1283,7 @@ export class LightElementLab2 implements LabExpression {
         value: String(this.manualArmMask),
       },
       // ---- 音が注ぎ込むもの（Audio では未配線のものだけつまみが効く）----
-      row('huePhase', 'Global hue H'),
+      this.withSource('huePhase', 'Global hue H'),
       row('skeletonLevel', 'Skeleton level'),
       row('corePulse', 'Core pulse'),
       row('fragmentEnergy', 'Fragment energy'),
@@ -1249,8 +1323,8 @@ export class LightElementLab2 implements LabExpression {
         ],
         value: this.offsetMode,
       },
-      row('decorrelation', 'Channel decorrelation'),
-      row('intensity', 'Intensity'),
+      this.withSource('decorrelation', 'Channel decorrelation'),
+      this.withSource('intensity', 'Intensity'),
       {
         key: 'globalTint',
         label: 'Global tint (H)',
@@ -1261,42 +1335,80 @@ export class LightElementLab2 implements LabExpression {
         ],
         value: this.globalTint ? 'on' : 'off',
       },
-      // ---- 計測用 ----
-      row('depthProbe', 'Depth probe (0 = off)'),
+      // ---- 奥行き ----
+      this.withSource('depthProbe', 'Depth'),
     ];
   }
 
   setExpressionParam(key: string, value: number | string): void {
-    // ---- 結線のつまみ（`bind:<paramId>:<what>`）----
-    if (key.startsWith('bind:')) {
-      const [, paramId, what] = key.split(':');
-      if (!paramId) return;
-      const resolver = this.audioDrive.bindings();
-      const binding = resolver.getBinding(paramId);
+    // ---- 発光 (All) の結線 ----
+    if (key.startsWith('emission')) {
+      const what = key.split(':')[1];
+      const current = this.audioDrive.emission();
       if (what === 'source') {
         const next = String(value);
-        this.audioDrive.connect(paramId, next === 'none' ? null : next, binding?.depth ?? 1);
+        this.audioDrive.setEmission(next === 'none' ? null : next, current.depth);
         return;
       }
       if (what === 'depth') {
         const depth = typeof value === 'number' ? value : Number(value);
         if (!Number.isFinite(depth)) return;
-        this.audioDrive.connect(
-          paramId,
-          binding?.sourceId ?? null,
-          clamp(depth, -1, 1),
-          binding?.transform ?? undefined,
-        );
+        this.audioDrive.setEmission(current.sourceId, clamp(depth, -1, 1));
         return;
       }
       if (what === 'transform') {
-        this.audioDrive.setTransform(paramId, String(value));
+        for (const paramId of ['fieldDrive', 'coreStrike', 'fanStrike']) {
+          this.audioDrive.setTransform(paramId, String(value));
+        }
         return;
       }
-      // 基準値スライダー。**結線していても生きている。**
+      // 基準値。3 本まとめて動かす（発光の下限になる）。
       const base = typeof value === 'number' ? value : Number(value);
       if (!Number.isFinite(base)) return;
-      resolver.setBase(paramId, base);
+      for (const paramId of ['fieldDrive', 'coreStrike', 'fanStrike']) {
+        this.audioDrive.bindings().setBase(paramId, base);
+      }
+      return;
+    }
+    // ---- 既存スライダーに添えたソース（`bind:<key>:source|depth`）----
+    if (key.startsWith('bind:')) {
+      const [, paramId, what] = key.split(':');
+      if (!paramId) return;
+      const isHue = paramId === 'huePhase';
+      const binding = isHue ? null : this.lookResolver.getBinding(paramId);
+      const hue = this.audioDrive.hueBinding();
+      if (what === 'source') {
+        const next = String(value);
+        const sourceId = next === 'none' ? null : next;
+        if (isHue) {
+          this.audioDrive.setHueSource(sourceId, hue.depth);
+          return;
+        }
+        const decl = LOOK_PARAMS.find((entry) => entry.id === paramId);
+        const source = this.lookResolver.listSources().find((entry) => entry.id === sourceId);
+        this.lookResolver.bind({
+          paramId,
+          sourceId,
+          depth: binding?.depth ?? 1,
+          transform: decl && source ? defaultTransformFor(source.kind, decl.kind) : null,
+        });
+        return;
+      }
+      if (what === 'depth') {
+        const depth = typeof value === 'number' ? value : Number(value);
+        if (!Number.isFinite(depth)) return;
+        if (isHue) {
+          this.audioDrive.setHueSource(hue.sourceId, clamp(depth, -1, 1));
+          return;
+        }
+        this.lookResolver.bind({
+          paramId,
+          sourceId: binding?.sourceId ?? null,
+          depth: clamp(depth, -1, 1),
+          transform: binding?.transform ?? null,
+        });
+        return;
+      }
       return;
     }
     if (key === 'driveMode') {
@@ -1410,6 +1522,8 @@ export class LightElementLab2 implements LabExpression {
     if (!(key in this.params)) return;
     const range = LAB2.ranges[key as Lab2ParamKey];
     this.params[key as Lab2ParamKey] = clamp(numeric, range.min, range.max);
+    // 結線している見え方のつまみは、基準値が揺れの中心になる。
+    this.lookResolver.setBase(key, this.params[key as Lab2ParamKey]);
     // 光学系そのものを組み直すつまみ（色とチャンネルは uniform で足りる）。
     if (
       key === 'skeletonLevel' ||

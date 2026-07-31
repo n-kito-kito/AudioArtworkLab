@@ -567,6 +567,12 @@ export class OpticsAudioDrive {
    * **立ち上がりでだけ位相を戻す**ので、連続したソースへ繋ぎ替えても
    * 「点きっぱなし」にならず、ティックの上で明滅する。
    */
+  /** 「発光 (All)」で選んでいるソース（`null` は内部の既定ドライブ）。 */
+  private emissionSource: string | null = null;
+  private emissionDepth = 1;
+  /** 色の駆動元（`null` は内部の既定＝音色）。 */
+  private hueSource: string | null = null;
+  private hueDepth = 1;
   private coreWasArmed = false;
   private fanWasArmed = false;
   /** 立ち上がり直後の 1 ティックは歳を取らせない印。 */
@@ -625,6 +631,54 @@ export class OpticsAudioDrive {
   /** 結線の読み書き（UI 用）。 */
   bindings(): BindingResolver {
     return this.resolver;
+  }
+
+  /**
+   * **発光をまとめて 1 つのソースへ繋ぐ。**
+   *
+   * パーツごとに分けても判断できないという指摘を受け、UI は「発光 (All)」1 本にした。
+   * 選んだ音が**リグ全体の発光**（場・コア・扇）を駆動する。
+   * 下流の時間規律（場の時定数・打撃の閾値と 1 ティック保持・扇の寿命・ストロボ）は
+   * すべて従来どおり表現側に残るので、どのソースでも規律は壊れない。
+   *
+   * `null` で**内部の既定ドライブへ戻る**（＝現行挙動の再現）。
+   */
+  setEmission(sourceId: string | null, depth: number): void {
+    this.emissionSource = sourceId;
+    this.emissionDepth = depth;
+    if (sourceId === null) {
+      for (const binding of DEFAULT_BINDINGS) {
+        if (binding.paramId === 'hueTimbre') continue;
+        this.resolver.bind(binding);
+      }
+      return;
+    }
+    for (const paramId of ['fieldDrive', 'coreStrike', 'fanStrike']) {
+      this.connect(paramId, sourceId, depth);
+    }
+  }
+
+  /** いま発光に繋いでいるソース（`null` は内部の既定ドライブ）。 */
+  emission(): { readonly sourceId: string | null; readonly depth: number } {
+    return { sourceId: this.emissionSource, depth: this.emissionDepth };
+  }
+
+  /**
+   * **色（H）の駆動元。** 状態機械の入力（音色）を差し替えるだけなので、
+   * H は**8 状態の離散切替のまま**である（連続ドリフトにはならない）。
+   */
+  setHueSource(sourceId: string | null, depth: number): void {
+    this.hueSource = sourceId;
+    this.hueDepth = depth;
+    if (sourceId === null) {
+      this.resolver.bind({ paramId: 'hueTimbre', sourceId: 'optics-timbre', depth: 1, transform: null });
+      return;
+    }
+    this.connect('hueTimbre', sourceId, depth);
+  }
+
+  hueBinding(): { readonly sourceId: string | null; readonly depth: number } {
+    return { sourceId: this.hueSource, depth: this.hueDepth };
   }
 
   /** 変換の語（UI の表示・切替に使う）。`auto` は種類から自動で決める。 */
@@ -787,6 +841,11 @@ export class OpticsAudioDrive {
     this.opticsField = 0;
     this.opticsStrike = 0;
     this.opticsTimbre = 0;
+    this.emissionSource = null;
+    this.emissionDepth = 1;
+    this.hueSource = null;
+    this.hueDepth = 1;
+    for (const binding of DEFAULT_BINDINGS) this.resolver.bind(binding);
     this.coreWasArmed = false;
     this.fanWasArmed = false;
     this.coreFresh = false;

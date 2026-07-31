@@ -27,6 +27,21 @@ export interface ExpressionParamBase {
   readonly label: string;
 }
 
+/**
+ * **スライダーに添える音のソース。**
+ *
+ * 行を増やさずに「このつまみを音へ繋ぐ」ためのもの。未選択なら見た目はほぼ変わらず、
+ * 選んだときだけ深さ（−1〜1）が現れる。解決式と変換の自動挿入は結線の機構をそのまま使う。
+ */
+export interface ExpressionParamSource {
+  readonly paramId: string;
+  readonly sourceId: string | null;
+  readonly depth: number;
+  readonly sources: readonly { readonly id: string; readonly label: string; readonly kind: string }[];
+  /** 動作中の実効値。基準の周りで揺れているのを見せる。 */
+  readonly liveValue: number;
+}
+
 /** 連続値のつまみ。省略時の既定であり、UI はスライダーを出す。 */
 export interface ExpressionNumberParam extends ExpressionParamBase {
   readonly type?: 'number';
@@ -34,6 +49,8 @@ export interface ExpressionNumberParam extends ExpressionParamBase {
   readonly max: number;
   readonly step: number;
   readonly value: number;
+  /** 音へ繋げるつまみだけが持つ。持たないものは今までどおりのスライダー。 */
+  readonly bind?: ExpressionParamSource;
 }
 
 export interface ExpressionSelectOption {

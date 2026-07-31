@@ -201,6 +201,8 @@ export class AudioInspector {
           composition.setExpressionParam(parameter.key, next),
         ),
       );
+      // **既存スライダーに音を添える。** 未選択なら見た目はほぼ変わらない。
+      if (parameter.bind) this.coreBlock.append(this.sourceTail(parameter.bind, composition));
     }
     // 音を読まない表現には Core の読み出しも音源ボタンも意味がないので出さない。
     if (element2) return;
@@ -467,7 +469,7 @@ export class AudioInspector {
     input.setAttribute('aria-label', `${parameter.label} base`);
     input.addEventListener('input', () => {
       baseOut.textContent = Number(input.value).toFixed(2);
-      composition.setExpressionParam?.(`bind:${parameter.key.slice(5)}`, Number(input.value));
+      composition.setExpressionParam?.(parameter.key, Number(input.value));
     });
     track.append(live, input);
     baseRow.append(baseName, baseOut, track);
@@ -475,7 +477,7 @@ export class AudioInspector {
     this.bindingLive.set(parameter.key, { bar: live, output: baseOut, parameter });
 
     // ---- ソース ----
-    const paramId = parameter.key.slice(5);
+    const paramId = parameter.key;
     block.append(
       this.select(
         'Source',
@@ -509,6 +511,43 @@ export class AudioInspector {
       }),
     );
     return block;
+  }
+
+  /**
+   * スライダーに添えるソース選択。**行は増やさない** — セレクトを 1 つ足すだけで、
+   * ソースを選んだときだけ深さの小さなスライダーが現れる。
+   */
+  private sourceTail(
+    bind: NonNullable<Extract<ExpressionParam, { type?: 'number' }>['bind']>,
+    composition: LabExpression,
+  ): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'param-source';
+    wrap.append(
+      this.select(
+        'Source',
+        [
+          { value: 'none', label: 'None' },
+          ...bind.sources.map((source) => ({
+            value: source.id,
+            label: `${source.label} · ${source.kind}`,
+          })),
+        ],
+        bind.sourceId ?? 'none',
+        (next) => {
+          composition.setExpressionParam?.(`bind:${bind.paramId}:source`, next);
+          this.refresh();
+        },
+      ),
+    );
+    if (bind.sourceId !== null) {
+      wrap.append(
+        this.range('Depth', bind.depth, -1, 1, 0.01, (next) =>
+          composition.setExpressionParam?.(`bind:${bind.paramId}:depth`, next),
+        ),
+      );
+    }
+    return wrap;
   }
 
   private range(
