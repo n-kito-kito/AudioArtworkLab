@@ -1,4 +1,5 @@
 import type { FileAudioEngine } from '../audio/FileAudioEngine';
+import { getSourceShelf, type AudioSourceShelf } from '../engine/binding/sources';
 import { AudioFeatureView } from './AudioFeatureView';
 
 /**
@@ -20,6 +21,14 @@ export class AudioLabPage {
   private readonly clock = document.createElement('output');
   private readonly engine: FileAudioEngine;
   private animationId: number | null = null;
+  /**
+   * **結線に使える内部ソースの棚。** ここでは表示するだけ。
+   * 棚は engine ごとに 1 つなので、表現が同時に読んでも解析は二重にならない。
+   */
+  private readonly shelf: AudioSourceShelf;
+  private readonly sourceBars = new Map<string, HTMLElement>();
+  private readonly sourceValues = new Map<string, HTMLElement>();
+  private previousTime = -1;
 
   constructor(host: HTMLElement, engine: FileAudioEngine) {
     this.engine = engine;
@@ -37,7 +46,8 @@ export class AudioLabPage {
     this.clock.textContent = '0:00';
     heading.append(title, note, this.clock);
 
-    this.root.append(heading, this.view.root);
+    this.shelf = getSourceShelf(engine);
+    this.root.append(heading, this.buildSources(), this.view.root);
     host.append(this.root);
     this.animationId = requestAnimationFrame(this.update);
   }
@@ -53,7 +63,46 @@ export class AudioLabPage {
     this.root.insertBefore(element, this.view.root);
   }
 
+  /** 結線できるソースの棚。**特徴の表示とは別枠**で「繋げるもの」だけを並べる。 */
+  private buildSources(): HTMLElement {
+    const group = document.createElement('div');
+    group.className = 'audio-features audio-features--large audio-lab__sources';
+    const block = document.createElement('div');
+    block.className = 'audio-features__bands';
+    const heading = document.createElement('h3');
+    heading.className = 'control-subheading';
+    heading.textContent = 'Binding sources (internal shelf)';
+    block.append(heading);
+    for (const source of this.shelf.list()) {
+      const row = document.createElement('div');
+      row.className = 'audio-features__row';
+      const name = document.createElement('span');
+      name.textContent = `${source.label} · ${source.kind}`;
+      const bar = document.createElement('i');
+      const value = document.createElement('output');
+      value.textContent = '0.00';
+      row.append(name, bar, value);
+      block.append(row);
+      this.sourceBars.set(source.id, bar);
+      this.sourceValues.set(source.id, value);
+    }
+    group.append(block);
+    return group;
+  }
+
   private readonly update = (): void => {
+    // 表現が回っていないページなので、ここが棚を進める。
+    // 同じフレームで表現が先に進めていれば、棚の側が二重更新を弾く。
+    const now = performance.now() / 1000;
+    const delta = this.previousTime < 0 ? 0 : Math.min(Math.max(now - this.previousTime, 0), 0.25);
+    this.previousTime = now;
+    this.shelf.update(delta);
+    for (const source of this.shelf.list()) {
+      const amount = Math.min(Math.max(source.value(), 0), 1);
+      this.sourceBars.get(source.id)?.style.setProperty('--fill', `${(amount * 100).toFixed(1)}%`);
+      const value = this.sourceValues.get(source.id);
+      if (value) value.textContent = amount.toFixed(2);
+    }
     this.view.update(this.engine.getFeatures());
     const audio = this.engine.currentTime;
     const minutes = Math.floor(audio / 60);
