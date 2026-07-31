@@ -363,6 +363,15 @@ export const UNIFIED = {
    * 横へ伸ばしても明るさの総量が跳ねない（1.45 × 0.78 = 1.13）。
    */
   coreShapeAxis: { wide: 1.45, tall: 0.78 },
+  /**
+   * **`Core bloom` 軸の実寸。**
+   *
+   * Spatial / Reactive は `UnrealBloomPass` と露出を自前で持っていて、
+   * **核がテクスチャ板なので面ごと滲む**。Unified にはそれが無かった。
+   * 閾値はここでも 0.22 に置く — 画面の平均輝度はこれよりずっと低いので、
+   * **明るい核だけ**が滲む（膜や靄は素通し）。
+   */
+  bloom: { threshold: 0.22, strengthAtOne: 0.92, radius: 0.48, exposureAtOne: 0.95 },
   /** 場の利得。音量の持続をそのまま輝度にすると暗すぎるので 1 本だけ通す。 */
   fieldGain: 1.6,
   /**

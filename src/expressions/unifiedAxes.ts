@@ -159,6 +159,17 @@ export interface UnifiedAxes {
    * 芯の白い点（spark）はそのまま残るので、面の中に白熱した芯がある形になる。
    */
   coreShape: number;
+  /**
+   * **核のブルームと露出。**
+   *
+   * 0 = 現状（内部ブルーム無し・トーンマップ無し）⇄ 1 = Spatial 相当
+   * （閾値 0.22 を超えた画素だけが滲み、最後に `1 - exp(-x·0.95)` を掛ける）。
+   *
+   * Unified にはこれまで**ブルームも露出も無かった**。核が「白い点」から
+   * 「光っている面」へ変わるのは、実はここがいちばん効く。
+   * 軸 0 では滲みの寄与も掛け合わせも 0 なので、現状と厳密に一致する。
+   */
+  coreBloom: number;
   /** 破片の量。 */
   fragments: number;
   /**
@@ -220,6 +231,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'silhouette', label: 'Silhouette', group: '構成', low: '素の縁', high: '多角形で削る' },
   { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める' },
   { id: 'coreShape', label: 'Core shape', group: '構成', low: '等方の点', high: '横長の平らな面' },
+  { id: 'coreBloom', label: 'Core bloom', group: '光学', low: '無し', high: 'Spatial 相当' },
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
@@ -260,6 +272,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   silhouette: 0.35,
   coreSize: 0.4,
   coreShape: 0,
+  coreBloom: 0,
   fragments: 0.5,
   fragmentCharacter: 0.4,
   hazeFloor: 0.45,
@@ -304,6 +317,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     silhouette: 0.7,
     coreSize: 0.4,
     coreShape: 0,
+    coreBloom: 0,
     fragments: 0.6,
     fragmentCharacter: 0.85,
     hazeFloor: 0.3,
@@ -341,6 +355,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     silhouette: 0.5,
     coreSize: 0.4,
     coreShape: 0,
+    coreBloom: 0,
     fragments: 0.6,
     fragmentCharacter: 0.7,
     hazeFloor: 0.5,
@@ -377,6 +392,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     silhouette: 0.08,
     coreSize: 0.4,
     coreShape: 0,
+    coreBloom: 0,
     fragments: 0.55,
     fragmentCharacter: 0.15,
     hazeFloor: 0.4,

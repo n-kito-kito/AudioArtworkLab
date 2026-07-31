@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { Effect } from '../effects/Effect';
 import { EffectPipeline } from '../effects/EffectPipeline';
 import { THEMES, type Theme } from '../engine/themes';
@@ -268,6 +271,17 @@ export class LightUnified implements LabExpression {
   private atlas: PrismAtlas | null = null;
   private maskAtlas: PolygonAtlas | null = null;
   private pipeline: EffectPipeline | null = null;
+  /**
+   * **内部ブルームと露出（`Core bloom` 軸）。**
+   * 表現の中で完結しており、外側の Effect チェーンは「ブルーム済みの板」を入口にする。
+   * 他の表現には一切触れない。
+   */
+  private bloomComposer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
+  private displayScene: THREE.Scene | null = null;
+  private displayCamera: THREE.OrthographicCamera | null = null;
+  private displayGeometry: THREE.PlaneGeometry | null = null;
+  private displayMaterial: THREE.ShaderMaterial | null = null;
   private disposed = false;
 
   // ---- インスタンス属性 ----
@@ -341,7 +355,71 @@ export class LightUnified implements LabExpression {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
     if (this.mesh) this.scene.add(this.mesh);
-    this.pipeline = new EffectPipeline(context.renderer, this.scene, this.camera, this.effects);
+
+    // ---- 内部ブルーム（Spatial / Reactive と同じ構成）----
+    const size = new THREE.Vector2();
+    context.renderer.getSize(size);
+    this.bloomComposer = new EffectComposer(context.renderer);
+    // 画面には出さない。結果は readBuffer に残し、表示用の板が読み取る。
+    this.bloomComposer.renderToScreen = false;
+    this.bloomComposer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(Math.max(size.x, 1), Math.max(size.y, 1)),
+      0,
+      UNIFIED.bloom.radius,
+      UNIFIED.bloom.threshold,
+    );
+    // 軸 0 では 5 段のぼかしを 1 枚も走らせない（寄与が 0 なので費用だけが残る）。
+    this.bloomPass.enabled = false;
+    this.bloomComposer.addPass(this.bloomPass);
+
+    // ---- 表示用の板（露出だけを掛ける）----
+    this.displayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    this.displayCamera.position.z = 1;
+    this.displayMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        tDiffuse: { value: null },
+        uExposure: { value: UNIFIED.bloom.exposureAtOne },
+        // **軸 0 では素通し。** 混合係数なので、途中の値も実在する。
+        uTone: { value: 0 },
+      },
+      depthTest: false,
+      depthWrite: false,
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D tDiffuse;
+        uniform float uExposure;
+        uniform float uTone;
+        varying vec2 vUv;
+
+        void main() {
+          vec3 colour = max(texture2D(tDiffuse, vUv).rgb, 0.0);
+          // 露出つきの指数トーンマップ。x = 0 なら必ず 0 なので、
+          // 無音の黒が浮くことはない。軸 0 では素通しへ連続に戻る。
+          vec3 mapped = vec3(1.0) - exp(-colour * uExposure);
+          gl_FragColor = vec4(mix(colour, mapped, clamp(uTone, 0.0, 1.0)), 1.0);
+        }
+      `,
+    });
+    this.displayGeometry = new THREE.PlaneGeometry(2, 2);
+    this.displayScene = new THREE.Scene();
+    this.displayScene.background = new THREE.Color(0x000000);
+    this.displayScene.add(new THREE.Mesh(this.displayGeometry, this.displayMaterial));
+
+    // Effect チェーンは「ブルーム済みの板」を入口にする。外側の構成は変えない。
+    this.pipeline = new EffectPipeline(
+      context.renderer,
+      this.displayScene,
+      this.displayCamera,
+      this.effects,
+    );
 
     void loadPrismAtlas(LIMITS.atlas).then((atlas) => {
       if (!atlas) return;
@@ -1181,10 +1259,27 @@ export class LightUnified implements LabExpression {
       const gain = channelBalanceGain(look.channelBalance);
       (material.uniforms.uChannelGain!.value as THREE.Vector3).set(gain[0], gain[1], gain[2]);
     }
+    // **内部ブルームと露出。** どちらも軸そのものが混合係数なので、0 で素通しへ戻る。
+    const bloom = clamp(this.axes.coreBloom, 0, 1);
+    if (this.bloomPass) {
+      this.bloomPass.strength = bloom * UNIFIED.bloom.strengthAtOne;
+      this.bloomPass.radius = UNIFIED.bloom.radius;
+      this.bloomPass.threshold = UNIFIED.bloom.threshold;
+      this.bloomPass.enabled = bloom > 0;
+    }
+    if (this.displayMaterial) {
+      this.displayMaterial.uniforms.uTone!.value = bloom;
+      this.displayMaterial.uniforms.uExposure!.value = UNIFIED.bloom.exposureAtOne;
+    }
     this.pipeline?.update(audio, elapsed);
   }
 
   render(): void {
+    if (this.bloomComposer && this.displayMaterial) {
+      this.bloomComposer.render();
+      // 合成器は毎フレーム読み書きバッファを入れ替えるので、都度つなぎ直す。
+      this.displayMaterial.uniforms.tDiffuse!.value = this.bloomComposer.readBuffer.texture;
+    }
     this.pipeline?.render();
   }
 
@@ -1194,6 +1289,10 @@ export class LightUnified implements LabExpression {
       this.camera.aspect = ratio;
       this.camera.updateProjectionMatrix();
     }
+    const w = Math.max(width, 1);
+    const h = Math.max(height, 1);
+    this.bloomComposer?.setSize(w, h);
+    this.bloomPass?.setSize(w, h);
     this.pipeline?.resize(width, height);
   }
 
@@ -1500,6 +1599,10 @@ export class LightUnified implements LabExpression {
   dispose(): void {
     this.disposed = true;
     this.pipeline?.dispose();
+    this.bloomPass?.dispose();
+    this.bloomComposer?.dispose();
+    this.displayGeometry?.dispose();
+    this.displayMaterial?.dispose();
     this.geometry?.dispose();
     this.material?.dispose();
     this.placeholder?.dispose();
@@ -1509,6 +1612,12 @@ export class LightUnified implements LabExpression {
     this.layers = [];
     this.fragmentShapes.clear();
     this.pipeline = null;
+    this.bloomPass = null;
+    this.bloomComposer = null;
+    this.displayScene = null;
+    this.displayCamera = null;
+    this.displayGeometry = null;
+    this.displayMaterial = null;
     this.geometry = null;
     this.material = null;
     this.placeholder = null;
