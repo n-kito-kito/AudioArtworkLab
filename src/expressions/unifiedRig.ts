@@ -132,11 +132,24 @@ export const UNIFIED = {
   nonCoreCeiling: 0.3,
   hazeCeiling: 0.12,
   membraneCeiling: 0.22,
+  /**
+   * **膜の天井（`membraneScale` が 1 のとき）。**
+   * 画面を越える大きさの膜は、天井が低いままだと「薄い灰色の板」にしかならない。
+   * それでも**白へは届かせない** — 白の予算は核だけのものなので、
+   * 1 枚では飽和しない高さに置き、白は層が重なった場所でだけ生まれるようにする。
+   */
+  membraneCeilingWide: 0.62,
   beamCeiling: 0.62,
   /** 要素の枚数（軸が量を決めるので上限だけ持つ）。 */
   membraneCount: 4,
   fragmentCount: 16,
   beamCount: 4,
+  /**
+   * **ワールド固定側の膜の半径**（ワールド単位）。中間の奥行きで画面をほぼ埋める。
+   * 可視範囲で割らないので、手前に置かれた膜は画面を越え、奥のものは小さく写る
+   * ＝ 遠近が相殺されない（Spatial の `macroWorldHalfSize` と同じ流儀）。
+   */
+  membraneWorldHalf: 3.4,
   /**
    * **種別ごとに必ず確保する枠。**
    *
@@ -424,6 +437,28 @@ const buildHaze = (
 };
 
 /**
+ * **膜の半径。** `membraneScale` が 0 なら可視範囲から逆算、1 ならワールド固定。
+ *
+ * 可視範囲で割ると、**奥の膜も手前の膜も画面の同じ割合を占める** ＝ 遠近が相殺され、
+ * 板の集合が 1 枚の平面に見えてしまう。ワールド固定側では手前は画面を越え、
+ * 奥は小さく写るので、同じ枚数でも空間の層として読める。
+ * 両端は連続に混ざるので、途中は「少しだけ遠近が生き始めた膜」になる。
+ */
+const membraneHalf = (
+  axes: UnifiedAxes,
+  extent: { readonly w: number; readonly h: number },
+  wide: number,
+  share: number,
+): { readonly w: number; readonly h: number } => {
+  const scale = clamp01(axes.membraneScale);
+  const world = UNIFIED.membraneWorldHalf;
+  return {
+    w: mix(extent.w, world, scale) * wide * mix(0.5, 1.05, share),
+    h: mix(extent.h * mix(0.28, 0.7, share), world * mix(0.4, 0.95, share), scale),
+  };
+};
+
+/**
  * **膜。** Sheet・カーテン・マクロ膜をまとめた語。
  * `membraneBeam` が 0 に近いほど枚数と厚みが増える（膜が優勢）。
  */
@@ -438,6 +473,7 @@ const buildMembranes = (
   const share = 1 - clamp01(axes.membraneBeam);
   const wanted = mix(1, UNIFIED.membraneCount, share);
   const count = Math.max(Math.ceil(wanted), 1);
+  const scale = clamp01(axes.membraneScale);
   const out: UnifiedLayer[] = [];
   const seed = Math.round(drive.seed);
   for (let index = 0; index < count; index++) {
@@ -449,10 +485,11 @@ const buildMembranes = (
     const tilt = tiltOf(axes, seed + 613, index);
     const family = hash01(seed + 613, index * 11 + 5);
     const wide = 0.5 + hash01(seed + 613, index * 11 + 6) * 0.7;
+    const size = membraneHalf(axes, e, wide, share);
     out.push({
       kind: 'membrane',
       position: [(place.nx + d.x) * e.w * 0.8, (place.ny + d.y) * e.h * 0.6, z],
-      half: [e.w * wide * mix(0.5, 1.05, share), e.h * mix(0.28, 0.7, share)],
+      half: [size.w, size.h],
       spin: (hash01(seed + 613, index * 11 + 7) - 0.5) * 1.4,
       tiltX: tilt.x,
       tiltY: tilt.y,
@@ -461,6 +498,8 @@ const buildMembranes = (
       gradientForm: 2,
       intensity:
         (0.1 + 0.13 * share) *
+        // ワールド固定側では 1 枚が濃くなる（天井も同じ 1 本で上がる）。
+        mix(1, 2.1, scale) *
         level *
         depthDim(z) *
         blinkOf(axes, drive, 'membrane', index) *
@@ -469,7 +508,8 @@ const buildMembranes = (
       shape: [
         Math.floor(family * 3),
         3 + hash01(seed + 613, index * 11 + 8) * 8,
-        0.24 + hash01(seed + 613, index * 11 + 9) * 0.26,
+        // 帯の厚みも軸に連動。大きい板を細い帯で切ると線にしか見えない。
+        mix(0.24, 0.5, scale) + hash01(seed + 613, index * 11 + 9) * mix(0.26, 0.5, scale),
         (hash01(seed + 613, index * 11 + 10) - 0.5) * 0.9,
       ],
       edge: clamp01(axes.blur),
@@ -477,7 +517,7 @@ const buildMembranes = (
       pad: padOf(axes),
       character: 0,
       whiteAllowed: false,
-      ceiling: UNIFIED.membraneCeiling,
+      ceiling: mix(UNIFIED.membraneCeiling, UNIFIED.membraneCeilingWide, scale),
       channel: [1.3, 1.5, 0.045, 0.28],
     });
   }

@@ -83,6 +83,16 @@ export interface UnifiedAxes {
   // ---- 構成 ----
   /** 0 = 膜が優勢 ⇄ 1 = 光条が優勢。性格の軸。 */
   membraneBeam: number;
+  /**
+   * **膜の大きさの決め方。**
+   *
+   * 0 = その奥行きの可視範囲から逆算（画面に対して常に同じ割合を占める）。
+   * 1 = ワールド固定（手前は大きく・奥は小さく写り、画面を越えて広がる）。
+   *
+   * **可視範囲で割ると遠近が相殺され、板の集合が 1 枚の平面に見える。**
+   * 空間に散る見え方の本体はここで、明るさの天井と帯の厚みも同じ 1 本で広がる。
+   */
+  membraneScale: number;
   /** 破片の量。 */
   fragments: number;
   /**
@@ -130,6 +140,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'dispersion', label: 'Dispersion', group: '色', low: '重なる', high: 'ずれる' },
   { id: 'channelBalance', label: 'Channel balance', group: '色', low: 'R 優勢', high: 'B 優勢' },
   { id: 'membraneBeam', label: 'Membrane–Beam', group: '構成', low: '膜', high: '光条' },
+  { id: 'membraneScale', label: 'Membrane scale', group: '構成', low: '画面基準', high: 'ワールド固定' },
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
@@ -161,6 +172,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   dispersion: 0.35,
   channelBalance: 0.5,
   membraneBeam: 0.5,
+  membraneScale: 0.45,
   fragments: 0.5,
   fragmentCharacter: 0.4,
   hazeFloor: 0.45,
@@ -195,6 +207,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     dispersion: 0.4,
     channelBalance: 0.42,
     membraneBeam: 0.55,
+    membraneScale: 0.9,
     fragments: 0.6,
     fragmentCharacter: 0.85,
     hazeFloor: 0.35,
@@ -222,6 +235,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     dispersion: 0.5,
     channelBalance: 0.62,
     membraneBeam: 0.15,
+    membraneScale: 0.6,
     fragments: 0.6,
     fragmentCharacter: 0.7,
     hazeFloor: 0.5,
@@ -249,6 +263,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     dispersion: 0.3,
     channelBalance: 0.5,
     membraneBeam: 0.5,
+    membraneScale: 0.1,
     fragments: 0.55,
     fragmentCharacter: 0.15,
     hazeFloor: 0.4,
