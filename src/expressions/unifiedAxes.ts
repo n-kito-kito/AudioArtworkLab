@@ -74,6 +74,11 @@ export interface UnifiedAxes {
   hueStickiness: number;
   /** RGB のオフセットと非相関の量。 */
   dispersion: number;
+  /**
+   * **チャンネルの偏り 1 本。** 0 = R 優勢 / 0.5 = G 優勢 / 1 = B 優勢の**非循環**な経路。
+   * 利得の最大は常に 1 なので、**白の予算は動かない**（`channelBalance.ts`）。
+   */
+  channelBalance: number;
 
   // ---- 構成 ----
   /** 0 = 膜が優勢 ⇄ 1 = 光条が優勢。性格の軸。 */
@@ -110,6 +115,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'hueCoherence', label: 'Hue coherence', group: '色', low: '要素ごと', high: '全体 1 色' },
   { id: 'hueStickiness', label: 'Hue stickiness', group: '色', low: '滑らか', high: '離散・保持' },
   { id: 'dispersion', label: 'Dispersion', group: '色', low: '重なる', high: 'ずれる' },
+  { id: 'channelBalance', label: 'Channel balance', group: '色', low: 'R 優勢', high: 'B 優勢' },
   { id: 'membraneBeam', label: 'Membrane–Beam', group: '構成', low: '膜', high: '光条' },
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
@@ -137,6 +143,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   hueCoherence: 0.6,
   hueStickiness: 0.5,
   dispersion: 0.35,
+  channelBalance: 0.5,
   membraneBeam: 0.5,
   fragments: 0.5,
   hazeFloor: 0.45,
@@ -167,6 +174,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     hueCoherence: 0.2,
     hueStickiness: 0.2,
     dispersion: 0.4,
+    channelBalance: 0.42,
     membraneBeam: 0.55,
     fragments: 0.45,
     hazeFloor: 0.35,
@@ -188,6 +196,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     hueCoherence: 0.45,
     hueStickiness: 0.3,
     dispersion: 0.5,
+    channelBalance: 0.62,
     membraneBeam: 0.15,
     fragments: 0.5,
     hazeFloor: 0.5,
@@ -209,6 +218,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     hueCoherence: 1,
     hueStickiness: 1,
     dispersion: 0.3,
+    channelBalance: 0.5,
     membraneBeam: 0.5,
     fragments: 0.55,
     hazeFloor: 0.4,

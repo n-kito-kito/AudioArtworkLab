@@ -23,6 +23,7 @@ import {
   OpticsAudioDrive,
   type OpticsDriveLevels,
 } from './opticsAudioDrive';
+import { channelBalanceGain } from './channelBalance';
 import { BindingResolver } from '../engine/binding/resolve';
 import { getSourceShelf, type AudioSourceShelf } from '../engine/binding/sources';
 import { defaultTransformFor, type ParamDecl } from '../engine/binding/types';
@@ -84,9 +85,13 @@ const LAB2 = {
     corePulse: 1,
     fragmentEnergy: 1,
     fragmentSeed: 7,
-    redGain: 1,
-    greenGain: 1,
-    blueGain: 1,
+    /**
+     * **チャンネルの偏り 1 本**（旧 R / G / B の 3 本を畳んだもの)。
+     * 0 = R 優勢 / 0.5 = G 優勢 / 1 = B 優勢の非循環な経路。
+     * 既定は経路の中央で、利得は (0.82, 1, 0.82)。**最大は常に 1** なので
+     * 白の予算は動かない（詳細は `channelBalance.ts`）。
+     */
+    channelBalance: 0.5,
     channelOffset: 0.03,
     decorrelation: 0.25,
     intensity: 1.6,
@@ -98,9 +103,7 @@ const LAB2 = {
     corePulse: { min: 0, max: 1, step: 0.01 },
     fragmentEnergy: { min: 0, max: 1, step: 0.01 },
     fragmentSeed: { min: 0, max: 64, step: 1 },
-    redGain: { min: 0, max: 1, step: 0.01 },
-    greenGain: { min: 0, max: 1, step: 0.01 },
-    blueGain: { min: 0, max: 1, step: 0.01 },
+    channelBalance: { min: 0, max: 1, step: 0.01 },
     channelOffset: { min: 0, max: 0.5, step: 0.002 },
     decorrelation: { min: 0, max: 1, step: 0.01 },
     intensity: { min: 0, max: 4, step: 0.05 },
@@ -398,16 +401,12 @@ export class LightElementLab2 implements LabExpression {
 
   /**
    * **いま効いているチャンネル利得。**
-   * Manual は手動の R/G/B つまみ、Audio は帯域バランスとのブレンド。
+   * Manual は 1 本の Channel balance、Audio は帯域バランスとのブレンド（乗算）。
    * 帯域が均等なら利得は (1, 1, 1) ＝ 無彩なので、**チルトが無いときは従来と同じ**。
    * 利得は必ず 1 以下なので、白の予算（コアだけが白へ届く）は動かない。
    */
   private channelTilt(): readonly [number, number, number] {
-    const manual: readonly [number, number, number] = [
-      this.params.redGain,
-      this.params.greenGain,
-      this.params.blueGain,
-    ];
+    const manual = channelBalanceGain(this.params.channelBalance);
     if (this.driveMode !== 'audio' || this.channelDrive <= 0) return manual;
     const driven = this.audioDrive.channelGain();
     const t = this.channelDrive;
@@ -1309,9 +1308,7 @@ export class LightElementLab2 implements LabExpression {
         value: this.hazeVisible ? 'on' : 'off',
       },
       // ---- チャンネル構造（色の作り方そのもの）----
-      row('redGain', 'Red'),
-      row('greenGain', 'Green'),
-      row('blueGain', 'Blue'),
+      row('channelBalance', 'Channel balance (R ⇄ G ⇄ B)'),
       row('channelOffset', 'Channel offset'),
       {
         key: 'offsetMode',

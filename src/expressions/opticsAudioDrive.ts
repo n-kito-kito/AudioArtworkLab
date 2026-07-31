@@ -452,6 +452,17 @@ export const hueOfState = (state: number): number => {
   return (DRIVE.hueBase + (index * DRIVE.hueStride) / DRIVE.hueStates) % 1;
 };
 
+/**
+ * **連続版の H。** 状態番号を丸めずに同じ式へ通したもの。
+ * 離散の 8 状態と**同じ道**の上を滑らかに動くので、統合表現の `Hue stickiness` は
+ * この 2 つを混ぜるだけで「滑らかな追従 ⇄ 離散 + 長い保持」を連続に行き来できる。
+ * 既存の表現はこれを読まない（`hueOfState` の値は 1 ビットも変わらない）。
+ */
+export const hueOfPhase = (phase: number): number => {
+  const t = ((phase % 1) + 1) % 1;
+  return (DRIVE.hueBase + t * DRIVE.hueStride) % 1;
+};
+
 const smooth = (current: number, target: number, deltaSeconds: number, tau: number): number => {
   if (tau <= 0) return target;
   const alpha = 1 - Math.exp(-Math.max(deltaSeconds, 0) / tau);

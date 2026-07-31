@@ -6,7 +6,8 @@ import { getSourceShelf, type AudioSourceShelf } from '../engine/binding/sources
 import type { CompositionContext, DesignLayerCanvases } from '../compositions/Composition';
 import type { ExpressionParam, LabExpression } from './Expression';
 import type { ExpressionId } from './catalog';
-import { OpticsAudioDrive } from './opticsAudioDrive';
+import { OpticsAudioDrive, hueOfPhase } from './opticsAudioDrive';
+import { channelBalanceGain } from './channelBalance';
 import type { FragmentSpawn } from './lightOpticsMapping';
 import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
 import {
@@ -51,6 +52,9 @@ const LIMITS = {
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
+
+/** `Hue stickiness` が伸ばす時間（秒）。 */
+const HUE = { confirmMin: 0.2, confirmMax: 1.8, holdMin: 1, holdMax: 10 } as const;
 
 /** 散らばりのシード。**固定値**（同じ音なら必ず同じ絵になる）。 */
 const UNIFIED_SEED = 7;
@@ -172,6 +176,8 @@ export class LightUnified implements LabExpression {
     this.shelf = getSourceShelf(context.audioEngine);
     this.audioDrive.setShelf(this.shelf);
 
+    this.applyStickiness();
+    this.audioDrive.setTraceAmount(this.axes.trace);
     this.resetShapes();
     this.buildMesh();
     this.rebuild();
@@ -279,11 +285,33 @@ export class LightUnified implements LabExpression {
       fanPower,
       fanSeed: fanPower > 0 ? this.fanLight.hold : -1,
       fragments,
-      hue: this.audioDrive.huePhase(),
+      hue: this.hueOf(),
       tick,
       time: elapsed,
       seed: UNIFIED_SEED,
     };
+  }
+
+  /**
+   * **色相。** `hueStickiness` が 0 なら音色をそのまま滑らかに追い、
+   * 1 なら 8 つの離散状態に留まる。**同じ道の上を混ぜる**ので、
+   * 途中は「少しだけ段のある滑らかさ」になる（切替ではない）。
+   * 円周上の最短路で混ぜるので、0 と 1 の境目でも跳ばない。
+   */
+  private applyStickiness(): void {
+    const sticky = clamp(this.axes.hueStickiness, 0, 1);
+    // 粘りが強いほど「色の回」が長くなる。確認時間も一緒に伸びる。
+    this.audioDrive.setHueConfirm(HUE.confirmMin + sticky * (HUE.confirmMax - HUE.confirmMin));
+    this.audioDrive.setHueHold(HUE.holdMin + sticky * (HUE.holdMax - HUE.holdMin));
+  }
+
+  private hueOf(): number {
+    const sticky = clamp(this.axes.hueStickiness, 0, 1);
+    const smooth = hueOfPhase(this.audioDrive.levels().timbre);
+    const state = this.audioDrive.huePhase();
+    let delta = state - smooth;
+    delta -= Math.round(delta);
+    return ((smooth + delta * sticky) % 1 + 1) % 1;
   }
 
   /** 時間の形を初期化する。前の曲の尾を持ち越さない。 */
@@ -338,6 +366,7 @@ export class LightUnified implements LabExpression {
         uOffset: { value: 0.03 },
         uDecorrelation: { value: 0.25 },
         uTint: { value: UNIFIED.tintDepth },
+        uChannelGain: { value: new THREE.Vector3(1, 1, 1) },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -394,6 +423,7 @@ export class LightUnified implements LabExpression {
         uniform float uOffset;
         uniform float uDecorrelation;
         uniform float uTint;
+        uniform vec3 uChannelGain;
         varying vec2 vUv;
         varying vec4 vTone;
         varying vec4 vShape;
@@ -529,7 +559,8 @@ export class LightUnified implements LabExpression {
           vec3 tint = spectrum(vTone.x + gradient * vTone.y);
           tint = mix(vec3(1.0), tint, uTint);
 
-          vec3 colour = channels * tint;
+          // **チャンネルの偏り。** 最大は常に 1 なので、白の予算は動かない。
+          vec3 colour = channels * uChannelGain * tint;
           colour *= uIntensity * vAxis.x * material;
           // **白の予算。** 核以外はここで頭を押さえる。
           colour = min(colour, vec3(vAxis.y));
@@ -597,6 +628,8 @@ export class LightUnified implements LabExpression {
       material.uniforms.uIntensity!.value = 0.6 + this.axes.intensity * 2.4;
       material.uniforms.uOffset!.value = 0.01 + this.axes.dispersion * 0.09;
       material.uniforms.uDecorrelation!.value = this.axes.dispersion;
+      const gain = channelBalanceGain(this.axes.channelBalance);
+      (material.uniforms.uChannelGain!.value as THREE.Vector3).set(gain[0], gain[1], gain[2]);
     }
     this.pipeline?.update(audio, elapsed);
   }
@@ -721,7 +754,7 @@ export class LightUnified implements LabExpression {
       layers: this.layers.length,
       whiteAllowedLayers: this.layers.filter((entry) => entry.whiteAllowed).length,
       axes: { ...this.axes },
-      hue: this.audioDrive.levels().huePhase,
+      hue: this.drive.hue,
       kinds: this.layers.map((entry) => entry.kind),
     };
   }
@@ -764,6 +797,8 @@ export class LightUnified implements LabExpression {
         if (typeof next === 'number') this.axes[decl.id] = clamp(next, 0, 1);
       }
       this.audioDrive.setStrobe(true, tickRateOf(this.axes));
+      this.audioDrive.setTraceAmount(this.axes.trace);
+      this.applyStickiness();
       this.rebuild();
       return;
     }
@@ -774,6 +809,7 @@ export class LightUnified implements LabExpression {
     this.axes[decl.id] = clamp(next, 0, 1);
     if (decl.id === 'tickRate') this.audioDrive.setStrobe(true, tickRateOf(this.axes));
     if (decl.id === 'trace') this.audioDrive.setTraceAmount(this.axes.trace);
+    if (decl.id === 'hueStickiness') this.applyStickiness();
     this.rebuild();
   }
 

@@ -271,6 +271,16 @@ const haloOf = (axes: UnifiedAxes, kind: keyof typeof UNIFIED.halo): number =>
   clamp01(axes.blur) * UNIFIED.halo[kind];
 
 /**
+ * **枚数の段を消す。**
+ *
+ * 「何枚出すか」は整数なので、軸を動かすと必ず段になる。
+ * そこで**最後の 1 枚だけを端数の明るさで出す**ことにして、
+ * 画素の上では連続に増える（0.5 枚のときは半分の明るさで 1 枚）ようにする。
+ */
+const countFade = (wanted: number, index: number, count: number): number =>
+  index === count - 1 ? clamp01(wanted - (count - 1)) : 1;
+
+/**
  * **明滅の利得。** 層ごとに位相をずらし、off の側を `strobe` の深さだけ暗くする。
  * 0 で 1 倍（連続）・1 で完全に消える。**分岐ではなく係数**なので途中が実在する。
  */
@@ -349,7 +359,8 @@ const buildMembranes = (
   if (level <= 0) return [];
   // 性格の軸。膜側（0）で多く厚く、光条側（1）で少なく薄くなる。
   const share = 1 - clamp01(axes.membraneBeam);
-  const count = Math.round(mix(1, UNIFIED.membraneCount, share));
+  const wanted = mix(1, UNIFIED.membraneCount, share);
+  const count = Math.max(Math.ceil(wanted), 1);
   const out: UnifiedLayer[] = [];
   const seed = Math.round(drive.seed);
   for (let index = 0; index < count; index++) {
@@ -372,7 +383,11 @@ const buildMembranes = (
       hueSpan: 0.11,
       gradientForm: 2,
       intensity:
-        (0.1 + 0.13 * share) * level * depthDim(z) * blinkOf(axes, drive, 'membrane', index),
+        (0.1 + 0.13 * share) *
+        level *
+        depthDim(z) *
+        blinkOf(axes, drive, 'membrane', index) *
+        countFade(wanted, index, count),
       // [形状族, 襞の周期, 帯の半幅, 折れ]
       shape: [
         Math.floor(family * 3),
@@ -536,9 +551,12 @@ const buildFragments = (
 ): UnifiedLayer[] => {
   const amount = clamp01(axes.fragments);
   if (amount <= 0 || drive.fragments.length === 0) return [];
-  const limit = Math.max(Math.round(UNIFIED.fragmentCount * amount), 1);
+  const wanted = UNIFIED.fragmentCount * amount;
+  const limit = Math.max(Math.ceil(wanted), 1);
   const out: UnifiedLayer[] = [];
+  let placed = -1;
   for (const spawn of drive.fragments.slice(0, limit)) {
+    placed += 1;
     // 時間軸が完全に落とした破片は 1 画素も置かない（off ティックの消灯もここを通る）。
     if (clamp01(spawn.gain) <= 0) continue;
     const seed = spawn.seed;
@@ -576,7 +594,8 @@ const buildFragments = (
         clamp01(spawn.gain) *
         amount *
         depthDim(z) *
-        blinkOf(axes, drive, 'fragment', slot),
+        blinkOf(axes, drive, 'fragment', slot) *
+        countFade(wanted, placed, limit),
       // [縁, 形状族, 伸び, 欠け]
       shape: [0.34, family, 0.75 + h * 0.6, 0.04 + dd * 0.2],
       edge: clamp01(axes.blur),
