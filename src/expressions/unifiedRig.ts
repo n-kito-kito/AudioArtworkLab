@@ -353,6 +353,11 @@ const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 const clamp01 = (value: number): number => clamp(value, 0, 1);
 const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
+/** GLSL の同名関数と同じ形。両端で傾きが 0 になる滑らかな立ち上がり。 */
+const smoothstep = (edge0: number, edge1: number, value: number): number => {
+  const t = clamp01((value - edge0) / Math.max(edge1 - edge0, 1e-6));
+  return t * t * (3 - 2 * t);
+};
 
 /** 決定論ハッシュ。同じ (seed, index) なら必ず同じ値。 */
 export const hash01 = (seed: number, index: number): number => {
@@ -515,8 +520,32 @@ const burstAnchor = (
   return { x: (place.nx + d.x) * e.w * 0.7, y: (place.ny + d.y) * e.h * 0.7 };
 };
 
-/** 光条の長さ。0 で短い光条、1 で画面の外まで貫通する。 */
+/**
+ * 光条の長さ。0 で短い光条、1 で画面の外まで貫通する。
+ * **下限は 0 にしない** — 板の幅が 0 になると退化した四角形になる。
+ * 「出さない」ことは長さではなく明るさ（`crossGain`）で作る。
+ */
 const beamReach = (axes: UnifiedAxes): number => mix(0.3, 2.8, clamp01(axes.beamLength));
+
+/**
+ * **十字の最小は「短い」ではなく「出ない」。**
+ *
+ * `Beam length` を絞りきっても、これまでは長さが 0.3 倍で残るだけで
+ * **十字そのものは消えなかった**。ここで明るさに掛けることで、
+ * 軸の 0 側が「短い十字」ではなく「十字が無い」になる。
+ * 0.12 までの立ち上がりなので、プリセット（どれも 0.45 以上）では 1 のまま。
+ */
+const crossGain = (axes: UnifiedAxes): number => smoothstep(0, 0.12, clamp01(axes.beamLength));
+
+/**
+ * **核が自分で描く貫通線（十字）の明るさ。**
+ *
+ * 核の中の縦横の線は、これまで `Beam length` にも `Skeleton` にも繋がっておらず、
+ * **どちらを 0 にしても核の十字だけが残っていた**。両方に連動させて穴を塞ぐ。
+ * `Skeleton` 側も 0.1 までで立ち上がるので、プリセット（最小 0.12）では 1 のまま。
+ */
+const coreCrossGain = (axes: UnifiedAxes): number =>
+  crossGain(axes) * smoothstep(0, 0.1, clamp01(axes.skeleton));
 
 /** 光条の向き（ローカル +x をこの向きへ）。 */
 const BEAM_DIRECTIONS: readonly { readonly bit: number; readonly spin: number }[] = [
@@ -878,8 +907,9 @@ const buildBeams = (
   // 貫通させるときは、原点が端に寄っていても画面を突き抜ける長さが要る。
   const reach = (Math.max(e.w, e.h) + Math.max(Math.abs(anchor.x), Math.abs(anchor.y))) * beamReach(axes);
 
-  // ---- 常設の軸（骨格）。`skeleton` が 0 なら 1 枚も出ない ----
-  if (level > 0 && skeleton > 0) {
+  // ---- 常設の軸（骨格）。`skeleton` か `Beam length` が 0 なら 1 枚も出ない ----
+  const cross = crossGain(axes);
+  if (level > 0 && skeleton > 0 && cross > 0) {
     const widths: readonly [number, number, number][] = [
       [0.012, 0.05, 0.36],
       [0.02, 0.06, 0.3],
@@ -899,7 +929,12 @@ const buildBeams = (
         ...hueRamp(axes, hueOf(axes, drive.hue, drive.seed, 40 + index), 0.05 + index * 0.02, drive.seed, 40 + index),
         gradientForm: 2,
         intensity:
-          w[2] * level * skeleton * mix(0.7, 1.15, share) * blinkOf(axes, drive, 'beam', index),
+          w[2] *
+          level *
+          skeleton *
+          cross *
+          mix(0.7, 1.15, share) *
+          blinkOf(axes, drive, 'beam', index),
         shape: [w[0], w[1], 0, 0],
         edge: clamp01(axes.blur),
         halo: haloOf(axes, 'beam'),
@@ -916,7 +951,7 @@ const buildBeams = (
   // ---- 出来事に同期した閃光 ----
   const power = clamp01(drive.beamStrength);
   const mask = Math.round(drive.beamMask);
-  if (mask !== 0 && power > 0) {
+  if (mask !== 0 && power > 0 && cross > 0) {
     const seed = Math.round(drive.beamSeed);
     for (let index = 0; index < BEAM_DIRECTIONS.length; index++) {
       const direction = BEAM_DIRECTIONS[index]!;
@@ -938,7 +973,10 @@ const buildBeams = (
         ...hueRamp(axes, hueOf(axes, drive.hue, seed, index), 0.07, seed, index),
         gradientForm: 0,
         intensity:
-          (0.5 + 0.85 * power) * (0.82 + 0.3 * a) * blinkOf(axes, drive, 'beam', index + 3),
+          (0.5 + 0.85 * power) *
+          (0.82 + 0.3 * a) *
+          cross *
+          blinkOf(axes, drive, 'beam', index + 3),
         shape: [0.22, 0.1, 0.2 + 0.25 * b, 1],
         edge: clamp01(axes.blur),
         halo: haloOf(axes, 'beam'),
@@ -981,6 +1019,7 @@ const buildCore = (
   // 画面の 1/4 が真っ白になっては光ではなく塗りになる）。
   // 面積はおよそ二乗で増えるので、薄め方も半径に反比例させる。
   const dilute = Math.min(UNIFIED.coreSmall / Math.max(size, 1e-3) + 0.1, 1);
+  const cross = coreCrossGain(axes);
   return [
     {
       kind: 'core',
@@ -994,7 +1033,8 @@ const buildCore = (
       ...hueRamp(axes, drive.hue, 0.08, drive.beamSeed, 5),
       gradientForm: 1,
       intensity: mix(0.4, 1.55, pulse) * dilute * blinkOf(axes, drive, 'core', 0),
-      shape: [shape[0], shape[1], shape[2], shape[3]],
+      // [形状族, 横フレア, 縦スパイク, 芯の強さ]。フレアは十字なので軸に連動させる。
+      shape: [shape[0], shape[1] * cross, shape[2] * cross, shape[3]],
       edge: clamp01(axes.blur),
       // 大きい塊にさらに広いハロを足すと画面が白く埋まる。半径で割り戻す。
       halo: haloOf(axes, 'core') * Math.min(UNIFIED.coreSmall * 2.4 / Math.max(size, 1e-3), 1),
