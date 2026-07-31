@@ -552,6 +552,12 @@ export class OpticsAudioDrive {
   private traceAimed = 0;
   /** 引き寄せの強さ（開発つまみ `Trace amount`）。**0 で完全に従来どおり。** */
   private traceAmount = 0.5;
+  /**
+   * **光の数の倍率**（統合表現の `Density` 軸）。
+   * 1 枚のイベントで生まれる断片の数・同時に生きられる数・打撃の不応期を
+   * **同じ 1 本でまとめて**動かす。既定は 1 で、呼ばない表現は 1 画素も変わらない。
+   */
+  private densityScale = 1;
 
   // ---- 帯域 → R/G/B チャンネル（色調のチルト）----
   /** 帯域の持続値。打撃では動かず、区間の色合いだけを表す。 */
@@ -810,6 +816,15 @@ export class OpticsAudioDrive {
   }
 
   /**
+   * **光の数の倍率。** 1 で従来どおり。
+   * 断片の 1 イベントあたりの枚数と同時生存数を掛け算で増やし、
+   * **打撃の不応期を割り算で短くする**（＝コアがより短い間隔で再発光する）。
+   */
+  setDensity(scale: number): void {
+    this.densityScale = Math.min(Math.max(scale, 0.25), 4);
+  }
+
+  /**
    * **帯域バランスが決めたチャンネル利得**（Bass = R / Mid = G / Treble = B）。
    *
    * 鳴っている帯域を 1 に置き、**鳴っていない帯域を落とす**ので、
@@ -1024,7 +1039,8 @@ export class OpticsAudioDrive {
       },
       elapsed,
       deltaSeconds,
-      DRIVE.detection,
+      // 不応期だけ密度で短くする（他の検出設定は Reactive Lab と同じまま）。
+      { ...DRIVE.detection, cooldownSeconds: DRIVE.detection.cooldownSeconds / this.densityScale },
     );
 
     // 検出器は**繋ぎ替えても回し続ける** — 断片の誕生と、形状族・アームの向きの
@@ -1328,7 +1344,7 @@ export class OpticsAudioDrive {
         ),
         1,
       ),
-      DRIVE.fragmentPerEventMaximum,
+      Math.max(Math.round(DRIVE.fragmentPerEventMaximum * this.densityScale), 1),
     );
     const life = Math.min(
       Math.max(Math.round(DRIVE.fragmentLifeBase + strength * DRIVE.fragmentLifeFromStrength), 1),
@@ -1337,7 +1353,8 @@ export class OpticsAudioDrive {
     // イベント固有の整数シード。同じ音・同じ通し番号なら必ず同じ形になる。
     const seed = (Math.round(clamp01(audioSeed) * 100003) + eventIndex * 7919) | 0;
     for (let slot = 0; slot < count; slot++) {
-      if (this.liveFragments.length + this.pendingFragments.length >= DRIVE.fragmentLiveMaximum) {
+      const liveMaximum = Math.max(Math.round(DRIVE.fragmentLiveMaximum * this.densityScale), 1);
+      if (this.liveFragments.length + this.pendingFragments.length >= liveMaximum) {
         this.fragmentSuppressed += 1;
         continue;
       }

@@ -44,9 +44,9 @@ import { EmissionShape } from './unifiedTime';
 
 const LIMITS = {
   /** インスタンスの上限。靄 1 + 膜 4 + 光条 7 + 破片 8 + 扇 1 + 核 1 に余裕を持たせる。 */
-  maximumLayers: 32,
+  maximumLayers: 48,
   /** 尾を引いている破片も保持するので、生きている枚数より少し多く持つ。 */
-  maximumFragmentShapes: 24,
+  maximumFragmentShapes: 40,
   nearPlane: 0.1,
   farPlane: 90,
   atlas: { manifestUrl: 'assets/light-traces/manifest.json', cellPixels: 384, columns: 4 },
@@ -74,6 +74,9 @@ const LOOK_KEYS = new Set(UNIFIED_LOOK_PARAMS.map((entry) => entry.id));
 
 /** `Hue stickiness` が伸ばす時間（秒）。 */
 const HUE = { confirmMin: 0.2, confirmMax: 1.8, holdMin: 1, holdMax: 10 } as const;
+
+/** `Density` 軸が生成核へ渡す倍率の範囲。 */
+const DENSITY = { min: 0.45, max: 2.6 } as const;
 
 /** 散らばりのシード。**固定値**（同じ音なら必ず同じ絵になる）。 */
 const UNIFIED_SEED = 7;
@@ -204,6 +207,7 @@ export class LightUnified implements LabExpression {
     }
 
     this.applyStickiness();
+    this.applyDensity();
     this.audioDrive.setTraceAmount(this.axes.trace);
     this.resetShapes();
     this.buildMesh();
@@ -344,6 +348,11 @@ export class LightUnified implements LabExpression {
    * 途中は「少しだけ段のある滑らかさ」になる（切替ではない）。
    * 円周上の最短路で混ぜるので、0 と 1 の境目でも跳ばない。
    */
+  /** `Density` 軸を生成核へ渡す（1 バーストの枚数・同時数・打撃の間隔）。 */
+  private applyDensity(): void {
+    this.audioDrive.setDensity(DENSITY.min + clamp(this.axes.density, 0, 1) * (DENSITY.max - DENSITY.min));
+  }
+
   private applyStickiness(): void {
     const sticky = clamp(this.axes.hueStickiness, 0, 1);
     // 粘りが強いほど「色の回」が長くなる。確認時間も一緒に伸びる。
@@ -1000,6 +1009,7 @@ export class LightUnified implements LabExpression {
       this.audioDrive.setStrobe(true, tickRateOf(this.axes));
       this.audioDrive.setTraceAmount(this.axes.trace);
       this.applyStickiness();
+      this.applyDensity();
       this.rebuild();
       return;
     }
@@ -1012,6 +1022,7 @@ export class LightUnified implements LabExpression {
     if (decl.id === 'tickRate') this.audioDrive.setStrobe(true, tickRateOf(this.axes));
     if (decl.id === 'trace') this.audioDrive.setTraceAmount(this.axes.trace);
     if (decl.id === 'hueStickiness') this.applyStickiness();
+    if (decl.id === 'density') this.applyDensity();
     this.rebuild();
   }
 

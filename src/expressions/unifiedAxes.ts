@@ -87,8 +87,15 @@ export interface UnifiedAxes {
   fragments: number;
   /** 靄の床（画面をまとめる最下段の明るさ）。 */
   hazeFloor: number;
-  /** 常設の十字（骨格）の存在感。 */
+  /** 常設の十字（骨格）の存在感。**バーストの原点で交差する。** */
   skeleton: number;
+  /** 0 = 短い光条 ⇄ 1 = 画面の外まで貫通する極細線。 */
+  beamLength: number;
+  /**
+   * **光の数。** 1 バーストあたりの要素数・同時バースト数・
+   * コアの再発火の速さを同時にスケールする。
+   */
+  density: number;
 
   // ---- 動き ----
   /** 0 = 静止 ⇄ 1 = 面内をゆっくり漂う。 */
@@ -120,6 +127,8 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
   { id: 'skeleton', label: 'Skeleton', group: '構成', low: '無し', high: 'はっきり' },
+  { id: 'beamLength', label: 'Beam length', group: '構成', low: '短い', high: '貫通' },
+  { id: 'density', label: 'Density', group: '構成', low: '少ない', high: '多い' },
   { id: 'motion', label: 'Motion', group: '動き', low: '静止', high: '漂う' },
   { id: 'trace', label: 'Trace', group: '動き', low: '無し', high: '強い' },
   { id: 'intensity', label: 'Intensity', group: '明るさ', low: '暗い', high: '明るい' },
@@ -148,6 +157,8 @@ export const DEFAULT_AXES: UnifiedAxes = {
   fragments: 0.5,
   hazeFloor: 0.45,
   skeleton: 0.4,
+  beamLength: 0.55,
+  density: 0.55,
   motion: 0.35,
   trace: 0.4,
   intensity: 0.5,
@@ -178,7 +189,9 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     membraneBeam: 0.55,
     fragments: 0.45,
     hazeFloor: 0.35,
-    skeleton: 0,
+    skeleton: 0.25,
+    beamLength: 0.9,
+    density: 0.85,
     motion: 0.5,
     trace: 0.35,
     intensity: 0.5,
@@ -202,7 +215,9 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     membraneBeam: 0.15,
     fragments: 0.5,
     hazeFloor: 0.5,
-    skeleton: 0,
+    skeleton: 0.15,
+    beamLength: 0.45,
+    density: 0.8,
     motion: 0.3,
     trace: 0.5,
     intensity: 0.34,
@@ -227,6 +242,8 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     fragments: 0.55,
     hazeFloor: 0.4,
     skeleton: 1,
+    beamLength: 1,
+    density: 0.5,
     motion: 0.05,
     trace: 0.2,
     intensity: 0.56,

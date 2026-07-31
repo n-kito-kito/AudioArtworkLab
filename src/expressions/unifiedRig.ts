@@ -135,7 +135,7 @@ export const UNIFIED = {
   beamCeiling: 0.62,
   /** 要素の枚数（軸が量を決めるので上限だけ持つ）。 */
   membraneCount: 4,
-  fragmentCount: 8,
+  fragmentCount: 16,
   beamCount: 4,
   /**
    * **にじみが最大のときの板の余白**（1.4 なら板は 2.4 倍）。
@@ -310,6 +310,28 @@ const blinkOf = (
 ): number =>
   strobePhaseGain(axes.strobe, drive.tick, drive.seed, UNIFIED_KIND_INDEX[kind], index);
 
+/**
+ * **バーストの原点。** 核・十字（骨格）・閃光・扇はここを中心にする。
+ * 画面中央に固定しない — 光が生まれた場所で十字が交差するのが自然だからで、
+ * 居場所は**その打撃のシード**から決まるので決定論は保たれる。
+ * `spreadX/Y` を 0 にすれば従来どおり真ん中へ戻る。
+ */
+const burstAnchor = (
+  drive: UnifiedDrive,
+  axes: UnifiedAxes,
+  viewport: UnifiedViewport,
+  z: number,
+): { readonly x: number; readonly y: number } => {
+  const seed = Math.round(drive.beamSeed);
+  const place = placeOf(axes, seed + 977, 1);
+  const d = drift(axes, seed + 977, 1, drive.time);
+  const e = halfExtent(z, viewport);
+  return { x: (place.nx + d.x) * e.w * 0.7, y: (place.ny + d.y) * e.h * 0.7 };
+};
+
+/** 光条の長さ。0 で短い光条、1 で画面の外まで貫通する。 */
+const beamReach = (axes: UnifiedAxes): number => mix(0.3, 2.8, clamp01(axes.beamLength));
+
 /** 光条の向き（ローカル +x をこの向きへ）。 */
 const BEAM_DIRECTIONS: readonly { readonly bit: number; readonly spin: number }[] = [
   { bit: 2, spin: 0 },
@@ -444,7 +466,9 @@ const buildBeams = (
   const skeleton = clamp01(axes.skeleton);
   const z = depthOf(axes, 0.32);
   const e = halfExtent(z, viewport);
-  const reach = Math.max(e.w, e.h) * 1.3;
+  const anchor = burstAnchor(drive, axes, viewport, z);
+  // 貫通させるときは、原点が端に寄っていても画面を突き抜ける長さが要る。
+  const reach = (Math.max(e.w, e.h) + Math.max(Math.abs(anchor.x), Math.abs(anchor.y))) * beamReach(axes);
 
   // ---- 常設の軸（骨格）。`skeleton` が 0 なら 1 枚も出ない ----
   if (level > 0 && skeleton > 0) {
@@ -457,7 +481,7 @@ const buildBeams = (
       const w = widths[index]!;
       out.push({
         kind: 'beam',
-        position: [0, 0, z],
+        position: [anchor.x, anchor.y, z],
         half: [reach, index === 0 ? 0.34 : index === 1 ? 0.3 : 0.9],
         spin: index === 0 ? Math.PI / 2 : 0,
         tiltX: 0,
@@ -489,11 +513,12 @@ const buildBeams = (
       if ((mask & direction.bit) === 0) continue;
       const a = hash01(seed, index * 3 + 1);
       const b = hash01(seed, index * 3 + 2);
-      const length = 1.55 * (0.78 + 0.44 * a) * (0.62 + 0.6 * power) * mix(0.7, 1.5, share);
+      const length =
+        1.55 * (0.78 + 0.44 * a) * (0.62 + 0.6 * power) * mix(0.7, 1.5, share) * beamReach(axes);
       const thickness = 0.06 * (0.85 + 0.3 * b) * mix(1.4, 0.7, share);
       out.push({
         kind: 'beam',
-        position: [0, 0, z - 0.02],
+        position: [anchor.x, anchor.y, z - 0.02],
         half: [length, thickness],
         spin: direction.spin,
         tiltX: 0,
@@ -538,14 +563,11 @@ const buildCore = (
       ? CORE_SHAPE_PARAMS[index]!
       : ([-1, 0, 0, 1] as const);
   const z = depthOf(axes, 0.25);
-  const e = halfExtent(z, viewport);
-  const seed = Math.round(drive.beamSeed);
-  const place = placeOf(axes, seed + 977, index + 1);
-  const d = drift(axes, seed + 977, index + 1, drive.time);
+  const anchor = burstAnchor(drive, axes, viewport, z);
   return [
     {
       kind: 'core',
-      position: [(place.nx + d.x) * e.w * 0.7, (place.ny + d.y) * e.h * 0.7, z],
+      position: [anchor.x, anchor.y, z],
       half: [mix(0.34, 0.5, pulse), mix(0.34, 0.5, pulse)],
       spin: 0,
       tiltX: 0,
@@ -574,7 +596,7 @@ const buildFragments = (
 ): UnifiedLayer[] => {
   const amount = clamp01(axes.fragments);
   if (amount <= 0 || drive.fragments.length === 0) return [];
-  const wanted = UNIFIED.fragmentCount * amount;
+  const wanted = UNIFIED.fragmentCount * amount * mix(0.5, 2.2, clamp01(axes.density));
   const limit = Math.max(Math.ceil(wanted), 1);
   const out: UnifiedLayer[] = [];
   let placed = -1;
@@ -646,12 +668,11 @@ const buildFan = (
   const b = seed >= 0 ? hash01(seed, 102) : 0.5;
   const c = seed >= 0 ? hash01(seed, 103) : 0.5;
   const z = depthOf(axes, 0.3);
-  const e = halfExtent(z, viewport);
-  const place = placeOf(axes, seed + 733, 2);
+  const anchor = burstAnchor(drive, axes, viewport, z);
   return [
     {
       kind: 'fan',
-      position: [place.nx * e.w * 0.55, place.ny * e.h * 0.55, z],
+      position: [anchor.x, anchor.y, z],
       half: [2.5 * mix(0.82, 1, gate), 2.5 * mix(0.82, 1, gate)],
       spin: 0,
       tiltX: 0,
