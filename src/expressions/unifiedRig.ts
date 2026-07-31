@@ -66,8 +66,14 @@ export interface UnifiedLayer {
    * 0 なら 1 画素も足さないので、シャープ側では従来どおりの縁になる。
    */
   readonly halo: number;
-  /** チャンネル分離の方向（ローカル平面）。 */
-  readonly axis: readonly [number, number];
+  /**
+   * **板の余白**（1 で余白なし）。要素の裾（ハロ・にじみ）が板の縁に届くと
+   * **四角い枠が絵に出る**ので、裾が伸びるぶんだけ板を広げて内側へ収める。
+   * 描画側はこの値で座標を割り直すので、余白を広げても要素の大きさは変わらない。
+   */
+  readonly pad: number;
+  /** 破片の性格（0 = 破片 ⇄ 1 = 羽毛・筋）。他の種別では 0。 */
+  readonly character: number;
   /** **白の予算。** true は白へ届いてよい（核だけ）。 */
   readonly whiteAllowed: boolean;
   readonly ceiling: number;
@@ -131,6 +137,12 @@ export const UNIFIED = {
   membraneCount: 4,
   fragmentCount: 8,
   beamCount: 4,
+  /**
+   * **にじみが最大のときの板の余白**（1.4 なら板は 2.4 倍）。
+   * ハロは `exp(-r^2 * 1.6)` なので r = 2.4 では 1 万分の 1 になり、
+   * 縁に届く前に消える。
+   */
+  padAtFullBlur: 1.4,
   /** 波長の深さ。1 で純粋な分光、0 で白。 */
   tintDepth: 0.72,
   /** 場の利得。音量の持続をそのまま輝度にすると暗すぎるので 1 本だけ通す。 */
@@ -266,6 +278,12 @@ const tiltOf = (
   };
 };
 
+/**
+ * **板の余白。** にじみ（`blur`）が広がるほど板を広げ、
+ * 要素の裾が**板の縁に届かない**ようにする。届くと縁が四角い枠として見えてしまう。
+ */
+const padOf = (axes: UnifiedAxes): number => 1 + clamp01(axes.blur) * UNIFIED.padAtFullBlur;
+
 /** **にじみのハロ。** `blur` 軸が種別ごとの上限まで散乱を広げる。 */
 const haloOf = (axes: UnifiedAxes, kind: keyof typeof UNIFIED.halo): number =>
   clamp01(axes.blur) * UNIFIED.halo[kind];
@@ -338,7 +356,8 @@ const buildHaze = (
       shape: [mix(2.6, 1.4, clamp01(axes.blur)), 0.32, 0.78, 0.55],
       edge: clamp01(axes.blur),
       halo: haloOf(axes, 'haze'),
-      axis: [1, 0],
+      pad: padOf(axes),
+      character: 0,
       whiteAllowed: false,
       ceiling: UNIFIED.hazeCeiling,
       channel: [1.2, 1.5, 0.04, 0.35],
@@ -397,7 +416,8 @@ const buildMembranes = (
       ],
       edge: clamp01(axes.blur),
       halo: haloOf(axes, 'membrane'),
-      axis: [1, 0],
+      pad: padOf(axes),
+      character: 0,
       whiteAllowed: false,
       ceiling: UNIFIED.membraneCeiling,
       channel: [1.3, 1.5, 0.045, 0.28],
@@ -450,7 +470,8 @@ const buildBeams = (
         shape: [w[0], w[1], 0, 0],
         edge: clamp01(axes.blur),
         halo: haloOf(axes, 'beam'),
-        axis: [0, 1],
+        pad: padOf(axes),
+        character: 0,
         whiteAllowed: false,
         ceiling: UNIFIED.nonCoreCeiling,
         channel: [1, 1, 0.02, 0.12],
@@ -485,7 +506,8 @@ const buildBeams = (
         shape: [0.22, 0.1, 0.2 + 0.25 * b, 1],
         edge: clamp01(axes.blur),
         halo: haloOf(axes, 'beam'),
-        axis: [0, 1],
+        pad: padOf(axes),
+        character: 0,
         whiteAllowed: false,
         ceiling: UNIFIED.beamCeiling,
         channel: [1, 1, 0.02, 0.1],
@@ -535,7 +557,8 @@ const buildCore = (
       shape: [shape[0], shape[1], shape[2], shape[3]],
       edge: clamp01(axes.blur),
       halo: haloOf(axes, 'core'),
-      axis: [1, 0],
+      pad: padOf(axes),
+      character: 0,
       whiteAllowed: true,
       ceiling: 1,
       channel: [1, 1, 0, 0],
@@ -600,7 +623,8 @@ const buildFragments = (
       shape: [0.34, family, 0.75 + h * 0.6, 0.04 + dd * 0.2],
       edge: clamp01(axes.blur),
       halo: haloOf(axes, 'fragment'),
-      axis: [1, 0],
+      pad: padOf(axes),
+      character: 0,
       whiteAllowed: false,
       ceiling: UNIFIED.nonCoreCeiling,
       channel: [1.4, 1.6, 0.05, 0.3],
@@ -645,7 +669,8 @@ const buildFan = (
       ],
       edge: clamp01(axes.blur),
       halo: haloOf(axes, 'fan'),
-      axis: [1, 0],
+      pad: padOf(axes),
+      character: 0,
       whiteAllowed: false,
       ceiling: UNIFIED.nonCoreCeiling,
       channel: [1.3, 1.4, 0.04, 0.22],

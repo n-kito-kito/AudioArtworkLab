@@ -437,6 +437,7 @@ export class LightUnified implements LabExpression {
         varying vec4 vChannel;
         varying float vEdge;
         varying float vHalo;
+        varying float vPad;
 
         void main() {
           vUv = uv;
@@ -446,6 +447,7 @@ export class LightUnified implements LabExpression {
           vChannel = aChannel;
           vEdge = aSize.z;
           vHalo = aSize.w;
+          vPad = max(aAxis.z, 1.0);
 
           vec3 local = vec3(position.xy * aSize.xy, 0.0);
           // 面内回転
@@ -479,6 +481,14 @@ export class LightUnified implements LabExpression {
         varying vec4 vChannel;
         varying float vEdge;
         varying float vHalo;
+        varying float vPad;
+
+        /**
+         * **板の縁が絵に出ないための余白。** ここから外側は必ず 0 へ落とす。
+         * 0.86 は「余白の内側 14% を使って落とす」という意味で、
+         * 落とし方が滑らかなので直線の段にはならない。
+         */
+        const float FRAME_START = 0.86;
 
         const float TAU = 6.28318530718;
 
@@ -584,7 +594,18 @@ export class LightUnified implements LabExpression {
         }
 
         void main() {
-          vec2 p = vUv * 2.0 - 1.0;
+          // **板の座標**（−1〜1。縁がどこかを知っているのはこれだけ）。
+          vec2 q = vUv * 2.0 - 1.0;
+          // **要素の座標**。板を余白ぶん広げてあるので、要素はその内側に収まる。
+          vec2 p = q * vPad;
+          /**
+           * **四角い枠を出さないガード。**
+           * どの種別・どの軸設定でも、板の縁より内側で必ず 0 になる。
+           * 円形の裾（ハロ）を四角い板で切ると縁が直線に見えるので、
+           * 切るのではなく**縁へ向かって滑らかに 0 へ寄せる**。
+           */
+          float frame = 1.0 - smoothstep(FRAME_START, 1.0, max(abs(q.x), abs(q.y)));
+          if (frame <= 0.0) discard;
           // チャンネル分離。中心からの放射方向へ 3 チャンネルをずらす。
           vec2 dir = length(p) > 1e-4 ? normalize(p) : vec2(1.0, 0.0);
           float offsetAmount = max(uOffset * vChannel.x, vChannel.z);
@@ -594,7 +615,7 @@ export class LightUnified implements LabExpression {
             elementMask(p + shift + vec2(decorrelation, 0.0)),
             elementMask(p),
             elementMask(p - shift - vec2(decorrelation, 0.0))
-          ), 0.0);
+          ), 0.0) * frame;
           if (channels.r + channels.g + channels.b <= 0.0) discard;
 
           // 素材を薄く混ぜる（無ければ 1 のまま）。
@@ -603,7 +624,7 @@ export class LightUnified implements LabExpression {
           float material = 0.55 + 0.45 * dot(tex, vec3(0.333));
 
           // 色。層ごとの色相はリグが決めてある（要素ごと ⇄ 全体 1 色の混合済み）。
-          float gradient = gradientAt(p, vTone.w);
+          float gradient = gradientAt(q, vTone.w);
           vec3 tint = spectrum(vTone.x + gradient * vTone.y);
           tint = mix(vec3(1.0), tint, uTint);
 
@@ -629,8 +650,9 @@ export class LightUnified implements LabExpression {
       this.offsets[index * 3 + 0] = layer.position[0];
       this.offsets[index * 3 + 1] = layer.position[1];
       this.offsets[index * 3 + 2] = layer.position[2];
-      this.sizes[index * 4 + 0] = layer.half[0] * 2;
-      this.sizes[index * 4 + 1] = layer.half[1] * 2;
+      // 板は余白ぶん広げる（要素の大きさはシェーダー側で割り直すので変わらない）。
+      this.sizes[index * 4 + 0] = layer.half[0] * 2 * layer.pad;
+      this.sizes[index * 4 + 1] = layer.half[1] * 2 * layer.pad;
       this.sizes[index * 4 + 2] = layer.edge;
       this.sizes[index * 4 + 3] = layer.halo;
       this.spins[index * 3 + 0] = layer.spin;
@@ -646,8 +668,8 @@ export class LightUnified implements LabExpression {
       this.shapes[index * 4 + 3] = layer.shape[3];
       this.axesAttr[index * 4 + 0] = layer.intensity;
       this.axesAttr[index * 4 + 1] = layer.ceiling;
-      this.axesAttr[index * 4 + 2] = layer.axis[0];
-      this.axesAttr[index * 4 + 3] = layer.axis[1];
+      this.axesAttr[index * 4 + 2] = layer.pad;
+      this.axesAttr[index * 4 + 3] = layer.character;
       this.channels[index * 4 + 0] = layer.channel[0];
       this.channels[index * 4 + 1] = layer.channel[1];
       this.channels[index * 4 + 2] = layer.channel[2];
