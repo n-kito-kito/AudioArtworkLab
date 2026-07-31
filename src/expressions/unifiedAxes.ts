@@ -139,6 +139,18 @@ export interface UnifiedAxes {
    * 板の輪郭が読めてしまうのを隠しつつ、要素ごとに違う不揃いな縁を作る。
    */
   silhouette: number;
+  /**
+   * **核の大きさ。**
+   *
+   * 0 = 針の先の白熱（0.10〜0.60）⇄ 1 = 画面を占める光の塊（0.90〜3.60）。
+   * **薄め方の効きも同じ 1 本に載せてある** — これまでは大きさを上げるとちょうど
+   * 打ち消す量だけ薄まり、「広い」と「白い」が両立しなかった。
+   * 大きい側では板の枚数も 1 → 3 枚へ増え、重なりで面になる。
+   *
+   * 既定 0.4 が従来の 0.20 / 2.30 をちょうど通るよう曲げてあるので、
+   * 既定のままなら 1 画素も変わらない。
+   */
+  coreSize: number;
   /** 破片の量。 */
   fragments: number;
   /**
@@ -198,6 +210,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'eventMembrane', label: 'Event membrane', group: '構成', low: '固定の膜', high: '打撃ごとに生死' },
   { id: 'textureGrain', label: 'Texture grain', group: '構成', low: '手続き形状', high: '素材が支配' },
   { id: 'silhouette', label: 'Silhouette', group: '構成', low: '素の縁', high: '多角形で削る' },
+  { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める' },
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
@@ -236,6 +249,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   eventMembrane: 0.4,
   textureGrain: 0.4,
   silhouette: 0.35,
+  coreSize: 0.4,
   fragments: 0.5,
   fragmentCharacter: 0.4,
   hazeFloor: 0.45,
@@ -278,6 +292,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     eventMembrane: 0.9,
     textureGrain: 0.82,
     silhouette: 0.7,
+    coreSize: 0.4,
     fragments: 0.6,
     fragmentCharacter: 0.85,
     hazeFloor: 0.3,
@@ -313,6 +328,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     eventMembrane: 0.65,
     textureGrain: 0.6,
     silhouette: 0.5,
+    coreSize: 0.4,
     fragments: 0.6,
     fragmentCharacter: 0.7,
     hazeFloor: 0.5,
@@ -347,6 +363,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     eventMembrane: 0.05,
     textureGrain: 0.12,
     silhouette: 0.08,
+    coreSize: 0.4,
     fragments: 0.55,
     fragmentCharacter: 0.15,
     hazeFloor: 0.4,

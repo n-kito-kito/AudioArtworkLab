@@ -326,6 +326,34 @@ export const UNIFIED = {
   /** 核の大きさの幅（半径・ワールド）。小さい側は針の先、大きい側は画面を占める塊。 */
   coreSmall: 0.2,
   coreLarge: 2.3,
+  /**
+   * **`Core size` 軸の実寸。**
+   *
+   * 軸 0 で「針の先」、軸 1 で「画面を占める塊」。
+   * **指数は既定値（0.4）が従来の 0.20 / 2.30 をちょうど通るように決めてある**ので、
+   * 既定のままなら 1 画素も変わらない（0.4^2.27 = 0.125 / 0.4^0.62 = 0.567）。
+   */
+  coreSizeAxis: {
+    smallAtZero: 0.1,
+    smallAtOne: 0.9,
+    smallCurve: 2.27,
+    largeAtZero: 0.6,
+    largeAtOne: 3.6,
+    largeCurve: 0.62,
+    /**
+     * **薄め方の効き。** これまでは `0.2 / size` がちょうど大きさを打ち消していて、
+     * **「広い」と「白い」が両立しなかった**。指数を軸に載せて、大きい側では
+     * 薄め方そのものを弱める。既定 0.4 で 1.0（＝従来どおり）になる高さに置いた。
+     */
+    diluteCurveAtZero: 1.36,
+    diluteCurveAtOne: 0.46,
+    /** 板の枚数（重なりで面にする）。既定では 1 枚のまま。 */
+    plateCountMaximum: 3,
+    plateGrowthFrom: 0.4,
+    /** 2 枚目以降の大きさと位置のばらつき。 */
+    plateSizeFalloff: 0.55,
+    plateOffset: 0.28,
+  },
   /** 場の利得。音量の持続をそのまま輝度にすると暗すぎるので 1 本だけ通す。 */
   fieldGain: 1.6,
   /**
@@ -393,9 +421,7 @@ const depthOf = (axes: UnifiedAxes, t: number): number => {
 
 /** 奥行きの手がかり（遠いほど暗い）。 */
 export const depthDim = (z: number): number => {
-  const t = clamp01(
-    (Math.abs(z) - UNIFIED.depthNear) / (UNIFIED.depthFar - UNIFIED.depthNear),
-  );
+  const t = clamp01((Math.abs(z) - UNIFIED.depthNear) / (UNIFIED.depthFar - UNIFIED.depthNear));
   return mix(1, UNIFIED.depthDimFar, t);
 };
 
@@ -498,8 +524,7 @@ const blinkOf = (
   drive: UnifiedDrive,
   kind: UnifiedKind,
   index: number,
-): number =>
-  strobePhaseGain(axes.strobe, drive.tick, drive.seed, UNIFIED_KIND_INDEX[kind], index);
+): number => strobePhaseGain(axes.strobe, drive.tick, drive.seed, UNIFIED_KIND_INDEX[kind], index);
 
 /**
  * **バーストの原点。** 核・十字（骨格）・閃光・扇はここを中心にする。
@@ -575,7 +600,18 @@ const coreSize = (axes: UnifiedAxes, seed: number): number => {
   const draw = hash01(seed + 4111, 5);
   // 指数で分布を寄せる: シャープ側は 3.4 乗で小さい側へ、にじみ側は 0.75 乗で大きい側へ。
   const t = Math.pow(draw, mix(3.4, 0.75, blur));
-  return mix(UNIFIED.coreSmall, UNIFIED.coreLarge, t);
+  const range = coreSizeRange(axes);
+  return mix(range.small, range.large, t);
+};
+
+/** `Core size` 軸から大小の幅を出す。既定 0.4 で従来の 0.20 / 2.30 を通る。 */
+const coreSizeRange = (axes: UnifiedAxes): { readonly small: number; readonly large: number } => {
+  const a = UNIFIED.coreSizeAxis;
+  const s = clamp01(axes.coreSize);
+  return {
+    small: mix(a.smallAtZero, a.smallAtOne, Math.pow(s, a.smallCurve)),
+    large: mix(a.largeAtZero, a.largeAtOne, Math.pow(s, a.largeCurve)),
+  };
 };
 
 /** 核の形状族ごとの [族, 横フレア, 縦スパイク, 芯の強さ]。 */
@@ -913,7 +949,8 @@ const buildBeams = (
   const e = halfExtent(z, viewport);
   const anchor = burstAnchor(drive, axes, viewport, z);
   // 貫通させるときは、原点が端に寄っていても画面を突き抜ける長さが要る。
-  const reach = (Math.max(e.w, e.h) + Math.max(Math.abs(anchor.x), Math.abs(anchor.y))) * beamReach(axes);
+  const reach =
+    (Math.max(e.w, e.h) + Math.max(Math.abs(anchor.x), Math.abs(anchor.y))) * beamReach(axes);
 
   // ---- 常設の軸（骨格）。`skeleton` か `Beam length` が 0 なら 1 枚も出ない ----
   const cross = crossGain(axes);
@@ -935,7 +972,13 @@ const buildBeams = (
         tiltY: 0,
         hue: hueOf(axes, drive.hue, drive.seed, 40 + index),
         hueSpan: 0.05 + index * 0.02,
-        ...hueRamp(axes, hueOf(axes, drive.hue, drive.seed, 40 + index), 0.05 + index * 0.02, drive.seed, 40 + index),
+        ...hueRamp(
+          axes,
+          hueOf(axes, drive.hue, drive.seed, 40 + index),
+          0.05 + index * 0.02,
+          drive.seed,
+          40 + index,
+        ),
         gradientForm: 2,
         intensity:
           w[2] *
@@ -982,10 +1025,7 @@ const buildBeams = (
         ...hueRamp(axes, hueOf(axes, drive.hue, seed, index), 0.07, seed, index),
         gradientForm: 0,
         intensity:
-          (0.5 + 0.85 * power) *
-          (0.82 + 0.3 * a) *
-          cross *
-          blinkOf(axes, drive, 'beam', index + 3),
+          (0.5 + 0.85 * power) * (0.82 + 0.3 * a) * cross * blinkOf(axes, drive, 'beam', index + 3),
         shape: [0.22, 0.1, 0.2 + 0.25 * b, 1],
         edge: clamp01(axes.blur),
         halo: haloOf(axes, 'beam'),
@@ -1021,40 +1061,70 @@ const buildCore = (
     index >= 0 && index < CORE_SHAPE_PARAMS.length
       ? CORE_SHAPE_PARAMS[index]!
       : ([-1, 0, 0, 1] as const);
+  const a = UNIFIED.coreSizeAxis;
+  const grow = clamp01(axes.coreSize);
   const z = depthOf(axes, 0.25);
   const anchor = burstAnchor(drive, axes, viewport, z);
-  const size = coreSize(axes, Math.round(drive.beamSeed)) * mix(0.8, 1.15, pulse);
-  // 大きい塊は 1 画素あたりを薄くする（**白の予算**は核だけのものだが、
-  // 画面の 1/4 が真っ白になっては光ではなく塗りになる）。
-  // 面積はおよそ二乗で増えるので、薄め方も半径に反比例させる。
-  const dilute = Math.min(UNIFIED.coreSmall / Math.max(size, 1e-3) + 0.1, 1);
+  const seed = Math.round(drive.beamSeed);
+  const base = coreSize(axes, seed) * mix(0.8, 1.15, pulse);
   const cross = coreCrossGain(axes);
-  return [
-    {
+  const roll = crossRoll(axes);
+  /**
+   * **板の枚数。** 中心を 1 枚の点で描くと、どれだけ広げても「大きな点」にしかならない。
+   * 大きい側では 1 → 3 枚を少しずつずらして重ね、**面として**光らせる。
+   * 既定（0.4）では 1 枚のままなので、従来と 1 画素も変わらない。
+   */
+  const wanted = 1 + (a.plateCountMaximum - 1) * smoothstep(a.plateGrowthFrom, 1, grow);
+  const count = Math.max(Math.ceil(wanted), 1);
+  const out: UnifiedLayer[] = [];
+  for (let index = 0; index < count; index++) {
+    const h = (salt: number): number => hash01(seed + 5303, index * 7 + salt);
+    // 2 枚目以降は少し小さく、少しずれる。1 枚目は従来とまったく同じ位置と大きさ。
+    const shrink = index === 0 ? 1 : mix(1, a.plateSizeFalloff, h(1));
+    const size = base * shrink;
+    const spread = index === 0 ? 0 : a.plateOffset * size;
+    /**
+     * **薄め方。** `0.2 / size` は大きさをちょうど打ち消すので、これまでは
+     * 広げても白くならなかった。指数を `Core size` に載せ、大きい側では薄め方を弱める。
+     */
+    const dilute = Math.pow(
+      Math.min(UNIFIED.coreSmall / Math.max(size, 1e-3) + 0.1, 1),
+      mix(a.diluteCurveAtZero, a.diluteCurveAtOne, grow),
+    );
+    out.push({
       kind: 'core',
-      position: [anchor.x, anchor.y, z],
+      position: [
+        anchor.x + (h(2) - 0.5) * 2 * spread,
+        anchor.y + (h(3) - 0.5) * 2 * spread,
+        z - index * 0.01,
+      ],
       half: [size, size],
-      spin: crossRoll(axes),
+      spin: roll,
       tiltX: 0,
       tiltY: 0,
       hue: drive.hue,
       hueSpan: 0.08,
-      ...hueRamp(axes, drive.hue, 0.08, drive.beamSeed, 5),
+      ...hueRamp(axes, drive.hue, 0.08, drive.beamSeed, 5 + index),
       gradientForm: 1,
-      intensity: mix(0.4, 1.55, pulse) * dilute * blinkOf(axes, drive, 'core', 0),
+      intensity:
+        mix(0.4, 1.55, pulse) *
+        dilute *
+        blinkOf(axes, drive, 'core', index) *
+        countFade(wanted, index, count),
       // [形状族, 横フレア, 縦スパイク, 芯の強さ]。フレアは十字なので軸に連動させる。
       shape: [shape[0], shape[1] * cross, shape[2] * cross, shape[3]],
       edge: clamp01(axes.blur),
       // 大きい塊にさらに広いハロを足すと画面が白く埋まる。半径で割り戻す。
-      halo: haloOf(axes, 'core') * Math.min(UNIFIED.coreSmall * 2.4 / Math.max(size, 1e-3), 1),
+      halo: haloOf(axes, 'core') * Math.min((UNIFIED.coreSmall * 2.4) / Math.max(size, 1e-3), 1),
       pad: padOf(axes),
       character: 0,
-      material: materialOf(axes, 'core', drive.beamSeed, 5),
+      material: materialOf(axes, 'core', drive.beamSeed, 5 + index),
       whiteAllowed: true,
       ceiling: 1,
       channel: [1, 1, 0, 0],
-    },
-  ];
+    });
+  }
+  return out;
 };
 
 /** **破片。** 4 つの形状族。`fragments` 軸が量を決める。 */
@@ -1208,10 +1278,7 @@ export const buildUnifiedRig = (
  * **どの密度でも核と扇は必ず残る**。並びは元の順序を保つので絵は変わらない
  * （加算合成なので順序自体は見え方に影響しない）。
  */
-export const capUnifiedRig = (
-  layers: readonly UnifiedLayer[],
-  limit: number,
-): UnifiedLayer[] => {
+export const capUnifiedRig = (layers: readonly UnifiedLayer[], limit: number): UnifiedLayer[] => {
   if (layers.length <= limit) return [...layers];
   const taken = new Array<boolean>(layers.length).fill(false);
   const used: Partial<Record<UnifiedKind, number>> = {};
