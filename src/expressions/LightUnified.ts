@@ -264,6 +264,9 @@ export class LightUnified implements LabExpression {
   private readonly orients = new Float32Array(LIMITS.maximumLayers * 4);
   /** 素材の読み方 [タイル番号, 量, 素材色の残し, 予備]。 */
   private readonly textures = new Float32Array(LIMITS.maximumLayers * 4);
+  /** 要素の中の色の旅（等間隔 4 点の色相と彩度）。 */
+  private readonly hues = new Float32Array(LIMITS.maximumLayers * 4);
+  private readonly saturations = new Float32Array(LIMITS.maximumLayers * 4);
   private readonly attributes: Record<string, THREE.InstancedBufferAttribute> = {};
 
   constructor(id: ExpressionId, effects: Effect[] = [], theme?: Theme) {
@@ -655,6 +658,8 @@ export class LightUnified implements LabExpression {
     add('aCrop', this.crops, 4);
     add('aOrient', this.orients, 4);
     add('aTexture', this.textures, 4);
+    add('aHues', this.hues, 4);
+    add('aSaturations', this.saturations, 4);
     geometry.instanceCount = 0;
 
     this.material = new THREE.ShaderMaterial({
@@ -665,6 +670,8 @@ export class LightUnified implements LabExpression {
         uOffset: { value: 0.03 },
         uDecorrelation: { value: 0.25 },
         uTint: { value: UNIFIED.tintDepth },
+        // 彩度の並びは既にこの高さを掛けてあるので、割り戻して二重掛けを避ける。
+        uTintBase: { value: UNIFIED.tintDepth },
         uChannelGain: { value: new THREE.Vector3(1, 1, 1) },
         // [黒浮きの敷居, 同・幅, 輝度の曲げ, マスの内側へ寄せる余白]
         uGrain: {
@@ -697,6 +704,8 @@ export class LightUnified implements LabExpression {
         attribute vec4 aCrop;
         attribute vec4 aOrient;
         attribute vec4 aTexture;
+        attribute vec4 aHues;
+        attribute vec4 aSaturations;
         varying vec2 vUv;
         varying vec4 vTone;
         varying vec4 vShape;
@@ -705,6 +714,8 @@ export class LightUnified implements LabExpression {
         varying vec4 vCrop;
         varying vec4 vOrient;
         varying vec4 vTexture;
+        varying vec4 vHues;
+        varying vec4 vSaturations;
         varying float vEdge;
         varying float vHalo;
         varying float vPad;
@@ -714,6 +725,8 @@ export class LightUnified implements LabExpression {
           vCrop = aCrop;
           vOrient = aOrient;
           vTexture = aTexture;
+          vHues = aHues;
+          vSaturations = aSaturations;
           vTone = aTone;
           vShape = aShape;
           vAxis = aAxis;
@@ -746,6 +759,7 @@ export class LightUnified implements LabExpression {
         uniform float uOffset;
         uniform float uDecorrelation;
         uniform float uTint;
+        uniform float uTintBase;
         uniform vec3 uChannelGain;
         uniform vec4 uGrain;
         uniform float uGrainGain;
@@ -758,6 +772,8 @@ export class LightUnified implements LabExpression {
         varying vec4 vCrop;
         varying vec4 vOrient;
         varying vec4 vTexture;
+        varying vec4 vHues;
+        varying vec4 vSaturations;
         varying float vEdge;
         varying float vHalo;
         varying float vPad;
@@ -774,6 +790,19 @@ export class LightUnified implements LabExpression {
         vec3 spectrum(float h) {
           vec3 phase = vec3(0.0, 2.0943951, 4.1887902);
           return clamp(0.5 + 0.5 * cos(TAU * h + phase), 0.0, 1.0);
+        }
+
+        /**
+         * **等間隔 4 点の折れ線。** Hue depth 軸 0 では 4 点が直線上に並ぶので、
+         * これは 1 本の直線に戻る（＝従来の 1 段の走りとまったく同じ）。
+         */
+        float ramp4(vec4 stops, float t) {
+          float u = clamp(t, 0.0, 1.0) * 3.0;
+          return mix(
+            mix(mix(stops.x, stops.y, clamp(u, 0.0, 1.0)), stops.z, clamp(u - 1.0, 0.0, 1.0)),
+            stops.w,
+            clamp(u - 2.0, 0.0, 1.0)
+          );
         }
 
         float gradientAt(vec2 p, float form) {
@@ -957,8 +986,13 @@ export class LightUnified implements LabExpression {
 
           // 色。層ごとの色相はリグが決めてある（要素ごと ⇄ 全体 1 色の混合済み）。
           float gradient = gradientAt(q, vTone.w);
-          vec3 tint = spectrum(vTone.x + gradient * vTone.y);
-          tint = mix(vec3(1.0), tint, uTint);
+          // **1 要素の中の色の旅。** 色相も彩度も 4 点の折れ線から読む。
+          // 彩度 0 で白、1 で純色。白の予算はここでは動かない（天井が別に効く）。
+          vec3 tint = mix(
+            vec3(1.0),
+            spectrum(ramp4(vHues, gradient)),
+            clamp(ramp4(vSaturations, gradient), 0.0, 1.0) * uTint / max(uTintBase, 1e-4)
+          );
           /**
            * **素材の色を捨てない。** 灰色にしてしまうと、羽毛状・引っ掻き傷状の
            * 見えが「明るさの揺らぎ」に痩せる。素材の色みは正規化して比率だけを取り、
@@ -1051,6 +1085,10 @@ export class LightUnified implements LabExpression {
       this.textures[index * 4 + 1] = material.grain;
       this.textures[index * 4 + 2] = material.sourceTint;
       this.textures[index * 4 + 3] = 0;
+      for (let stop = 0; stop < 4; stop++) {
+        this.hues[index * 4 + stop] = layer.hues[stop]!;
+        this.saturations[index * 4 + stop] = layer.saturations[stop]!;
+      }
     }
     if (this.geometry) this.geometry.instanceCount = count;
     for (const attribute of Object.values(this.attributes)) attribute.needsUpdate = true;

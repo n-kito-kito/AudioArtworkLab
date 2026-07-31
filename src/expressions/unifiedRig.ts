@@ -69,6 +69,13 @@ export interface UnifiedLayer {
   readonly hue: number;
   /** 層の中を走る色の幅。 */
   readonly hueSpan: number;
+  /**
+   * **1 要素の中の色の旅**（等間隔 4 点）。`hueDepth` 軸 0 では
+   * `hue` から `hueSpan` ぶんまっすぐ走るだけ ＝ 従来と同じ並び。
+   */
+  readonly hues: readonly [number, number, number, number];
+  /** 同・彩度。0 で白、`tintDepth` が既定の高さ。 */
+  readonly saturations: readonly [number, number, number, number];
   /** 勾配の形式（0 横 / 1 放射 / 2 縦 / 3 角度）。 */
   readonly gradientForm: number;
   readonly intensity: number;
@@ -224,6 +231,19 @@ export const UNIFIED = {
   padAtFullBlur: 1.4,
   /** 波長の深さ。1 で純粋な分光、0 で白。 */
   tintDepth: 0.72,
+  /**
+   * **要素の中の色の旅（`Hue depth` 軸）の定数。**
+   * 幅の上限 0.5 は半周ぶん。これを超えると 1 要素の中に補色が同居して濁る。
+   */
+  hueTravel: {
+    spanAtFullDepth: 0.5,
+    /** 走った色相が途中で折り返す要素の割合。直線ばかりだと分光が均質に見える。 */
+    turnProbability: 0.38,
+    /** 彩度が一定のままの要素の割合。残りは白 → 色 と 色 → 白 に半々。 */
+    flatProbability: 0.26,
+    /** 白い端の彩度（芯が白く抜けるプリズムらしさ）。 */
+    whiteEnd: 0.14,
+  },
   /**
    * **素材の読み方の定数（`Texture grain` 軸）。**
    * 素材は絵ではなく**輝度マスク**として読む。値は Spatial の実測（10 枚の平均輝度は
@@ -531,6 +551,7 @@ const buildHaze = (
       tiltY: 0,
       hue: hueOf(axes, drive.hue, drive.seed, 91),
       hueSpan: 0.05,
+      ...hueRamp(axes, hueOf(axes, drive.hue, drive.seed, 91), 0.05, drive.seed, 91),
       gradientForm: 1,
       intensity: 0.2 * level * depthDim(z) * blinkOf(axes, drive, 'haze', 0),
       // [減衰, 縁の始まり, 縁の終わり, 分光の深さ]
@@ -545,6 +566,53 @@ const buildHaze = (
       channel: [1.2, 1.5, 0.04, 0.35],
     },
   ];
+};
+
+/**
+ * **1 要素の中の色の旅。**
+ *
+ * `hueDepth` が 0 なら `hue` から `hueSpan` ぶんまっすぐ走るだけで、彩度も一定
+ * ＝ 従来とまったく同じ並び（4 点の線形補間は 1 本の直線に戻る）。
+ * 1 では幅が半周まで広がり、途中で折り返し、彩度が白 → 色 / 色 → 白 に振れる。
+ * どちらの端も同じ 1 本の式の中の係数なので、途中の値も実在する。
+ */
+const hueRamp = (
+  axes: UnifiedAxes,
+  baseHue: number,
+  baseSpan: number,
+  seed: number,
+  index: number,
+): {
+  readonly hues: [number, number, number, number];
+  readonly saturations: [number, number, number, number];
+} => {
+  const depth = clamp01(axes.hueDepth);
+  const travel = UNIFIED.hueTravel;
+  const h = (salt: number): number => hash01(Math.round(seed) + 6151, index * 19 + salt);
+  const direction = h(1) < 0.5 ? -1 : 1;
+  const span = mix(baseSpan, travel.spanAtFullDepth * direction, depth);
+  // 折り返す要素だけが山形になる。どれが折り返すかは seed、どれだけ折り返すかは軸。
+  const turn = h(2) < travel.turnProbability ? depth : 0;
+  const mode = h(3);
+  const hues: number[] = [];
+  const saturations: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const u = i / 3;
+    const walk = mix(u, 1 - Math.abs(u * 2 - 1), turn);
+    hues.push(baseHue + span * walk);
+    const white = travel.whiteEnd;
+    const ramp =
+      mode < travel.flatProbability
+        ? 1
+        : mode < travel.flatProbability + (1 - travel.flatProbability) * 0.5
+          ? mix(white, 1, u)
+          : mix(1, white, u);
+    saturations.push(UNIFIED.tintDepth * mix(1, ramp, depth));
+  }
+  return {
+    hues: [hues[0]!, hues[1]!, hues[2]!, hues[3]!],
+    saturations: [saturations[0]!, saturations[1]!, saturations[2]!, saturations[3]!],
+  };
 };
 
 /**
@@ -666,6 +734,7 @@ const buildEventMembranes = (
       tiltY: tilt.y,
       hue: hueOf(axes, drive.hue, seed, slot * 3 + 2),
       hueSpan: 0.13,
+      ...hueRamp(axes, hueOf(axes, drive.hue, seed, slot * 3 + 2), 0.13, seed + 4409, slot),
       gradientForm: Math.floor(h(4) * 4),
       intensity:
         // **1 枚は固定の膜より淡い。** 打撃ごとに何枚も重なるので、
@@ -731,6 +800,7 @@ const buildFixedMembranes = (
       tiltY: tilt.y,
       hue: hueOf(axes, drive.hue, seed, index * 3 + 2),
       hueSpan: 0.11,
+      ...hueRamp(axes, hueOf(axes, drive.hue, seed, index * 3 + 2), 0.11, seed + 613, index),
       gradientForm: 2,
       intensity:
         (0.1 + 0.13 * share) *
@@ -802,6 +872,7 @@ const buildBeams = (
         tiltY: 0,
         hue: hueOf(axes, drive.hue, drive.seed, 40 + index),
         hueSpan: 0.05 + index * 0.02,
+        ...hueRamp(axes, hueOf(axes, drive.hue, drive.seed, 40 + index), 0.05 + index * 0.02, drive.seed, 40 + index),
         gradientForm: 2,
         intensity:
           w[2] * level * skeleton * mix(0.7, 1.15, share) * blinkOf(axes, drive, 'beam', index),
@@ -840,6 +911,7 @@ const buildBeams = (
         tiltY: 0,
         hue: hueOf(axes, drive.hue, seed, index),
         hueSpan: 0.07,
+        ...hueRamp(axes, hueOf(axes, drive.hue, seed, index), 0.07, seed, index),
         gradientForm: 0,
         intensity:
           (0.5 + 0.85 * power) * (0.82 + 0.3 * a) * blinkOf(axes, drive, 'beam', index + 3),
@@ -895,6 +967,7 @@ const buildCore = (
       tiltY: 0,
       hue: drive.hue,
       hueSpan: 0.08,
+      ...hueRamp(axes, drive.hue, 0.08, drive.beamSeed, 5),
       gradientForm: 1,
       intensity: mix(0.4, 1.55, pulse) * dilute * blinkOf(axes, drive, 'core', 0),
       shape: [shape[0], shape[1], shape[2], shape[3]],
@@ -959,6 +1032,7 @@ const buildFragments = (
       tiltY: tilt.y,
       hue: hueOf(axes, drive.hue, seed, slot),
       hueSpan: 0.1,
+      ...hueRamp(axes, hueOf(axes, drive.hue, seed, slot), 0.1, seed, slot),
       gradientForm: 3,
       intensity:
         (0.14 + c * 0.13) *
@@ -1009,6 +1083,7 @@ const buildFan = (
       tiltY: 0,
       hue: hueOf(axes, drive.hue, seed, 3),
       hueSpan: 0.13,
+      ...hueRamp(axes, hueOf(axes, drive.hue, seed, 3), 0.13, seed, 3),
       gradientForm: 3,
       intensity: 0.44 * gate * blinkOf(axes, drive, 'fan', 0),
       // [基準角, 広がり, 本数, 到達]

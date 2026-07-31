@@ -83,6 +83,16 @@ export interface UnifiedAxes {
   hueCoherence: number;
   /** 0 = 滑らかに追従 ⇄ 1 = 離散状態 + 長い保持。 */
   hueStickiness: number;
+  /**
+   * **要素の中の色の旅。**
+   *
+   * 0 = 要素 1 つはほぼ単色（色相幅 0.13 まで・彩度は一定）⇄
+   * 1 = 4 つの停留点を渡り歩き、途中で**折り返し**、彩度も白 → 色 / 色 → 白 に振れる。
+   *
+   * `Hue coherence`（要素**どうし**が同じ色相へ寄るか）とは直交する軸で、
+   * こちらは 1 枚の中で色相環をどれだけ歩くか。プリズムを通った光の分光そのもの。
+   */
+  hueDepth: number;
   /** RGB のオフセットと非相関の量。 */
   dispersion: number;
   /**
@@ -167,6 +177,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'tilt', label: 'Tilt', group: '空間', low: '正面', high: '傾き' },
   { id: 'hueCoherence', label: 'Hue coherence', group: '色', low: '要素ごと', high: '全体 1 色' },
   { id: 'hueStickiness', label: 'Hue stickiness', group: '色', low: '滑らか', high: '離散・保持' },
+  { id: 'hueDepth', label: 'Hue depth', group: '色', low: 'ほぼ単色', high: '4 点 + 往復' },
   { id: 'dispersion', label: 'Dispersion', group: '色', low: '重なる', high: 'ずれる' },
   { id: 'channelBalance', label: 'Channel balance', group: '色', low: 'R 優勢', high: 'B 優勢' },
   { id: 'membraneBeam', label: 'Membrane–Beam', group: '構成', low: '膜', high: '光条' },
@@ -202,6 +213,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   tilt: 0.3,
   hueCoherence: 0.6,
   hueStickiness: 0.5,
+  hueDepth: 0.45,
   dispersion: 0.35,
   channelBalance: 0.5,
   membraneBeam: 0.5,
@@ -240,6 +252,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     tilt: 0.75,
     hueCoherence: 0.2,
     hueStickiness: 0.2,
+    hueDepth: 0.9,
     dispersion: 0.4,
     channelBalance: 0.42,
     membraneBeam: 0.55,
@@ -271,6 +284,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     tilt: 0.35,
     hueCoherence: 0.45,
     hueStickiness: 0.3,
+    hueDepth: 0.7,
     dispersion: 0.5,
     channelBalance: 0.62,
     membraneBeam: 0.15,
@@ -302,6 +316,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     tilt: 0.05,
     hueCoherence: 1,
     hueStickiness: 1,
+    hueDepth: 0.2,
     dispersion: 0.3,
     channelBalance: 0.5,
     membraneBeam: 0.5,
