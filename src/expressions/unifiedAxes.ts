@@ -94,6 +94,16 @@ export interface UnifiedAxes {
    */
   membraneScale: number;
   /**
+   * **膜の生まれ方。**
+   *
+   * 0 = 固定のリグの膜（曲に関係なく常に同じ場所・同じ形）⇄
+   * 1 = **打撃ごとに生まれて 0.3〜2.1 秒生きて死ぬ膜**。
+   *
+   * 中間は**両方を出して明るさを配分する**ので、途中は「動かない膜の上に
+   * 打撃の膜が重なる」見え方になる（切替ではない）。
+   */
+  eventMembrane: number;
+  /**
    * **質感の量。**
    *
    * 0 = 手続きで描いた形だけ ⇄ 1 = アトラスの素材が濃淡を支配する。
@@ -149,6 +159,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'channelBalance', label: 'Channel balance', group: '色', low: 'R 優勢', high: 'B 優勢' },
   { id: 'membraneBeam', label: 'Membrane–Beam', group: '構成', low: '膜', high: '光条' },
   { id: 'membraneScale', label: 'Membrane scale', group: '構成', low: '画面基準', high: 'ワールド固定' },
+  { id: 'eventMembrane', label: 'Event membrane', group: '構成', low: '固定の膜', high: '打撃ごとに生死' },
   { id: 'textureGrain', label: 'Texture grain', group: '構成', low: '手続き形状', high: '素材が支配' },
   { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
@@ -182,6 +193,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   channelBalance: 0.5,
   membraneBeam: 0.5,
   membraneScale: 0.45,
+  eventMembrane: 0.4,
   textureGrain: 0.4,
   fragments: 0.5,
   fragmentCharacter: 0.4,
@@ -218,6 +230,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     channelBalance: 0.42,
     membraneBeam: 0.55,
     membraneScale: 0.9,
+    eventMembrane: 0.9,
     textureGrain: 0.85,
     fragments: 0.6,
     fragmentCharacter: 0.85,
@@ -247,6 +260,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     channelBalance: 0.62,
     membraneBeam: 0.15,
     membraneScale: 0.6,
+    eventMembrane: 0.8,
     textureGrain: 0.6,
     fragments: 0.6,
     fragmentCharacter: 0.7,
@@ -276,6 +290,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     channelBalance: 0.5,
     membraneBeam: 0.5,
     membraneScale: 0.1,
+    eventMembrane: 0.1,
     textureGrain: 0.15,
     fragments: 0.55,
     fragmentCharacter: 0.15,

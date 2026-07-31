@@ -481,6 +481,13 @@ export class OpticsAudioDrive {
 
   /** 打撃の検出。**この表現は検出器を持つだけで、中身は一切変えない。** */
   private readonly detector = new BandLightEventDetector();
+  /**
+   * **このフレームで発火した打撃。** 読み出し専用の覗き窓で、ここから先の
+   * 検出・結線・時間規律には一切関わらない（既存の表現の見え方は 1 画素も変わらない）。
+   * 統合表現が「打撃ごとに生まれて死ぬ膜」を数えるために読む。
+   */
+  private readonly frameStrikes: { seed: number; index: number; strength: number; band: string }[] =
+    [];
   private strikeCount = 0;
   private pulseCount = 0;
   private lastStrength = 0;
@@ -861,6 +868,7 @@ export class OpticsAudioDrive {
 
   /** 表現を開き直したときに呼ぶ。前の曲の余韻も統計も持ち越さない。 */
   reset(): void {
+    this.frameStrikes.length = 0;
     this.skeleton = 0;
     this.curtain = 0;
     this.haze = 0;
@@ -948,6 +956,7 @@ export class OpticsAudioDrive {
   ): void {
     const playing = audio.active === 1;
     this.frameCount += 1;
+    this.frameStrikes.length = 0;
 
     // ---- 持続（Step 1）: 音量を 3 つの時定数で受ける（状態の量。連続で回す）----
     // **持続の濃さ。** 正規化後の音量はそのままでは低すぎて場が立ち上がらないので、
@@ -1054,6 +1063,12 @@ export class OpticsAudioDrive {
       this.lastBand = event.band;
       this.strikeSeed = clamp01(event.snapshot.audioSeed);
       this.strikeIndex = event.eventIndex;
+      this.frameStrikes.push({
+        seed: (Math.round(clamp01(event.snapshot.audioSeed) * 100003) + event.eventIndex * 7919) | 0,
+        index: event.eventIndex,
+        strength,
+        band: event.band,
+      });
       // **発火したフレームだけ値が入る衝撃**（減衰させない）。
       // 減衰させると既定の接続で「1 ティックだけ光る」現行挙動が再現できない。
       this.opticsStrike = Math.max(this.opticsStrike, strength);
@@ -1525,6 +1540,14 @@ export class OpticsAudioDrive {
     let n = 0;
     for (let i = 0; i < this.trace.length; i++) if (this.trace[i]! > 0.01) n += 1;
     return n;
+  }
+
+  /**
+   * **このフレームで発火した打撃。** 呼ぶだけでは何も変わらない読み出し窓。
+   * 打撃ごとに生まれる要素（統合表現の膜）を作る側がここを見る。
+   */
+  strikes(): readonly { readonly seed: number; readonly index: number; readonly strength: number; readonly band: string }[] {
+    return this.frameStrikes;
   }
 
   /** 場の中身を読み出す（開発・検証用）。**書き換えないこと。** */

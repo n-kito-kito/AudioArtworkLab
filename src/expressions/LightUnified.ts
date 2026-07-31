@@ -24,6 +24,7 @@ import {
   UNIFIED_KIND_INDEX,
   buildUnifiedRig,
   capUnifiedRig,
+  hash01,
   type UnifiedDrive,
   type UnifiedLayer,
 } from './unifiedRig';
@@ -64,6 +65,12 @@ const LIMITS = {
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
+/** 0〜1 の滑らかな立ち上がり（GLSL の同名関数と同じ形）。 */
+const smoothstep = (edge0: number, edge1: number, value: number): number => {
+  const t = clamp((value - edge0) / Math.max(edge1 - edge0, 1e-6), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
 /**
  * **音へ繋げる軸。**
  *
@@ -87,6 +94,32 @@ const HUE = { confirmMin: 0.2, confirmMax: 1.8, holdMin: 1, holdMax: 10 } as con
 /** `Density` 軸が生成核へ渡す倍率の範囲。 */
 const DENSITY = { min: 0.45, max: 2.6 } as const;
 
+/**
+ * **打撃ごとに生まれる膜（`Event membrane` 軸）の実寸。**
+ *
+ * 数値はここにしか書かない。寿命は `Decay` 軸が伸ばし、枚数は `Density` 軸が掛ける。
+ */
+const EVENT_MEMBRANE = {
+  /** 1 つの打撃が生む枚数（弱い打撃 → 強い打撃）。 */
+  countAtWeakStrike: 2,
+  countAtStrongStrike: 5,
+  /** 同時に生きられる枚数。プールの上限。 */
+  poolMaximum: 24,
+  /** 開くまでの遅れ（秒）。打撃の直後ではなく、少し遅れて膜が追いつく。 */
+  delayMinimum: 0.02,
+  delayMaximum: 0.22,
+  /** 生きる長さ（秒）。`Decay` 軸 0 で短命、1 で長い。 */
+  lifeAtShortDecay: 0.3,
+  lifeAtLongDecay: 2.1,
+  /** 同じ打撃でも枚ごとに残り方を変える（まとめて消えないため）。 */
+  lifeSpreadMinimum: 0.7,
+  lifeSpreadMaximum: 1.35,
+  /** 開ききるまでの割合と、落ち始める割合（寿命に対する比）。 */
+  attackFractionAtSharp: 0.02,
+  attackFractionAtSlow: 0.3,
+  holdFraction: 0.32,
+} as const;
+
 /** 散らばりのシード。**固定値**（同じ音なら必ず同じ絵になる）。 */
 const UNIFIED_SEED = 7;
 
@@ -101,6 +134,7 @@ const SILENT_DRIVE: UnifiedDrive = {
   fanPower: 0,
   fanSeed: -1,
   fragments: [],
+  membranes: [],
   hue: 0,
   tick: 0,
   time: 0,
@@ -111,6 +145,8 @@ export interface LightUnifiedState {
   readonly layers: number;
   /** 上限で切る**前**の枚数。切り落としが起きたかを検証で読む。 */
   readonly rigLayers: number;
+  /** 生きている「打撃ごとの膜」の枚数。 */
+  readonly eventMembranes: number;
   readonly whiteAllowedLayers: number;
   readonly axes: UnifiedAxes;
   readonly hue: number;
@@ -149,6 +185,23 @@ export class LightUnified implements LabExpression {
   private readonly beamShape = new EmissionShape();
   private beamMaskHeld = 0;
   private beamSeedHeld = 0;
+  /**
+   * **打撃ごとに生まれた膜のプール。**
+   *
+   * リグ（`buildUnifiedRig`）は状態を持たない純関数なので、
+   * 「いつ生まれて、いつ死ぬか」はここが持つ。位置も形も素材も
+   * **その打撃の seed** から決まるので、同じ音なら同じ膜が同じ順に生まれる。
+   */
+  private readonly eventMembranes: {
+    readonly seed: number;
+    readonly slot: number;
+    readonly strength: number;
+    readonly band: string;
+    readonly delay: number;
+    readonly life: number;
+    age: number;
+  }[] = [];
+
   /** 破片 1 枚ごとの時間の形（死んでも尾のあいだは残す）。 */
   private readonly fragmentShapes = new Map<
     number,
@@ -345,6 +398,8 @@ export class LightUnified implements LabExpression {
     }
     for (const tail of tails) fragments.push(tail);
 
+    this.advanceEventMembranes(delta);
+
     this.drive = {
       fieldLevel: field,
       corePulse,
@@ -355,6 +410,7 @@ export class LightUnified implements LabExpression {
       fanPower,
       fanSeed: fanPower > 0 ? this.fanLight.hold : -1,
       fragments,
+      membranes: this.eventMembraneDrive(),
       hue: this.hueOf(),
       tick,
       time: elapsed,
@@ -368,6 +424,87 @@ export class LightUnified implements LabExpression {
    * 途中は「少しだけ段のある滑らかさ」になる（切替ではない）。
    * 円周上の最短路で混ぜるので、0 と 1 の境目でも跳ばない。
    */
+  /**
+   * **打撃ごとの膜を生み、歳を取らせ、死んだものを捨てる。**
+   *
+   * 生成核が「このフレームで発火した打撃」を読み出し窓として出しているので、
+   * ここはそれを数えるだけ。枚数は打撃の強さと `Density` 軸、
+   * 寿命は `Decay` 軸が決める。位置も形も**その打撃の seed** から決まるので決定論。
+   */
+  private advanceEventMembranes(delta: number): void {
+    const amount = clamp(this.axes.eventMembrane, 0, 1);
+    for (let index = this.eventMembranes.length - 1; index >= 0; index--) {
+      const entry = this.eventMembranes[index]!;
+      entry.age += delta;
+      if (entry.age >= entry.delay + entry.life) this.eventMembranes.splice(index, 1);
+    }
+    // 軸が 0 のあいだは 1 枚も抱えない（無音 = 黒と同じで、状態も持たない）。
+    if (amount <= 0) {
+      this.eventMembranes.length = 0;
+      return;
+    }
+    const density = clamp(this.axes.density, 0, 1);
+    const decay = clamp(this.axes.decay, 0, 1);
+    for (const strike of this.audioDrive.strikes()) {
+      const strength = clamp(strike.strength, 0, 1);
+      const wanted = Math.max(
+        Math.round(
+          (EVENT_MEMBRANE.countAtWeakStrike +
+            (EVENT_MEMBRANE.countAtStrongStrike - EVENT_MEMBRANE.countAtWeakStrike) * strength) *
+            (DENSITY.min + density * (DENSITY.max - DENSITY.min)) *
+            amount,
+        ),
+        1,
+      );
+      for (let slot = 0; slot < wanted; slot++) {
+        if (this.eventMembranes.length >= EVENT_MEMBRANE.poolMaximum) break;
+        const h = (salt: number): number => hash01(strike.seed + 8093, slot * 11 + salt);
+        this.eventMembranes.push({
+          seed: strike.seed,
+          slot,
+          strength,
+          band: strike.band,
+          delay:
+            EVENT_MEMBRANE.delayMinimum +
+            h(1) * (EVENT_MEMBRANE.delayMaximum - EVENT_MEMBRANE.delayMinimum),
+          life:
+            (EVENT_MEMBRANE.lifeAtShortDecay +
+              decay * (EVENT_MEMBRANE.lifeAtLongDecay - EVENT_MEMBRANE.lifeAtShortDecay)) *
+            (EVENT_MEMBRANE.lifeSpreadMinimum +
+              h(2) * (EVENT_MEMBRANE.lifeSpreadMaximum - EVENT_MEMBRANE.lifeSpreadMinimum)),
+          age: 0,
+        });
+      }
+    }
+  }
+
+  /**
+   * 生きている膜の**いまの明るさ**。遅れて開き、少し保ち、寿命の終わりで 0 へ戻る。
+   * `Attack` 軸が開き方の速さを決める（0 で即座に開く）。
+   */
+  private eventMembraneDrive(): UnifiedDrive['membranes'] {
+    const attack = clamp(this.axes.attack, 0, 1);
+    const rise =
+      EVENT_MEMBRANE.attackFractionAtSharp +
+      attack * (EVENT_MEMBRANE.attackFractionAtSlow - EVENT_MEMBRANE.attackFractionAtSharp);
+    const out: UnifiedDrive['membranes'][number][] = [];
+    for (const entry of this.eventMembranes) {
+      const t = (entry.age - entry.delay) / Math.max(entry.life, 1e-4);
+      if (t <= 0) continue;
+      const gain =
+        smoothstep(0, rise, t) * (1 - smoothstep(EVENT_MEMBRANE.holdFraction, 1, t));
+      if (gain <= 0) continue;
+      out.push({
+        seed: entry.seed,
+        slot: entry.slot,
+        strength: entry.strength,
+        band: entry.band,
+        gain,
+      });
+    }
+    return out;
+  }
+
   /** `Density` 軸を生成核へ渡す（1 バーストの枚数・同時数・打撃の間隔）。 */
   private applyDensity(): void {
     this.audioDrive.setDensity(DENSITY.min + clamp(this.axes.density, 0, 1) * (DENSITY.max - DENSITY.min));
@@ -398,6 +535,7 @@ export class LightUnified implements LabExpression {
     this.fanLight.hold = -1;
     this.beamShape.reset();
     this.fragmentShapes.clear();
+    this.eventMembranes.length = 0;
     this.beamMaskHeld = 0;
     this.beamSeedHeld = 0;
     this.drive = SILENT_DRIVE;
@@ -984,6 +1122,7 @@ export class LightUnified implements LabExpression {
     return {
       layers: this.layers.length,
       rigLayers: this.rigLayers,
+      eventMembranes: this.eventMembranes.length,
       whiteAllowedLayers: this.layers.filter((entry) => entry.whiteAllowed).length,
       axes: { ...this.axes },
       hue: this.drive.hue,

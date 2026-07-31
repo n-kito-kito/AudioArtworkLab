@@ -136,6 +136,17 @@ export interface UnifiedDrive {
     /** 時間軸（Attack / Decay / Strobe）が作った明るさの係数。 */
     readonly gain: number;
   }[];
+  /**
+   * **打撃ごとに生まれて死ぬ膜。** 位置・形・素材はイベントの seed から決まり、
+   * `gain` は誕生からの経過が作った明るさ（遅れて開き、遅れて消える）。
+   */
+  readonly membranes: readonly {
+    readonly seed: number;
+    readonly slot: number;
+    readonly strength: number;
+    readonly band: string;
+    readonly gain: number;
+  }[];
   /** グローバル色相。 */
   readonly hue: number;
   /** 光学クロックのティック番号（−1 で連続）。 */
@@ -179,6 +190,11 @@ export const UNIFIED = {
    * ＝ 遠近が相殺されない（Spatial の `macroWorldHalfSize` と同じ流儀）。
    */
   membraneWorldHalf: 3.4,
+  /**
+   * **打撃ごとの膜 1 枚の濃さ**（固定のリグの膜に対する倍率）。
+   * 1 つの打撃が数枚を生み、それが重なって残るので、1 枚は薄くしておく。
+   */
+  eventMembraneScale: 0.42,
   /**
    * **種別ごとに必ず確保する枠。**
    *
@@ -593,12 +609,104 @@ const buildMembranes = (
   viewport: UnifiedViewport,
 ): UnifiedLayer[] => {
   const level = clamp01(drive.fieldLevel);
-  if (level <= 0) return [];
   // 性格の軸。膜側（0）で多く厚く、光条側（1）で少なく薄くなる。
   const share = 1 - clamp01(axes.membraneBeam);
+  const scale = clamp01(axes.membraneScale);
+  // **明るさの配分。** 0 で固定のリグだけ、1 で打撃の膜だけ。途中は両方が出る。
+  const eventShare = clamp01(axes.eventMembrane);
+  const out: UnifiedLayer[] = [];
+  const fixedShare = 1 - eventShare;
+  if (level > 0 && fixedShare > 0) {
+    out.push(...buildFixedMembranes(drive, axes, viewport, share, scale, fixedShare, level));
+  }
+  if (eventShare > 0) {
+    out.push(...buildEventMembranes(drive, axes, viewport, share, scale, eventShare));
+  }
+  return out;
+};
+
+/**
+ * **打撃ごとに生まれて死ぬ膜。**
+ *
+ * 固定のリグの膜は曲に関係なく同じ場所に居続けるので、音が変わっても絵が変わらない。
+ * ここは 1 つの打撃が 2〜5 枚の膜を生み、遅れて開いて、寿命が尽きたら消える
+ * （寿命と枚数は表現側のプールが決め、この関数は**その時点の姿を組み立てるだけ**）。
+ */
+const buildEventMembranes = (
+  drive: UnifiedDrive,
+  axes: UnifiedAxes,
+  viewport: UnifiedViewport,
+  share: number,
+  scale: number,
+  eventShare: number,
+): UnifiedLayer[] => {
+  const out: UnifiedLayer[] = [];
+  for (const born of drive.membranes) {
+    const gain = clamp01(born.gain);
+    if (gain <= 0) continue;
+    const seed = Math.round(born.seed);
+    const slot = born.slot;
+    const h = (salt: number): number => hash01(seed + 4409, slot * 17 + salt);
+    const z = depthOf(axes, mix(0.05, 0.95, h(1)));
+    const e = halfExtent(z, viewport);
+    const place = placeOf(axes, seed, slot * 3 + 1);
+    const d = drift(axes, seed, slot, drive.time);
+    const tilt = tiltOf(axes, seed + 4409, slot);
+    const wide = 0.5 + h(2) * 0.7;
+    const size = membraneHalf(axes, e, wide, share);
+    out.push({
+      kind: 'membrane',
+      position: [(place.nx + d.x) * e.w * 0.85, (place.ny + d.y) * e.h * 0.7, z],
+      half: [size.w, size.h],
+      spin: (h(3) - 0.5) * TAU * 0.5,
+      tiltX: tilt.x,
+      tiltY: tilt.y,
+      hue: hueOf(axes, drive.hue, seed, slot * 3 + 2),
+      hueSpan: 0.13,
+      gradientForm: Math.floor(h(4) * 4),
+      intensity:
+        // **1 枚は固定の膜より淡い。** 打撃ごとに何枚も重なるので、
+        // 同じ濃さで出すと画面が塗りになる。濃いのは重なった場所だけ。
+        (0.1 + 0.13 * share) *
+        UNIFIED.eventMembraneScale *
+        mix(1, 2.1, scale) *
+        mix(0.55, 1.25, clamp01(born.strength)) *
+        gain *
+        eventShare *
+        depthDim(z) *
+        blinkOf(axes, drive, 'membrane', slot),
+      // [形状族, 襞の周期, 帯の半幅, 折れ]
+      shape: [
+        Math.floor(h(5) * 3),
+        3 + h(6) * 8,
+        mix(0.24, 0.5, scale) + h(7) * mix(0.26, 0.5, scale),
+        (h(8) - 0.5) * 0.9,
+      ],
+      edge: clamp01(axes.blur),
+      halo: haloOf(axes, 'membrane'),
+      pad: padOf(axes),
+      character: 0,
+      material: materialOf(axes, 'membrane', seed, slot, born.band),
+      whiteAllowed: false,
+      ceiling: mix(UNIFIED.membraneCeiling, UNIFIED.membraneCeilingWide, scale),
+      channel: [1.3, 1.5, 0.045, 0.28],
+    });
+  }
+  return out;
+};
+
+/** 固定のリグの膜（従来の作り）。`eventMembrane` が 1 なら 1 枚も出ない。 */
+const buildFixedMembranes = (
+  drive: UnifiedDrive,
+  axes: UnifiedAxes,
+  viewport: UnifiedViewport,
+  share: number,
+  scale: number,
+  fixedShare: number,
+  level: number,
+): UnifiedLayer[] => {
   const wanted = mix(1, UNIFIED.membraneCount, share);
   const count = Math.max(Math.ceil(wanted), 1);
-  const scale = clamp01(axes.membraneScale);
   const out: UnifiedLayer[] = [];
   const seed = Math.round(drive.seed);
   for (let index = 0; index < count; index++) {
@@ -625,6 +733,7 @@ const buildMembranes = (
         (0.1 + 0.13 * share) *
         // ワールド固定側では 1 枚が濃くなる（天井も同じ 1 本で上がる）。
         mix(1, 2.1, scale) *
+        fixedShare *
         level *
         depthDim(z) *
         blinkOf(axes, drive, 'membrane', index) *
