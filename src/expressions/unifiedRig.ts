@@ -138,6 +138,24 @@ export const UNIFIED = {
   fragmentCount: 16,
   beamCount: 4,
   /**
+   * **種別ごとに必ず確保する枠。**
+   *
+   * 層の合計が上限を超えたとき、**先頭から切ると末尾の種別が丸ごと消える**。
+   * 組み立て順の末尾は扇と核なので、密度を上げると**白へ届いてよい唯一の層が
+   * 落ちる**という壊れ方をしていた。ここに書いた枚数は種別ごとに先取りし、
+   * 余りだけを元の並びで配る（`capUnifiedRig`）。
+   *
+   * 合計は上限より小さくしておくこと（全種別が確実に枠を取れる条件）。
+   */
+  reserve: {
+    core: 4,
+    fan: 2,
+    beam: 8,
+    haze: 2,
+    membrane: 8,
+    fragment: 20,
+  } as Readonly<Record<UnifiedKind, number>>,
+  /**
    * **にじみが最大のときの板の余白**（1.4 なら板は 2.4 倍）。
    * ハロは `exp(-r^2 * 1.6)` なので r = 2.4 では 1 万分の 1 になり、
    * 縁に届く前に消える。
@@ -745,6 +763,42 @@ export const buildUnifiedRig = (
   ...buildFan(drive, axes, viewport),
   ...buildCore(drive, axes, viewport),
 ];
+
+/**
+ * **層の上限を種別ごとの枠で切る。**
+ *
+ * 単純な `slice(0, limit)` だと、**組み立て順の末尾（扇と核）から落ちる**。
+ * 破片は密度で 36 枚まで増えるので、上限 48 では核と扇が枠に届かず、
+ * **白へ届いてよい唯一の層が消える**という壊れ方をしていた。
+ *
+ * ここでは 2 周する。1 周目は種別ごとに `UNIFIED.reserve` の枚数までを先取りし、
+ * 2 周目で残りの枠を元の並びのまま埋める。枠の合計が上限より小さいので、
+ * **どの密度でも核と扇は必ず残る**。並びは元の順序を保つので絵は変わらない
+ * （加算合成なので順序自体は見え方に影響しない）。
+ */
+export const capUnifiedRig = (
+  layers: readonly UnifiedLayer[],
+  limit: number,
+): UnifiedLayer[] => {
+  if (layers.length <= limit) return [...layers];
+  const taken = new Array<boolean>(layers.length).fill(false);
+  const used: Partial<Record<UnifiedKind, number>> = {};
+  let count = 0;
+  for (let index = 0; index < layers.length && count < limit; index++) {
+    const kind = layers[index]!.kind;
+    const already = used[kind] ?? 0;
+    if (already >= UNIFIED.reserve[kind]) continue;
+    used[kind] = already + 1;
+    taken[index] = true;
+    count += 1;
+  }
+  for (let index = 0; index < layers.length && count < limit; index++) {
+    if (taken[index]) continue;
+    taken[index] = true;
+    count += 1;
+  }
+  return layers.filter((_, index) => taken[index]!);
+};
 
 /** ティック速度（fps）。軸から実寸へ。 */
 export const unifiedTickRate = tickRateOf;

@@ -23,6 +23,7 @@ import {
   UNIFIED,
   UNIFIED_KIND_INDEX,
   buildUnifiedRig,
+  capUnifiedRig,
   type UnifiedDrive,
   type UnifiedLayer,
 } from './unifiedRig';
@@ -43,7 +44,11 @@ import { EmissionShape } from './unifiedTime';
  */
 
 const LIMITS = {
-  /** インスタンスの上限。靄 1 + 膜 4 + 光条 7 + 破片 8 + 扇 1 + 核 1 に余裕を持たせる。 */
+  /**
+   * インスタンスの上限。靄 1 + 膜 4 + 光条 7 + 破片 36 + 扇 1 + 核 1 を超えるので、
+   * 切るときは**種別ごとの枠**（`capUnifiedRig`）で切る。単純に先頭から取ると
+   * 末尾の扇と核が落ち、白へ届いてよい唯一の層が消える。
+   */
   maximumLayers: 48,
   /** 尾を引いている破片も保持するので、生きている枚数より少し多く持つ。 */
   maximumFragmentShapes: 40,
@@ -100,6 +105,8 @@ const SILENT_DRIVE: UnifiedDrive = {
 
 export interface LightUnifiedState {
   readonly layers: number;
+  /** 上限で切る**前**の枚数。切り落としが起きたかを検証で読む。 */
+  readonly rigLayers: number;
   readonly whiteAllowedLayers: number;
   readonly axes: UnifiedAxes;
   readonly hue: number;
@@ -146,6 +153,8 @@ export class LightUnified implements LabExpression {
 
   private drive: UnifiedDrive = SILENT_DRIVE;
   private layers: readonly UnifiedLayer[] = [];
+  /** 上限で切る前の枚数（検証用）。 */
+  private rigLayers = 0;
   private context: CompositionContext | null = null;
   private scene: THREE.Scene | null = null;
   private camera: THREE.PerspectiveCamera | null = null;
@@ -387,7 +396,8 @@ export class LightUnified implements LabExpression {
     const rig = buildUnifiedRig(this.drive, this.effectiveAxes(), {
       aspectRatio: this.aspectRatio,
     });
-    this.layers = rig.slice(0, LIMITS.maximumLayers);
+    this.rigLayers = rig.length;
+    this.layers = capUnifiedRig(rig, LIMITS.maximumLayers);
     this.writeLayers();
   }
 
@@ -859,6 +869,7 @@ export class LightUnified implements LabExpression {
   getUnifiedState(): LightUnifiedState {
     return {
       layers: this.layers.length,
+      rigLayers: this.rigLayers,
       whiteAllowedLayers: this.layers.filter((entry) => entry.whiteAllowed).length,
       axes: { ...this.axes },
       hue: this.drive.hue,
