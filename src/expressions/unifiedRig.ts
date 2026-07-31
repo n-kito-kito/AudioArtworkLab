@@ -240,10 +240,16 @@ const placeOf = (
   const nx = (a - 0.5) * 2 * clamp01(axes.spreadX);
   const ny = (b - 0.5) * 2 * clamp01(axes.spreadY);
   const pull = clamp01(axes.anchorPull);
-  // 軸へ引き寄せる: x か y のどちらか近いほうの軸へ寄る（＝十字に沿う）。
-  const toAxisX = Math.abs(nx) < Math.abs(ny) ? mix(nx, 0, pull) : nx;
-  const toAxisY = Math.abs(ny) <= Math.abs(nx) ? mix(ny, 0, pull) : ny;
-  return { nx: toAxisX, ny: toAxisY };
+  if (pull <= 0) return { nx, ny };
+  // 軸へ引き寄せる: 近いほうの軸へ寄る（＝十字に沿う）。
+  // **どちらが近いかを分岐で決めない** — 大きさの比で連続に重みを配るので、
+  // |nx| と |ny| が入れ替わる境目でも位置は跳ばない。
+  const sum = Math.abs(nx) + Math.abs(ny);
+  const weight = sum > 1e-6 ? Math.abs(ny) / sum : 0.5;
+  return {
+    nx: mix(nx, 0, pull * weight),
+    ny: mix(ny, 0, pull * (1 - weight)),
+  };
 };
 
 /** 傾き。`tilt` が 0 なら正面。 */
@@ -474,8 +480,19 @@ const buildBeams = (
   return out;
 };
 
-/** **核。** 白へ届いてよい唯一の層。 */
-const buildCore = (drive: UnifiedDrive, axes: UnifiedAxes): UnifiedLayer[] => {
+/**
+ * **核。** 白へ届いてよい唯一の層。
+ *
+ * 位置も `spreadX/Y` と `anchorPull` に従う。**中心に固定しない**のは、
+ * 空間に散る側の見え方では白熱もあちこちで起きるからで、
+ * 軸を 0 にすれば従来どおり画面の真ん中に戻る（打撃ごとの居場所は
+ * その打撃のシードから決まるので決定論）。
+ */
+const buildCore = (
+  drive: UnifiedDrive,
+  axes: UnifiedAxes,
+  viewport: UnifiedViewport,
+): UnifiedLayer[] => {
   const pulse = clamp01(drive.corePulse);
   if (pulse <= 0) return [];
   const index = Math.round(drive.coreShape);
@@ -484,10 +501,14 @@ const buildCore = (drive: UnifiedDrive, axes: UnifiedAxes): UnifiedLayer[] => {
       ? CORE_SHAPE_PARAMS[index]!
       : ([-1, 0, 0, 1] as const);
   const z = depthOf(axes, 0.25);
+  const e = halfExtent(z, viewport);
+  const seed = Math.round(drive.beamSeed);
+  const place = placeOf(axes, seed + 977, index + 1);
+  const d = drift(axes, seed + 977, index + 1, drive.time);
   return [
     {
       kind: 'core',
-      position: [0, 0, z],
+      position: [(place.nx + d.x) * e.w * 0.7, (place.ny + d.y) * e.h * 0.7, z],
       half: [mix(0.34, 0.5, pulse), mix(0.34, 0.5, pulse)],
       spin: 0,
       tiltX: 0,
@@ -570,7 +591,11 @@ const buildFragments = (
 };
 
 /** **扇。** 強い出来事のときだけ開く放射。 */
-const buildFan = (drive: UnifiedDrive, axes: UnifiedAxes): UnifiedLayer[] => {
+const buildFan = (
+  drive: UnifiedDrive,
+  axes: UnifiedAxes,
+  viewport: UnifiedViewport,
+): UnifiedLayer[] => {
   const gate = clamp01(drive.fanPower);
   if (gate <= 0) return [];
   const seed = Math.round(drive.fanSeed);
@@ -578,10 +603,12 @@ const buildFan = (drive: UnifiedDrive, axes: UnifiedAxes): UnifiedLayer[] => {
   const b = seed >= 0 ? hash01(seed, 102) : 0.5;
   const c = seed >= 0 ? hash01(seed, 103) : 0.5;
   const z = depthOf(axes, 0.3);
+  const e = halfExtent(z, viewport);
+  const place = placeOf(axes, seed + 733, 2);
   return [
     {
       kind: 'fan',
-      position: [0, 0, z],
+      position: [place.nx * e.w * 0.55, place.ny * e.h * 0.55, z],
       half: [2.5 * mix(0.82, 1, gate), 2.5 * mix(0.82, 1, gate)],
       spin: 0,
       tiltX: 0,
@@ -620,8 +647,8 @@ export const buildUnifiedRig = (
   ...buildMembranes(drive, axes, viewport),
   ...buildBeams(drive, axes, viewport),
   ...buildFragments(drive, axes, viewport),
-  ...buildFan(drive, axes),
-  ...buildCore(drive, axes),
+  ...buildFan(drive, axes, viewport),
+  ...buildCore(drive, axes, viewport),
 ];
 
 /** ティック速度（fps）。軸から実寸へ。 */
