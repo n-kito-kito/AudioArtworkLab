@@ -405,7 +405,9 @@ export class LightUnified implements LabExpression {
       const { delay, decayScale } = lag(kind);
       const shape = this.fieldShapes[kind];
       shape.advance(this.fieldLine.read(elapsed - delay), delta, tick, attack, decay, decayScale);
-      fieldLevels[kind] = Math.min(shape.read(strobe) * UNIFIED.fieldGain, 1);
+      const level = Math.min(shape.read(strobe) * UNIFIED.fieldGain, 1);
+      // **無音 = 黒。** 平滑は 0 へ漸近するだけなので、下限を切って 1 枚も出さない。
+      fieldLevels[kind] = level < UNIFIED.fieldFloor ? 0 : level;
     }
 
     // ---- 核: 生きているあいだの形状族を覚えておき、尾のあいだも同じ形で消える ----
@@ -547,14 +549,15 @@ export class LightUnified implements LabExpression {
     const spread = TIME.stagger.delay.membrane! > 0 ? lagScale / TIME.stagger.delay.membrane! : 0;
     for (const strike of this.audioDrive.strikes()) {
       const strength = clamp(strike.strength, 0, 1);
-      const wanted = Math.max(
-        Math.round(
-          (EVENT_MEMBRANE.countAtWeakStrike +
-            (EVENT_MEMBRANE.countAtStrongStrike - EVENT_MEMBRANE.countAtWeakStrike) * strength) *
-            (DENSITY.min + density * (DENSITY.max - DENSITY.min)) *
-            amount,
-        ),
-        1,
+      /**
+       * 枚数に下限は置かない。**置くと軸をどれだけ絞っても打撃ごとに 1 枚生まれ**、
+       * 0 側で「固定の膜だけ」に戻らなくなる。連続性は明るさの配分（`eventShare`）が持つ。
+       */
+      const wanted = Math.round(
+        (EVENT_MEMBRANE.countAtWeakStrike +
+          (EVENT_MEMBRANE.countAtStrongStrike - EVENT_MEMBRANE.countAtWeakStrike) * strength) *
+          (DENSITY.min + density * (DENSITY.max - DENSITY.min)) *
+          amount,
       );
       for (let slot = 0; slot < wanted; slot++) {
         if (this.eventMembranes.length >= EVENT_MEMBRANE.poolMaximum) break;
