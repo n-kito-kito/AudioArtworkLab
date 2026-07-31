@@ -3,6 +3,8 @@ import type { Effect } from '../effects/Effect';
 import { EffectPipeline } from '../effects/EffectPipeline';
 import { THEMES, type Theme } from '../engine/themes';
 import { getSourceShelf, type AudioSourceShelf } from '../engine/binding/sources';
+import { BindingResolver } from '../engine/binding/resolve';
+import { defaultTransformFor, type ParamDecl } from '../engine/binding/types';
 import type { CompositionContext, DesignLayerCanvases } from '../compositions/Composition';
 import type { ExpressionParam, LabExpression } from './Expression';
 import type { ExpressionId } from './catalog';
@@ -53,6 +55,23 @@ const LIMITS = {
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
+/**
+ * **音へ繋げる軸。**
+ *
+ * 「触る場所」と「繋ぐ場所」を分けない — スライダーのそこにソース選択を直付けする。
+ * どれも 0〜1 の連続量なので、基準値 ± 変調という結線の契約にそのまま乗る。
+ * 発光そのもの（場・打撃・扇）と色相 H は、下流の時間規律を壊さないために
+ * `OpticsAudioDrive` 側の 1 本（発光 All / H の音色）へ繋ぐ。
+ */
+const UNIFIED_LOOK_PARAMS: readonly ParamDecl[] = [
+  { id: 'intensity', label: 'Intensity', min: 0, max: 1, default: 0.5, kind: 'continuous' },
+  { id: 'dispersion', label: 'Channel decorrelation', min: 0, max: 1, default: 0.35, kind: 'continuous' },
+  { id: 'depthSpread', label: 'Depth', min: 0, max: 1, default: 0.45, kind: 'continuous' },
+  { id: 'channelBalance', label: 'Channel balance', min: 0, max: 1, default: 0.5, kind: 'continuous' },
+];
+
+const LOOK_KEYS = new Set(UNIFIED_LOOK_PARAMS.map((entry) => entry.id));
+
 /** `Hue stickiness` が伸ばす時間（秒）。 */
 const HUE = { confirmMin: 0.2, confirmMax: 1.8, holdMin: 1, holdMax: 10 } as const;
 
@@ -101,6 +120,8 @@ export class LightUnified implements LabExpression {
 
   /** 音 → 生成核。3 表現と同じ検出・結線・痕跡場をそのまま使う。 */
   private readonly audioDrive = new OpticsAudioDrive();
+  /** 見え方の軸を音へ繋ぐ解決器（発光と H は生成核の側に持つ）。 */
+  private readonly lookResolver = new BindingResolver();
   private shelf: AudioSourceShelf | null = null;
   private previousElapsed = -1;
 
@@ -175,6 +196,12 @@ export class LightUnified implements LabExpression {
     this.previousElapsed = -1;
     this.shelf = getSourceShelf(context.audioEngine);
     this.audioDrive.setShelf(this.shelf);
+    this.lookResolver.declare(UNIFIED_LOOK_PARAMS);
+    this.lookResolver.setSources(this.shelf.list());
+    this.lookResolver.reset();
+    for (const decl of UNIFIED_LOOK_PARAMS) {
+      this.lookResolver.setBase(decl.id, this.axes[decl.id as keyof UnifiedAxes]);
+    }
 
     this.applyStickiness();
     this.audioDrive.setTraceAmount(this.axes.trace);
@@ -210,6 +237,25 @@ export class LightUnified implements LabExpression {
    * `Strobe` はティックへのラッチ量（ここ）と off ティックの消灯深さ（層ごと・リグ側）
    * という**連続な係数**として掛かる（`unifiedTime.ts`）。門の入り切りではない。
    */
+  /**
+   * **結線を通した軸の値。** 繋いでいなければ基準値（スライダー）そのもの。
+   * 変調は「基準値 ± 深さ」なので、繋いだ瞬間に見え方が飛ばない。
+   */
+  private lookValue(key: string): number {
+    const binding = this.lookResolver.getBinding(key);
+    if (!binding || !binding.sourceId) return this.axes[key as keyof UnifiedAxes];
+    return clamp(this.lookResolver.valueOf(key), 0, 1);
+  }
+
+  /** 描画が実際に使う軸。結線した 4 本だけが基準値から動く。 */
+  private effectiveAxes(): UnifiedAxes {
+    const out = { ...this.axes };
+    for (const decl of UNIFIED_LOOK_PARAMS) {
+      out[decl.id as keyof UnifiedAxes] = this.lookValue(decl.id);
+    }
+    return out;
+  }
+
   private advanceDrive(elapsed: number, delta: number): void {
     const raw = this.audioDrive.sustained();
     const { attack, decay, strobe } = this.axes;
@@ -329,7 +375,9 @@ export class LightUnified implements LabExpression {
   }
 
   private rebuild(): void {
-    const rig = buildUnifiedRig(this.drive, this.axes, { aspectRatio: this.aspectRatio });
+    const rig = buildUnifiedRig(this.drive, this.effectiveAxes(), {
+      aspectRatio: this.aspectRatio,
+    });
     this.layers = rig.slice(0, LIMITS.maximumLayers);
     this.writeLayers();
   }
@@ -618,6 +666,7 @@ export class LightUnified implements LabExpression {
     const audio = engine?.getParameters() ?? {};
     const spectrum = engine?.getSpectrum?.() ?? null;
     this.shelf?.update(delta);
+    for (const decl of UNIFIED_LOOK_PARAMS) this.lookResolver.updateParam(decl.id, delta);
     this.audioDrive.update(audio, spectrum, elapsed, delta);
     this.previousElapsed = elapsed;
     this.advanceDrive(elapsed, delta);
@@ -625,10 +674,11 @@ export class LightUnified implements LabExpression {
 
     const material = this.material;
     if (material) {
-      material.uniforms.uIntensity!.value = 0.6 + this.axes.intensity * 2.4;
-      material.uniforms.uOffset!.value = 0.01 + this.axes.dispersion * 0.09;
-      material.uniforms.uDecorrelation!.value = this.axes.dispersion;
-      const gain = channelBalanceGain(this.axes.channelBalance);
+      const look = this.effectiveAxes();
+      material.uniforms.uIntensity!.value = 0.6 + look.intensity * 2.4;
+      material.uniforms.uOffset!.value = 0.01 + look.dispersion * 0.09;
+      material.uniforms.uDecorrelation!.value = look.dispersion;
+      const gain = channelBalanceGain(look.channelBalance);
       (material.uniforms.uChannelGain!.value as THREE.Vector3).set(gain[0], gain[1], gain[2]);
     }
     this.pipeline?.update(audio, elapsed);
@@ -759,6 +809,73 @@ export class LightUnified implements LabExpression {
     };
   }
 
+  /** 棚（UI に出す代表 7 本）。 */
+  private sourceList(): { id: string; label: string; kind: string }[] {
+    return (this.shelf?.visible() ?? []).map((source) => ({
+      id: source.id,
+      label: source.label,
+      kind: source.kind,
+    }));
+  }
+
+  /**
+   * **発光 All 1 行。** 選んだ音がリグ全体の発光を駆動する。
+   * 下流の時間規律（場の時定数・打撃検出・扇の閾値・ストロボ・H の状態機械）は
+   * 表現の側に残るので、繋ぎ替えても明滅の規律は壊れない。
+   */
+  private emissionParam(): ExpressionParam {
+    const emission = this.audioDrive.emission();
+    return {
+      key: 'emission',
+      label: '発光 All',
+      type: 'binding' as const,
+      min: 0,
+      max: 1,
+      step: 0.01,
+      value: this.audioDrive.bindings().getBase('fieldDrive'),
+      sourceId: emission.sourceId,
+      depth: emission.depth,
+      sources: this.sourceList(),
+      transform: this.audioDrive.transformName('fieldDrive'),
+      transformOptions: [
+        { value: 'auto', label: 'Auto' },
+        { value: 'none', label: 'None' },
+        { value: 'gate', label: 'Gate' },
+        { value: 'envelope-sharp', label: 'Envelope · Sharp' },
+        { value: 'envelope-default', label: 'Envelope · Default' },
+        { value: 'envelope-soft', label: 'Envelope · Soft' },
+      ],
+      liveValue: this.audioDrive.bindings().resolve('fieldDrive').value,
+      liveSignal: this.audioDrive.bindings().resolve('fieldDrive').signal,
+    };
+  }
+
+  /** 軸のスライダーに音のソースを添える（行は増やさない）。 */
+  private axisRow(decl: (typeof AXIS_DECLS)[number]): ExpressionParam {
+    const row = {
+      key: decl.id,
+      label: `${decl.label} (${decl.low} ⇄ ${decl.high})`,
+      min: 0,
+      max: 1,
+      step: 0.01,
+      value: this.axes[decl.id],
+    };
+    const isHue = decl.id === 'hueCoherence';
+    if (!LOOK_KEYS.has(decl.id) && !isHue) return row;
+    const hue = this.audioDrive.hueBinding();
+    const binding = isHue ? null : this.lookResolver.getBinding(decl.id);
+    return {
+      ...row,
+      bind: {
+        paramId: decl.id,
+        sourceId: isHue ? hue.sourceId : (binding?.sourceId ?? null),
+        depth: isHue ? hue.depth : (binding?.depth ?? 1),
+        sources: this.sourceList(),
+        liveValue: isHue ? this.drive.hue : this.lookValue(decl.id),
+      },
+    };
+  }
+
   getExpressionParams(): ExpressionParam[] {
     return [
       {
@@ -774,18 +891,79 @@ export class LightUnified implements LabExpression {
         ],
         value: 'keep',
       },
-      ...AXIS_DECLS.map((decl) => ({
-        key: decl.id,
-        label: `${decl.label} (${decl.low} ⇄ ${decl.high})`,
-        min: 0,
-        max: 1,
-        step: 0.01,
-        value: this.axes[decl.id],
-      })),
+      this.emissionParam(),
+      ...AXIS_DECLS.map((decl) => this.axisRow(decl)),
     ];
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    // ---- 発光 All の結線 ----
+    if (key.startsWith('emission')) {
+      const what = key.split(':')[1];
+      const current = this.audioDrive.emission();
+      if (what === 'source') {
+        const next = String(value);
+        this.audioDrive.setEmission(next === 'none' ? null : next, current.depth);
+        return;
+      }
+      if (what === 'depth') {
+        const depth = Number(value);
+        if (Number.isFinite(depth)) this.audioDrive.setEmission(current.sourceId, clamp(depth, -1, 1));
+        return;
+      }
+      if (what === 'transform') {
+        for (const paramId of ['fieldDrive', 'coreStrike', 'fanStrike']) {
+          this.audioDrive.setTransform(paramId, String(value));
+        }
+        return;
+      }
+      const base = Number(value);
+      if (!Number.isFinite(base)) return;
+      for (const paramId of ['fieldDrive', 'coreStrike', 'fanStrike']) {
+        this.audioDrive.bindings().setBase(paramId, base);
+      }
+      return;
+    }
+    // ---- 軸に添えたソース（`bind:<axis>:source|depth`）----
+    if (key.startsWith('bind:')) {
+      const [, paramId, what] = key.split(':');
+      if (!paramId) return;
+      const isHue = paramId === 'hueCoherence';
+      const hue = this.audioDrive.hueBinding();
+      const binding = isHue ? null : this.lookResolver.getBinding(paramId);
+      if (what === 'source') {
+        const next = String(value);
+        const sourceId = next === 'none' ? null : next;
+        if (isHue) {
+          this.audioDrive.setHueSource(sourceId, hue.depth);
+          return;
+        }
+        const decl = UNIFIED_LOOK_PARAMS.find((entry) => entry.id === paramId);
+        const source = this.lookResolver.listSources().find((entry) => entry.id === sourceId);
+        this.lookResolver.bind({
+          paramId,
+          sourceId,
+          depth: binding?.depth ?? 1,
+          transform: decl && source ? defaultTransformFor(source.kind, decl.kind) : null,
+        });
+        return;
+      }
+      if (what === 'depth') {
+        const depth = Number(value);
+        if (!Number.isFinite(depth)) return;
+        if (isHue) {
+          this.audioDrive.setHueSource(hue.sourceId, clamp(depth, -1, 1));
+          return;
+        }
+        this.lookResolver.bind({
+          paramId,
+          sourceId: binding?.sourceId ?? null,
+          depth: clamp(depth, -1, 1),
+          transform: binding?.transform ?? null,
+        });
+      }
+      return;
+    }
     if (key === 'preset') {
       const name = String(value);
       if (name === 'keep') return;
@@ -795,6 +973,7 @@ export class LightUnified implements LabExpression {
       for (const decl of AXIS_DECLS) {
         const next = preset[decl.id];
         if (typeof next === 'number') this.axes[decl.id] = clamp(next, 0, 1);
+        if (LOOK_KEYS.has(decl.id)) this.lookResolver.setBase(decl.id, this.axes[decl.id]);
       }
       this.audioDrive.setStrobe(true, tickRateOf(this.axes));
       this.audioDrive.setTraceAmount(this.axes.trace);
@@ -807,6 +986,7 @@ export class LightUnified implements LabExpression {
     const next = typeof value === 'number' ? value : Number(value);
     if (!Number.isFinite(next)) return;
     this.axes[decl.id] = clamp(next, 0, 1);
+    if (LOOK_KEYS.has(decl.id)) this.lookResolver.setBase(decl.id, this.axes[decl.id]);
     if (decl.id === 'tickRate') this.audioDrive.setStrobe(true, tickRateOf(this.axes));
     if (decl.id === 'trace') this.audioDrive.setTraceAmount(this.axes.trace);
     if (decl.id === 'hueStickiness') this.applyStickiness();

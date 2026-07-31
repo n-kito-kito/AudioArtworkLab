@@ -168,7 +168,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     tickRate: 0.45,
     attack: 0.35,
     decay: 0.55,
-    blur: 0.8,
+    blur: 0.92,
     depthSpread: 0.9,
     tilt: 0.75,
     hueCoherence: 0.2,
@@ -180,6 +180,8 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     hazeFloor: 0.35,
     skeleton: 0,
     motion: 0.5,
+    trace: 0.35,
+    intensity: 0.5,
   },
   /** Reactive Lab 風: 膜が優勢・長い尾・にじむ。 */
   reactive: {
@@ -202,6 +204,8 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     hazeFloor: 0.5,
     skeleton: 0,
     motion: 0.3,
+    trace: 0.5,
+    intensity: 0.34,
   },
   /** Element Lab 2 風: 中心に固定・フルコマ送り・シャープ・1 色相。 */
   optics: {
@@ -224,6 +228,8 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     hazeFloor: 0.4,
     skeleton: 1,
     motion: 0.05,
+    trace: 0.2,
+    intensity: 0.56,
   },
 };
 
