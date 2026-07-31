@@ -1,5 +1,13 @@
 import type { AudioParameters, SpectrumFrame } from '../audio/AudioEngine';
 import { BandLightEventDetector } from '../engine/bandLightEvents';
+import { BindingResolver } from '../engine/binding/resolve';
+import type { AudioSourceShelf } from '../engine/binding/sources';
+import {
+  defaultTransformFor,
+  type AudioSource,
+  type Binding,
+  type ParamDecl,
+} from '../engine/binding/types';
 import {
   ARM_SETS,
   CORE_SHAPES,
@@ -269,6 +277,45 @@ const DRIVE = {
 } as const;
 
 /**
+ * **この表現が宣言するパラメーター（結線の受け口）。**
+ *
+ * 6 入力すべてを出すのではなく、**結線が意味を持つものだけ**を宣言する。
+ * `fragmentEnergy` は Audio では使っていない（断片は spawn 機構が作る）、
+ * `seed` は 0〜1 の変調対象ではないので、どちらも宣言しない。
+ *
+ * **時間の規律はここには入らない。** 宣言された値は「いまどれだけ駆動が来ているか」
+ * だけを表し、それを**いつ・どう見せるか**（ティック量子化・1 ティック保持・
+ * on/off の交互・H の 8 状態機械）はこのアダプタが従来どおり引き受ける。
+ * どのソースへ繋ぎ替えても、フェード禁止と離散切替の恒久方針は壊れない。
+ */
+export const OPTICS_PARAMS: readonly ParamDecl[] = [
+  {
+    id: 'fieldDrive',
+    label: 'Field drive',
+    min: 0,
+    max: 1,
+    default: 0,
+    kind: 'continuous',
+  },
+  { id: 'coreStrike', label: 'Core strike', min: 0, max: 1, default: 0, kind: 'trigger' },
+  { id: 'fanStrike', label: 'Fan strike', min: 0, max: 1, default: 0, kind: 'trigger' },
+  { id: 'hueTimbre', label: 'Hue timbre', min: 0, max: 1, default: 0, kind: 'continuous' },
+];
+
+/**
+ * **既定の接続束。** アダプタ自身が作っている加工済み信号へ繋いであるので、
+ * **現行の見え方をそのまま再現する**（基準値 0・深さ 1・変換なしの素通し）。
+ * ここから内部棚（volume-fast / volume-slow / onset-strength / band-*）へ
+ * UI で繋ぎ替えられる。
+ */
+const DEFAULT_BINDINGS: readonly Binding[] = [
+  { paramId: 'fieldDrive', sourceId: 'optics-field', depth: 1, transform: null },
+  { paramId: 'coreStrike', sourceId: 'optics-strike', depth: 1, transform: null },
+  { paramId: 'fanStrike', sourceId: 'optics-strike', depth: 1, transform: null },
+  { paramId: 'hueTimbre', sourceId: 'optics-timbre', depth: 1, transform: null },
+];
+
+/**
  * **発光の閾値の既定値。** 開発つまみの初期値はここから取る（二重定義しない）。
  * `core < fan` の階層が、弱打 = 無 / 中打 = コア + アーム / 強打 = + 扇 を作る。
  */
@@ -492,6 +539,40 @@ export class OpticsAudioDrive {
   /** 場の利得（開発つまみ）。ストロボで半分になる面積を補う。 */
   private fieldGain: number = DRIVE.fieldGain;
 
+  // ---- 結線（音 × パラメーター）----
+  /**
+   * **結線の解決器。** 宣言したパラメーターの値はすべてここを通る。
+   * 通るのは「値」だけで、時間の規律はこのアダプタが持ったままである。
+   */
+  private readonly resolver = new BindingResolver();
+  /**
+   * **アダプタ自身が作っている加工済み信号**（既定の接続先）。
+   * これがあるおかげで、既定の束で**現行の見え方をビット単位で再現**できる。
+   */
+  private opticsField = 0;
+  /** 打撃の強さ。**発火したフレームだけ値が入り、それ以外は 0 の衝撃**。 */
+  private opticsStrike = 0;
+  private opticsTimbre = 0;
+  private readonly opticsSources: readonly AudioSource[] = [
+    { id: 'optics-field', label: 'Optics field drive', kind: 'level', value: () => this.opticsField },
+    { id: 'optics-strike', label: 'Optics strike', kind: 'event', value: () => this.opticsStrike },
+    { id: 'optics-timbre', label: 'Optics timbre', kind: 'level', value: () => this.opticsTimbre },
+  ];
+  /**
+   * 駆動が閾値を越えていたか（前フレーム）。
+   * **立ち上がりでだけ位相を戻す**ので、連続したソースへ繋ぎ替えても
+   * 「点きっぱなし」にならず、ティックの上で明滅する。
+   */
+  private coreWasArmed = false;
+  private fanWasArmed = false;
+  /** 立ち上がり直後の 1 ティックは歳を取らせない印。 */
+  private coreFresh = false;
+  /** コアが点いてから経過したティック数。on/off の交互はこれで決まる。 */
+  private coreAge = 0;
+  /** 直近の打撃のシード（形状族とアームの向きの元）。繋ぎ替えても音のシードを使う。 */
+  private strikeSeed = 0;
+  private strikeIndex = 0;
+
   // ---- 音色 → グローバル波長 H（Step 5）----
   /**
    * **音色の持続値**（0..1）。帯域の傾きと centroid をゆっくり平滑した値で、
@@ -522,6 +603,45 @@ export class OpticsAudioDrive {
   /** 確認時間と最短保持（開発つまみ）。 */
   private hueConfirmSeconds: number = DRIVE.hueConfirmSeconds;
   private hueHoldSeconds: number = DRIVE.hueHoldSeconds;
+
+  constructor() {
+    this.resolver.declare(OPTICS_PARAMS);
+    this.resolver.setSources(this.opticsSources);
+    for (const binding of DEFAULT_BINDINGS) this.resolver.bind(binding);
+  }
+
+  /**
+   * 内部ソースの棚を繋ぐ。**アダプタ由来の信号と合わせて 1 つの棚**にして
+   * 解決器へ渡すので、UI からはどちらへも繋ぎ替えられる。
+   */
+  setShelf(shelf: AudioSourceShelf): void {
+    this.resolver.setSources([...this.opticsSources, ...shelf.list()]);
+  }
+
+  /** 結線の読み書き（UI 用）。 */
+  bindings(): BindingResolver {
+    return this.resolver;
+  }
+
+  /**
+   * ソースを繋ぎ替える。**種類が合わなければ既定変換を自動で挿入する。**
+   * `transform` を明示すればそれを使う。
+   */
+  connect(paramId: string, sourceId: string | null, depth: number, transform?: Binding['transform']): void {
+    if (sourceId === null) {
+      this.resolver.bind({ paramId, sourceId: null, depth, transform: null });
+      return;
+    }
+    const decl = OPTICS_PARAMS.find((entry) => entry.id === paramId);
+    const source = this.resolver.listSources().find((entry) => entry.id === sourceId);
+    const auto = decl && source ? defaultTransformFor(source.kind, decl.kind) : null;
+    this.resolver.bind({
+      paramId,
+      sourceId,
+      depth,
+      transform: transform === undefined ? auto : transform,
+    });
+  }
 
   /** ストロボの入り切りと速度（開発つまみ）。A/B 比較のために外から触れる。 */
   setStrobe(enabled: boolean, rate: number): void {
@@ -626,6 +746,16 @@ export class OpticsAudioDrive {
     this.tracePeak = 0;
     this.traceDeposits = 0;
     this.traceAimed = 0;
+    this.resolver.reset();
+    this.opticsField = 0;
+    this.opticsStrike = 0;
+    this.opticsTimbre = 0;
+    this.coreWasArmed = false;
+    this.fanWasArmed = false;
+    this.coreFresh = false;
+    this.coreAge = 0;
+    this.strikeSeed = 0;
+    this.strikeIndex = 0;
     this.heldFanPower = 0;
     this.heldFanSeed = 0;
     this.fanTicksLeft = 0;
@@ -668,7 +798,11 @@ export class OpticsAudioDrive {
     // **持続の濃さ。** 正規化後の音量はそのままでは低すぎて場が立ち上がらないので、
     // 曲線 1 本で暗い側を持ち上げる（無音は 0 のまま・天井は 1 のまま）。
     const loudness = playing ? clamp01(audio.volume ?? 0) : 0;
-    this.source = loudness > 0 ? Math.pow(loudness, this.sustainGamma) : 0;
+    // アダプタ自身の加工済み信号（＝既定の接続先）。
+    this.opticsField = loudness > 0 ? Math.pow(loudness, this.sustainGamma) : 0;
+    // **結線を通した値**が平滑の入力になる。3 つの時定数も利得もこの下流のまま。
+    this.resolver.updateParam('fieldDrive', deltaSeconds);
+    this.source = this.resolver.valueOf('fieldDrive');
     this.skeleton = smooth(this.skeleton, this.source, deltaSeconds, RESPONSE_SECONDS.skeleton);
     this.curtain = smooth(this.curtain, this.source, deltaSeconds, RESPONSE_SECONDS.curtain);
     this.haze = smooth(this.haze, this.source, deltaSeconds, RESPONSE_SECONDS.haze);
@@ -723,6 +857,13 @@ export class OpticsAudioDrive {
       this.heldFanPower = 0;
       this.fanTicksLeft = 0;
       this.fanHoldFrames = 0;
+      // 結線の側も 0 に落とす（棚のソースも無音では全部 0）。
+      this.opticsStrike = 0;
+      this.coreWasArmed = false;
+      this.fanWasArmed = false;
+      this.coreAge = 0;
+      this.resolver.updateParam('coreStrike', deltaSeconds);
+      this.resolver.updateParam('fanStrike', deltaSeconds);
       // 無音では断片も生まれず、生きているものも消える（無音 = 黒）。
       this.liveFragments.length = 0;
       this.pendingFragments.length = 0;
@@ -746,47 +887,71 @@ export class OpticsAudioDrive {
       DRIVE.detection,
     );
 
+    // 検出器は**繋ぎ替えても回し続ける** — 断片の誕生と、形状族・アームの向きの
+    // シードはここから来るからである。打撃の強さは「アダプタ由来のソース」へ置き、
+    // 実際にコア・扇を動かす値は**結線を通したもの**を使う。
+    this.opticsStrike = 0;
     for (const event of events) {
       const strength = clamp01(event.strength);
       this.strikeCount += 1;
       this.lastStrength = strength;
       this.lastBand = event.band;
+      this.strikeSeed = clamp01(event.snapshot.audioSeed);
+      this.strikeIndex = event.eventIndex;
+      // **発火したフレームだけ値が入る衝撃**（減衰させない）。
+      // 減衰させると既定の接続で「1 ティックだけ光る」現行挙動が再現できない。
+      this.opticsStrike = Math.max(this.opticsStrike, strength);
 
       // ---- 断片の誕生（Step 3）: **どの打撃も断片を生む**（コアの閾値とは独立）----
       this.spawnFragments(event.snapshot.audioSeed, event.eventIndex, strength,
         clamp01(event.snapshot.novelty), event.band);
+    }
 
-      // **強い音のときだけ光る。** 閾値未満はコアを出さない。
-      if (strength < this.coreGate) continue;
-      const above = (strength - this.coreGate) / Math.max(1 - this.coreGate, 1e-6);
+    // ---- コア: 結線を通した駆動を、従来どおりの時間の規律で見せる ----
+    this.resolver.updateParam('coreStrike', deltaSeconds);
+    const coreDrive = this.resolver.valueOf('coreStrike');
+    const coreArmed = coreDrive >= this.coreGate;
+    if (coreArmed) {
+      const above = (coreDrive - this.coreGate) / Math.max(1 - this.coreGate, 1e-6);
       const pulse =
         DRIVE.coreMinimumPulse +
         (1 - DRIVE.coreMinimumPulse) * Math.pow(clamp01(above), DRIVE.coreCurveExponent);
       // **表示のたびに確定する。** この表示期間のあいだ、値は動かない。
       this.heldCorePulse = Math.max(this.heldCorePulse, pulse);
       // 形状族は打撃の音のシードで選ぶ。層化して引くので「毎回同じコア」にならない。
-      const offset = Math.floor(clamp01(event.snapshot.audioSeed) * CORE_SHAPES.length);
-      this.heldCoreShape = (event.eventIndex + offset) % CORE_SHAPES.length;
+      const offset = Math.floor(this.strikeSeed * CORE_SHAPES.length);
+      this.heldCoreShape = (this.strikeIndex + offset) % CORE_SHAPES.length;
+      // **立ち上がりでだけ位相を戻す。** 連続したソースへ繋ぎ替えても点きっぱなしにならず、
+      // ティックの上で on / off を繰り返す（フェード禁止の恒久方針はここで守られる）。
+      if (!this.coreWasArmed) {
+        // 立ち上がり。位相を戻し、**最初の 1 ティックは歳を取らせない**
+        // （打撃 1 発のときは従来どおり「1 ティックだけ光る」になる）。
+        this.coreAge = 0;
+        this.coreFresh = true;
+        this.pulseCount += 1;
+      }
       this.coreTicksLeft = 1;
       this.coreFramesLeft = DRIVE.coreMinimumFrames;
-      this.pulseCount += 1;
 
       // ---- 打撃に同期したアーム ----
       // 方向の組み合わせは重み表から層化して引く（歩幅が表長と互いに素なので
       // 同じ組が続けて出ない）。位相だけを音のシードがずらす。
-      const armOffset = Math.floor(clamp01(event.snapshot.audioSeed) * ARM_SETS.length);
-      this.heldArmMask =
-        ARM_SETS[(event.eventIndex * 7 + armOffset) % ARM_SETS.length] ?? 0;
+      const armOffset = Math.floor(this.strikeSeed * ARM_SETS.length);
+      this.heldArmMask = ARM_SETS[(this.strikeIndex * 7 + armOffset) % ARM_SETS.length] ?? 0;
       this.heldArmStrength = Math.max(this.heldArmStrength, pulse);
-      this.heldArmSeed = (Math.round(clamp01(event.snapshot.audioSeed) * 65537) + event.eventIndex * 31) | 0;
+      this.heldArmSeed = (Math.round(this.strikeSeed * 65537) + this.strikeIndex * 31) | 0;
       // 強い打撃だけ 1 ティック長く残す。
       this.armTicksLeft = pulse > 0.75 ? 2 : 1;
       this.armFramesLeft = DRIVE.coreMinimumFrames;
+    }
+    this.coreWasArmed = coreArmed;
 
-      // ---- 扇（Step 4）: **コアより高い閾値を越えた強打だけ** ----
-      // 階層は 弱打 = 無 / 中打 = コア + アーム / 強打 = コア + アーム + 扇。
-      if (strength < this.fanGate) continue;
-      const fanAbove = clamp01((strength - this.fanGate) / Math.max(1 - this.fanGate, 1e-6));
+    // ---- 扇: コアより高い閾値。階層は 弱 = 無 / 中 = コア + アーム / 強 = + 扇 ----
+    this.resolver.updateParam('fanStrike', deltaSeconds);
+    const fanDrive = this.resolver.valueOf('fanStrike');
+    const fanArmed = fanDrive >= this.fanGate;
+    if (fanArmed) {
+      const fanAbove = clamp01((fanDrive - this.fanGate) / Math.max(1 - this.fanGate, 1e-6));
       const power =
         DRIVE.fanMinimumPower +
         (1 - DRIVE.fanMinimumPower) * Math.pow(fanAbove, DRIVE.fanCurveExponent);
@@ -794,17 +959,19 @@ export class OpticsAudioDrive {
       this.heldFanPower = Math.max(this.heldFanPower, power);
       // 向き・角度幅の個体差の元。打撃の音のシードと通し番号だけから決まる（決定論）。
       this.heldFanSeed =
-        (Math.round(clamp01(event.snapshot.audioSeed) * 60013) + event.eventIndex * 4099) &
-        0x7fffffff;
+        (Math.round(this.strikeSeed * 60013) + this.strikeIndex * 4099) & 0x7fffffff;
       // 寿命は 2〜4 ティック（強打ほど長い）。on/off を交互に繰り返すので表示はその半分。
       this.fanTicksLeft = Math.min(
         Math.max(Math.round(DRIVE.fanLifeBase + fanAbove * DRIVE.fanLifeFromStrength), 2),
         DRIVE.fanLifeBase + DRIVE.fanLifeFromStrength,
       );
-      this.fanAge = 0;
+      if (!this.fanWasArmed) {
+        this.fanAge = 0;
+        this.fanCount += 1;
+      }
       this.fanHoldFrames = DRIVE.fanMinimumFrames;
-      this.fanCount += 1;
     }
+    this.fanWasArmed = fanArmed;
 
     if (this.publishedFanPower() > 0) this.fanVisibleFrames += 1;
   }
@@ -933,7 +1100,10 @@ export class OpticsAudioDrive {
     // 傾きは −1（低域だけ）〜 +1（高域だけ）。無音に近いときは中立に置く。
     const tilt = total > 1e-4 ? (treble - bass) / total : 0;
     const tone = clamp01(0.5 + 0.5 * tilt * DRIVE.hueToneGain);
-    const raw = clamp01(DRIVE.hueTiltWeight * tone + (1 - DRIVE.hueTiltWeight) * centroid);
+    // アダプタ自身の音色（＝既定の接続先）。**状態機械はこの下流のまま。**
+    this.opticsTimbre = clamp01(DRIVE.hueTiltWeight * tone + (1 - DRIVE.hueTiltWeight) * centroid);
+    this.resolver.updateParam('hueTimbre', dt);
+    const raw = this.resolver.valueOf('hueTimbre');
     // **持続値**。1 発の打撃では動かず、区間くらいの速さでしか動かない。
     const previous = this.timbre;
     this.timbre = this.timbreSeen
@@ -1053,6 +1223,11 @@ export class OpticsAudioDrive {
     this.commitHue();
     // 色調のチルトも同じ規律で latch する（連続では動かさない）。
     this.heldChannel = this.channelFromBands();
+    // **歳は「駆動が続いているあいだ」だけ進む。**
+    // 打撃 1 発では 0 のままなので従来どおり 1 ティックだけ光り、
+    // 連続したソースへ繋ぎ替えたときだけ位相が回って on / off が交互になる。
+    if (this.coreFresh) this.coreFresh = false;
+    else if (this.coreWasArmed) this.coreAge += 1;
     if (this.coreTicksLeft > 0) {
       this.coreTicksLeft -= 1;
       if (this.coreTicksLeft <= 0 && this.coreFramesLeft <= 0) this.heldCorePulse = 0;
@@ -1176,7 +1351,11 @@ export class OpticsAudioDrive {
 
   /** コアが出ているのは、打撃のティックのあいだだけ。 */
   private publishedCorePulse(): number {
-    return this.coreTicksLeft > 0 || this.coreFramesLeft > 0 ? this.heldCorePulse : 0;
+    if (this.coreTicksLeft <= 0 && this.coreFramesLeft <= 0) return 0;
+    if (!this.strobeEnabled) return this.heldCorePulse;
+    // 打撃 1 発なら歳は 0 のまま ＝ 従来どおり 1 ティックだけ光る。
+    // 駆動が続くときだけ位相が進み、ティックの上で明滅する。
+    return this.coreAge % STROBE.period < STROBE.onTicks ? this.heldCorePulse : 0;
   }
 
   /** アームもコアと同じ規律で、打撃のティックのあいだだけ出る。 */

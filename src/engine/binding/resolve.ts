@@ -122,13 +122,24 @@ export class BindingResolver {
 
   /** 1 フレーム進めて全パラメーターを解決する。 */
   update(deltaSeconds: number): void {
-    for (const decl of this.decls.values()) {
+    for (const decl of this.decls.values()) this.updateParam(decl.id, deltaSeconds);
+  }
+
+  /**
+   * **1 つのパラメーターだけ解決する。**
+   *
+   * 表現によっては「この値はこの順番で要る」という時間の都合があるので
+   * （例: 場は平滑の前、打撃は検出のあと）、1 本ずつ好きな位置で回せるようにしておく。
+   */
+  updateParam(paramId: string, deltaSeconds: number): void {
+    const decl = this.decls.get(paramId);
+    if (decl) {
       const base = this.getBase(decl.id);
       const binding = this.bindings.get(decl.id);
       const source = binding?.sourceId ? this.sources.get(binding.sourceId) : undefined;
       if (!binding || !source) {
         this.resolved.set(decl.id, { value: clamp(base, decl.min, decl.max), signal: 0, base });
-        continue;
+        return;
       }
       const state = this.envelopes.get(decl.id) ?? { value: 0 };
       this.envelopes.set(decl.id, state);

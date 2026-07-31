@@ -23,6 +23,7 @@ import {
   OpticsAudioDrive,
   type OpticsDriveLevels,
 } from './opticsAudioDrive';
+import { getSourceShelf, type AudioSourceShelf } from '../engine/binding/sources';
 import { loadPrismAtlas, type PrismAtlas, type PrismTile } from './prismAtlas';
 
 /**
@@ -215,6 +216,8 @@ export class LightElementLab2 implements LabExpression {
   private readonly audioDrive = new OpticsAudioDrive();
   /** 前フレームの時計。dt ベースの平滑に使う（フレームレート非依存）。 */
   private previousElapsed = -1;
+  /** 結線に使える内部ソースの棚。engine ごとに 1 つなので解析は二重にならない。 */
+  private shelf: AudioSourceShelf | null = null;
 
   private layers: readonly OpticalLayerTraits[] = [];
 
@@ -275,6 +278,9 @@ export class LightElementLab2 implements LabExpression {
     // 表現を開き直したら前の曲の余韻は持ち越さない。
     this.audioDrive.reset();
     this.previousElapsed = -1;
+    // 内部ソースの棚を結線へ繋ぐ（アダプタ由来の信号と 1 つの棚になる）。
+    this.shelf = getSourceShelf(context.audioEngine);
+    this.audioDrive.setShelf(this.shelf);
 
     this.buildMesh();
     this.rebuildRig();
@@ -840,6 +846,8 @@ export class LightElementLab2 implements LabExpression {
       const audio = engine?.getParameters() ?? {};
       // 打撃の検出はスペクトルを見る。無いエンジンでも持続だけは動く。
       const spectrum = engine?.getSpectrum?.() ?? null;
+      // 棚を先に進める（同じフレームで二重に進むことはない）。
+      this.shelf?.update(delta);
       this.audioDrive.update(audio, spectrum, elapsed, delta);
       this.rebuildRig();
     }
