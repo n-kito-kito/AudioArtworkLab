@@ -36,6 +36,11 @@ export class AudioControls {
     this.update();
   }
 
+  /** ルート要素。`?audio=1` の解析ページが自分の中へ移設するために使う。 */
+  get element(): HTMLElement {
+    return this.root;
+  }
+
   dispose(): void {
     if (this.animationId !== null) cancelAnimationFrame(this.animationId);
     window.removeEventListener('dragenter', this.onDragEnter);

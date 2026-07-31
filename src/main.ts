@@ -233,6 +233,8 @@ const audioLabPage =
 // 観察のための画面なので、表現は描かせない（1 ドローも出さない）。
 if (audioLabPage) {
   shell.root.classList.add('is-audio-lab');
+  // 解析ページはオーバーレイで左パネルを覆うため、読み込み・再生 UI をページ内へ移す。
+  audioLabPage.adoptControls(audioControls.element);
   composition.setGeneratorsVisible(false);
 }
 let disposed = false;

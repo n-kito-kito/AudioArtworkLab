@@ -42,6 +42,17 @@ export class AudioLabPage {
     this.animationId = requestAnimationFrame(this.update);
   }
 
+  /**
+   * 既存の Audio コントロール(読み込み・再生・シーク)をこのページの中へ移設する。
+   * このページは画面全体を覆うため、左パネルのコントロールには届かない。
+   * 新しいインスタンスを作らないのは、ドラッグ&ドロップの window リスナーが
+   * 二重になるのを避けるため。dispose 時は何もしない(元のオーナーが面倒を見る)。
+   */
+  adoptControls(element: HTMLElement): void {
+    element.classList.add('audio-lab__controls');
+    this.root.insertBefore(element, this.view.root);
+  }
+
   private readonly update = (): void => {
     this.view.update(this.engine.getFeatures());
     const audio = this.engine.currentTime;

@@ -2549,3 +2549,8 @@ body[data-ui-variant='3'] .dev-hud__toggles {
   height: 0.7rem;
   border-radius: 0.35rem;
 }
+
+.audio-lab__controls {
+  max-width: 560px;
+  margin-bottom: 1.5rem;
+}
