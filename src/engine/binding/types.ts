@@ -35,6 +35,11 @@ export interface AudioSource {
   readonly label: string;
   readonly kind: SourceKind;
   value(): number;
+  /**
+   * **棚に出さない。** 既定のドライブや過去の実装を内部で使い続けるためのもの。
+   * UI の選択肢は「どの音か」がひと目で分かる代表だけに絞る。
+   */
+  readonly hidden?: boolean;
 }
 
 /** パラメーターの性質。連続量か、引き金か。 */

@@ -23,6 +23,12 @@ import type { AudioSource } from './types';
 /** 棚の定数。時定数と閾値はここに集める。 */
 export const SHELF = {
   /**
+   * **代表ソースの時定数（秒）。**
+   * 「速い / 遅い」を 2 本に分けると、どの音に反応させているのか分からなくなる。
+   * 代表は 1 本にして、速い / 遅いの差は変換（envelope）と下流の時間規律で吸収する。
+   */
+  levelSeconds: 0.25,
+  /**
    * **帯域の発火**を作る立ち上がり判定。
    * 既存の帯域値（`bass` / `mid` / `treble`）が 1 フレームでこれだけ跳ねたら発火とみなす。
    * 新しい解析ではなく、既にある値の差分だけを見る。
@@ -83,7 +89,12 @@ class Pulse {
 
 /** engine が観察用の特徴を出せるかどうか（出せないエンジンでも棚は動く）。 */
 interface FeatureCapable {
-  getFeatures?(): { readonly envelopeFast: number; readonly envelopeSlow: number } | null;
+  getFeatures?(): {
+    readonly envelopeFast: number;
+    readonly envelopeSlow: number;
+    /** 盛り上がり ⇄ 引き（0.5 が中立）。 */
+    readonly envelopeDelta: number;
+  } | null;
 }
 
 export class AudioSourceShelf {
@@ -105,21 +116,49 @@ export class AudioSourceShelf {
 
   private readonly shelf: readonly AudioSource[];
 
+  // ---- 代表ソースの平滑値（level は 1 本の時定数で素直に追う）----
+  private levelVolume = 0;
+  private levelBass = 0;
+  private levelMid = 0;
+  private levelTreble = 0;
+  private levelBrightness = 0;
+  private levelRise = 0.5;
+
   constructor(engine: AudioEngine & FeatureCapable) {
     this.engine = engine;
     this.shelf = [
-      { id: 'volume-fast', label: 'Volume (fast)', kind: 'level', value: () => this.volumeFast },
-      { id: 'volume-slow', label: 'Volume (slow)', kind: 'level', value: () => this.volumeSlow },
-      { id: 'onset-strength', label: 'Onset strength', kind: 'event', value: () => this.onsetLevel },
-      { id: 'band-bass', label: 'Band bass', kind: 'event', value: () => this.bandLow },
-      { id: 'band-mid', label: 'Band mid', kind: 'event', value: () => this.bandMid },
-      { id: 'band-treble', label: 'Band treble', kind: 'event', value: () => this.bandHigh },
+      // ---- 棚に出る代表 7 本。**ひと目で「どの音か」が分かるものだけ。** ----
+      { id: 'volume', label: 'Volume (音量)', kind: 'level', value: () => this.levelVolume },
+      { id: 'bass', label: 'Bass (低域)', kind: 'level', value: () => this.levelBass },
+      { id: 'mid', label: 'Mid (中域)', kind: 'level', value: () => this.levelMid },
+      { id: 'treble', label: 'Treble (高域)', kind: 'level', value: () => this.levelTreble },
+      { id: 'onset', label: 'Onset (打撃)', kind: 'event', value: () => this.onsetLevel },
+      {
+        id: 'brightness',
+        label: 'Brightness (音色の明るさ)',
+        kind: 'level',
+        value: () => this.levelBrightness,
+      },
+      { id: 'rise', label: 'Rise (盛り上がり)', kind: 'level', value: () => this.levelRise },
+
+      // ---- ここから下は棚に出さない（内部の既定ドライブ用に温存）----
+      { id: 'volume-fast', label: 'Volume (fast)', kind: 'level', hidden: true, value: () => this.volumeFast },
+      { id: 'volume-slow', label: 'Volume (slow)', kind: 'level', hidden: true, value: () => this.volumeSlow },
+      { id: 'onset-strength', label: 'Onset strength', kind: 'event', hidden: true, value: () => this.onsetLevel },
+      { id: 'band-bass', label: 'Band bass', kind: 'event', hidden: true, value: () => this.bandLow },
+      { id: 'band-mid', label: 'Band mid', kind: 'event', hidden: true, value: () => this.bandMid },
+      { id: 'band-treble', label: 'Band treble', kind: 'event', hidden: true, value: () => this.bandHigh },
     ];
   }
 
-  /** 棚に並んでいるソース。 */
+  /** 棚に並んでいるソース（内部用。hidden も含む）。 */
   list(): readonly AudioSource[] {
     return this.shelf;
+  }
+
+  /** **UI に出す代表だけ。** 選択肢を増やしすぎないための絞り込み。 */
+  visible(): readonly AudioSource[] {
+    return this.shelf.filter((source) => !source.hidden);
   }
 
   find(id: string): AudioSource | null {
@@ -138,6 +177,12 @@ export class AudioSourceShelf {
     this.lowPulse.reset();
     this.midPulse.reset();
     this.highPulse.reset();
+    this.levelVolume = 0;
+    this.levelBass = 0;
+    this.levelMid = 0;
+    this.levelTreble = 0;
+    this.levelBrightness = 0;
+    this.levelRise = 0.5;
   }
 
   /**
@@ -163,6 +208,13 @@ export class AudioSourceShelf {
       this.lowPulse.reset();
       this.midPulse.reset();
       this.highPulse.reset();
+      this.levelVolume = 0;
+      this.levelBass = 0;
+      this.levelMid = 0;
+      this.levelTreble = 0;
+      this.levelBrightness = 0;
+      // 盛り上がりは 0.5 が中立なので、無音では中立へ戻す。
+      this.levelRise = 0.5;
       return;
     }
 
@@ -202,6 +254,22 @@ export class AudioSourceShelf {
       SHELF.bandDecaySeconds,
       deltaSeconds,
     );
+
+    // ---- 代表 7 本。**どれも既存の解析値を 1 本の時定数で追うだけ。** ----
+    const follow = (current: number, target: number): number => {
+      const alpha = 1 - Math.exp(-Math.max(deltaSeconds, 0) / SHELF.levelSeconds);
+      return current + (clamp01(target) - current) * alpha;
+    };
+    this.levelVolume = follow(this.levelVolume, parameters.volume ?? 0);
+    this.levelBass = follow(this.levelBass, parameters.bass ?? 0);
+    this.levelMid = follow(this.levelMid, parameters.mid ?? 0);
+    this.levelTreble = follow(this.levelTreble, parameters.treble ?? 0);
+    // 音色の明るさは重心。観察用の特徴と同じ値を使う（新しい解析はしない）。
+    this.levelBrightness = follow(this.levelBrightness, parameters.centroid ?? 0);
+    // 盛り上がり = 速い包絡 − 遅い包絡（0.5 が中立）。観察用の特徴をそのまま使う。
+    this.levelRise = features
+      ? follow(this.levelRise, features.envelopeDelta)
+      : follow(this.levelRise, 0.5);
   }
 }
 

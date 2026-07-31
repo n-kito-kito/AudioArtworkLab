@@ -71,9 +71,9 @@ export class AudioLabPage {
     block.className = 'audio-features__bands';
     const heading = document.createElement('h3');
     heading.className = 'control-subheading';
-    heading.textContent = 'Binding sources (internal shelf)';
+    heading.textContent = 'Binding sources (結線できる音)';
     block.append(heading);
-    for (const source of this.shelf.list()) {
+    for (const source of this.shelf.visible()) {
       const row = document.createElement('div');
       row.className = 'audio-features__row';
       const name = document.createElement('span');
@@ -97,7 +97,7 @@ export class AudioLabPage {
     const delta = this.previousTime < 0 ? 0 : Math.min(Math.max(now - this.previousTime, 0), 0.25);
     this.previousTime = now;
     this.shelf.update(delta);
-    for (const source of this.shelf.list()) {
+    for (const source of this.shelf.visible()) {
       const amount = Math.min(Math.max(source.value(), 0), 1);
       this.sourceBars.get(source.id)?.style.setProperty('--fill', `${(amount * 100).toFixed(1)}%`);
       const value = this.sourceValues.get(source.id);
