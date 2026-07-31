@@ -53,6 +53,17 @@ export interface UnifiedAxes {
   attack: number;
   /** 0 = 一瞬で消える ⇄ 1 = 長い尾を引く。 */
   decay: number;
+  /**
+   * **二重の時間軸。**
+   *
+   * 0 = すべての層が同時に開き、同じ長さで消える ⇄
+   * 1 = 種別ごとに 0〜0.22 秒ずれて開き、**尾の長さも 10 倍の幅で分かれる**
+   * （光条は 0.42 倍で瞬く / 膜は 2.1 倍 / 靄は 3.2 倍で残る）。
+   *
+   * 速い光が先に散り、遅い膜が後から開いて長く残る、という構造そのもの。
+   * `Decay` 軸は全体の係数のまま、この軸が種別ごとの倍率を掛ける。
+   */
+  stagger: number;
 
   // ---- 光学 ----
   /**
@@ -150,6 +161,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'tickRate', label: 'Tick rate', group: '時間', low: '12fps', high: '48fps' },
   { id: 'attack', label: 'Attack', group: '時間', low: '即時', high: 'ゆっくり' },
   { id: 'decay', label: 'Decay', group: '時間', low: '一瞬', high: '長い尾' },
+  { id: 'stagger', label: 'Stagger', group: '時間', low: '全層同時', high: '種別ごとにずれる' },
   { id: 'blur', label: 'Blur', group: '光学', low: 'シャープ', high: 'にじみ' },
   { id: 'depthSpread', label: 'Depth spread', group: '空間', low: '平面', high: '前後に散る' },
   { id: 'tilt', label: 'Tilt', group: '空間', low: '正面', high: '傾き' },
@@ -184,6 +196,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   tickRate: 0.45,
   attack: 0.3,
   decay: 0.45,
+  stagger: 0.4,
   blur: 0.5,
   depthSpread: 0.45,
   tilt: 0.3,
@@ -221,6 +234,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     tickRate: 0.45,
     attack: 0.35,
     decay: 0.55,
+    stagger: 0.85,
     blur: 0.92,
     depthSpread: 0.9,
     tilt: 0.75,
@@ -251,6 +265,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     tickRate: 0.45,
     attack: 0.25,
     decay: 0.9,
+    stagger: 0.8,
     blur: 0.8,
     depthSpread: 0.5,
     tilt: 0.35,
@@ -281,6 +296,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     tickRate: 0.5,
     attack: 0,
     decay: 0.15,
+    stagger: 0.1,
     blur: 0.2,
     depthSpread: 0.2,
     tilt: 0.05,

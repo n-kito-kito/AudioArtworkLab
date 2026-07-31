@@ -26,9 +26,10 @@ import {
   capUnifiedRig,
   hash01,
   type UnifiedDrive,
+  type UnifiedKind,
   type UnifiedLayer,
 } from './unifiedRig';
-import { EmissionShape } from './unifiedTime';
+import { DelayLine, EmissionShape, TIME, staggerOf } from './unifiedTime';
 
 /**
  * **Light Unified — 3 つの Light 表現を連続軸で行き来する統合表現。**
@@ -120,12 +121,22 @@ const EVENT_MEMBRANE = {
   holdFraction: 0.32,
 } as const;
 
+/** 場の値を持つ種別（`Stagger` 軸が種別ごとに時間をずらす）。 */
+const FIELD_KINDS: readonly UnifiedKind[] = [
+  'core',
+  'beam',
+  'membrane',
+  'haze',
+  'fragment',
+  'fan',
+];
+
 /** 散らばりのシード。**固定値**（同じ音なら必ず同じ絵になる）。 */
 const UNIFIED_SEED = 7;
 
 /** 無音の駆動。**1 画素も出ない**状態。 */
 const SILENT_DRIVE: UnifiedDrive = {
-  fieldLevel: 0,
+  fieldLevels: { core: 0, beam: 0, membrane: 0, haze: 0, fragment: 0, fan: 0 },
   corePulse: 0,
   coreShape: -1,
   beamMask: 0,
@@ -179,7 +190,23 @@ export class LightUnified implements LabExpression {
    * 時間軸（Strobe / Attack / Decay）が作る発光の形。
    * `hold` は**尾を引いているあいだも同じ形・同じ向きで消える**ように覚えておく値。
    */
-  private readonly fieldShape = new EmissionShape();
+  /**
+   * 種別ごとの場の形。**`Stagger` 軸が「後から開いて長く残る」層を作る**ので、
+   * 1 本の値を共有できない（軸 0 では 6 本とも同じ値になる）。
+   */
+  private readonly fieldShapes: Record<UnifiedKind, EmissionShape> = {
+    core: new EmissionShape(),
+    beam: new EmissionShape(),
+    membrane: new EmissionShape(),
+    haze: new EmissionShape(),
+    fragment: new EmissionShape(),
+    fan: new EmissionShape(),
+  };
+  /** 素の駆動を数フレームぶん覚えておく遅延線（遅れて開くため）。 */
+  private readonly fieldLine = new DelayLine();
+  private readonly coreLine = new DelayLine();
+  private readonly fanLine = new DelayLine();
+  private readonly beamLine = new DelayLine();
   private readonly coreLight = { emission: new EmissionShape(), hold: -1 };
   private readonly fanLight = { emission: new EmissionShape(), hold: -1 };
   private readonly beamShape = new EmissionShape();
@@ -205,7 +232,7 @@ export class LightUnified implements LabExpression {
   /** 破片 1 枚ごとの時間の形（死んでも尾のあいだは残す）。 */
   private readonly fragmentShapes = new Map<
     number,
-    { spawn: FragmentSpawn; emission: EmissionShape; alive: boolean }
+    { spawn: FragmentSpawn; emission: EmissionShape; alive: boolean; age: number }
   >();
 
   private drive: UnifiedDrive = SILENT_DRIVE;
@@ -335,27 +362,52 @@ export class LightUnified implements LabExpression {
 
   private advanceDrive(elapsed: number, delta: number): void {
     const raw = this.audioDrive.sustained();
-    const { attack, decay, strobe } = this.axes;
+    const { attack, decay, strobe, stagger } = this.axes;
     const tick = raw.tick;
+    /**
+     * **二重の時間軸。** 種別ごとに「どれだけ遅れて開くか」と「どれだけ長く残るか」を
+     * `Stagger` 軸から引く。0 なら遅れ 0・倍率 1 なので、従来と 1 画素も変わらない。
+     * 遅れは短い遅延線に素の駆動を貯めて、その種別の時刻を読むだけで作る。
+     */
+    const lag = (kind: UnifiedKind): { delay: number; decayScale: number } =>
+      staggerOf(stagger, kind);
 
-    // ---- 場 ----
-    this.fieldShape.advance(raw.field, delta, tick, attack, decay);
-    const field = Math.min(this.fieldShape.read(strobe) * UNIFIED.fieldGain, 1);
+    // ---- 場: 種別ごとに遅れと尾の長さが違う（速い光が先・遅い膜が後）----
+    this.fieldLine.push(elapsed, raw.field);
+    const fieldLevels = {} as Record<UnifiedKind, number>;
+    for (const kind of FIELD_KINDS) {
+      const { delay, decayScale } = lag(kind);
+      const shape = this.fieldShapes[kind];
+      shape.advance(this.fieldLine.read(elapsed - delay), delta, tick, attack, decay, decayScale);
+      fieldLevels[kind] = Math.min(shape.read(strobe) * UNIFIED.fieldGain, 1);
+    }
 
     // ---- 核: 生きているあいだの形状族を覚えておき、尾のあいだも同じ形で消える ----
     if (raw.coreAlive) this.coreLight.hold = raw.coreShape;
+    const coreLag = lag('core');
+    this.coreLine.push(elapsed, raw.coreAlive ? raw.corePulse : 0);
     this.coreLight.emission.advance(
-      raw.coreAlive ? raw.corePulse : 0,
+      this.coreLine.read(elapsed - coreLag.delay),
       delta,
       tick,
       attack,
       decay,
+      coreLag.decayScale,
     );
     const corePulse = this.coreLight.emission.read(strobe);
 
     // ---- 扇 ----
     if (raw.fanAlive) this.fanLight.hold = raw.fanSeed;
-    this.fanLight.emission.advance(raw.fanAlive ? raw.fanPower : 0, delta, tick, attack, decay);
+    const fanLag = lag('fan');
+    this.fanLine.push(elapsed, raw.fanAlive ? raw.fanPower : 0);
+    this.fanLight.emission.advance(
+      this.fanLine.read(elapsed - fanLag.delay),
+      delta,
+      tick,
+      attack,
+      decay,
+      fanLag.decayScale,
+    );
     const fanPower = this.fanLight.emission.read(strobe);
 
     // ---- 光条の閃光 ----
@@ -363,8 +415,18 @@ export class LightUnified implements LabExpression {
       this.beamMaskHeld = raw.armMask;
       this.beamSeedHeld = raw.armSeed;
     }
-    this.beamShape.advance(raw.armAlive ? raw.armStrength : 0, delta, tick, attack, decay);
+    const beamLag = lag('beam');
+    this.beamLine.push(elapsed, raw.armAlive ? raw.armStrength : 0);
+    this.beamShape.advance(
+      this.beamLine.read(elapsed - beamLag.delay),
+      delta,
+      tick,
+      attack,
+      decay,
+      beamLag.decayScale,
+    );
     const beamStrength = this.beamShape.read(strobe);
+    const fragmentLag = lag('fragment');
 
     // ---- 破片: 1 枚ずつが自分のエンベロープを持つ。**死んでも尾のあいだは残す** ----
     for (const entry of this.fragmentShapes.values()) entry.alive = false;
@@ -373,12 +435,21 @@ export class LightUnified implements LabExpression {
       let entry = this.fragmentShapes.get(key);
       if (!entry) {
         if (this.fragmentShapes.size >= LIMITS.maximumFragmentShapes) continue;
-        entry = { spawn: live.spawn, emission: new EmissionShape(), alive: true };
+        entry = { spawn: live.spawn, emission: new EmissionShape(), alive: true, age: 0 };
         this.fragmentShapes.set(key, entry);
       }
       entry.spawn = live.spawn;
       entry.alive = true;
-      entry.emission.advance(1, delta, tick, attack, decay);
+      entry.age += delta;
+      // 遅れて開く: 自分の歳が遅れを越えるまでは目標 0（＝まだ点かない）。
+      entry.emission.advance(
+        entry.age >= fragmentLag.delay ? 1 : 0,
+        delta,
+        tick,
+        attack,
+        decay,
+        fragmentLag.decayScale,
+      );
     }
     // 生きているものを先に置く。**尾を引いている破片が枠を占めて新しい破片を
     // 締め出さない**ようにするためで、どちらの並びも誕生順（決定論）のまま。
@@ -386,7 +457,7 @@ export class LightUnified implements LabExpression {
     const tails: UnifiedDrive['fragments'][number][] = [];
     for (const [key, entry] of this.fragmentShapes) {
       if (!entry.alive) {
-        entry.emission.advance(0, delta, tick, attack, decay);
+        entry.emission.advance(0, delta, tick, attack, decay, fragmentLag.decayScale);
         if (entry.emission.level <= 0) {
           this.fragmentShapes.delete(key);
           continue;
@@ -401,7 +472,7 @@ export class LightUnified implements LabExpression {
     this.advanceEventMembranes(delta);
 
     this.drive = {
-      fieldLevel: field,
+      fieldLevels,
       corePulse,
       coreShape: corePulse > 0 ? this.coreLight.hold : -1,
       beamMask: beamStrength > 0 ? this.beamMaskHeld : 0,
@@ -445,6 +516,9 @@ export class LightUnified implements LabExpression {
     }
     const density = clamp(this.axes.density, 0, 1);
     const decay = clamp(this.axes.decay, 0, 1);
+    // 膜は「後から開いて長く残る」側。`Stagger` 軸 0 では遅れず、寿命の倍率も 1。
+    const { delay: lagScale, decayScale } = staggerOf(this.axes.stagger, 'membrane');
+    const spread = TIME.stagger.delay.membrane! > 0 ? lagScale / TIME.stagger.delay.membrane! : 0;
     for (const strike of this.audioDrive.strikes()) {
       const strength = clamp(strike.strength, 0, 1);
       const wanted = Math.max(
@@ -465,13 +539,15 @@ export class LightUnified implements LabExpression {
           strength,
           band: strike.band,
           delay:
-            EVENT_MEMBRANE.delayMinimum +
-            h(1) * (EVENT_MEMBRANE.delayMaximum - EVENT_MEMBRANE.delayMinimum),
+            (EVENT_MEMBRANE.delayMinimum +
+              h(1) * (EVENT_MEMBRANE.delayMaximum - EVENT_MEMBRANE.delayMinimum)) *
+            spread,
           life:
             (EVENT_MEMBRANE.lifeAtShortDecay +
               decay * (EVENT_MEMBRANE.lifeAtLongDecay - EVENT_MEMBRANE.lifeAtShortDecay)) *
             (EVENT_MEMBRANE.lifeSpreadMinimum +
-              h(2) * (EVENT_MEMBRANE.lifeSpreadMaximum - EVENT_MEMBRANE.lifeSpreadMinimum)),
+              h(2) * (EVENT_MEMBRANE.lifeSpreadMaximum - EVENT_MEMBRANE.lifeSpreadMinimum)) *
+            decayScale,
           age: 0,
         });
       }
@@ -528,7 +604,11 @@ export class LightUnified implements LabExpression {
 
   /** 時間の形を初期化する。前の曲の尾を持ち越さない。 */
   private resetShapes(): void {
-    this.fieldShape.reset();
+    for (const shape of Object.values(this.fieldShapes)) shape.reset();
+    this.fieldLine.reset();
+    this.coreLine.reset();
+    this.fanLine.reset();
+    this.beamLine.reset();
     this.coreLight.emission.reset();
     this.coreLight.hold = -1;
     this.fanLight.emission.reset();

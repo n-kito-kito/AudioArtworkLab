@@ -112,8 +112,11 @@ export interface UnifiedLayer {
 
 /** 音が注ぎ込むもの。**これ以外に見え方を変える入力はない。** */
 export interface UnifiedDrive {
-  /** 場の基礎輝度（音量の持続）。 */
-  readonly fieldLevel: number;
+  /**
+   * **種別ごとの場の基礎輝度**（音量の持続）。`Stagger` 軸が 0 なら 6 本とも同じ値で、
+   * 1 に近づくほど「後から開いて長く残る層」と「先に閃いて先に消える層」に分かれる。
+   */
+  readonly fieldLevels: Readonly<Record<UnifiedKind, number>>;
   /** 核の脈動（打撃）。 */
   readonly corePulse: number;
   /** 核の形状族（−1 で素の芯）。 */
@@ -513,7 +516,7 @@ const buildHaze = (
   axes: UnifiedAxes,
   viewport: UnifiedViewport,
 ): UnifiedLayer[] => {
-  const level = clamp01(drive.fieldLevel) * clamp01(axes.hazeFloor);
+  const level = clamp01(drive.fieldLevels.haze) * clamp01(axes.hazeFloor);
   if (level <= 0) return [];
   const z = depthOf(axes, 1);
   const e = halfExtent(z, viewport);
@@ -608,7 +611,7 @@ const buildMembranes = (
   axes: UnifiedAxes,
   viewport: UnifiedViewport,
 ): UnifiedLayer[] => {
-  const level = clamp01(drive.fieldLevel);
+  const level = clamp01(drive.fieldLevels.membrane);
   // 性格の軸。膜側（0）で多く厚く、光条側（1）で少なく薄くなる。
   const share = 1 - clamp01(axes.membraneBeam);
   const scale = clamp01(axes.membraneScale);
@@ -772,7 +775,7 @@ const buildBeams = (
   viewport: UnifiedViewport,
 ): UnifiedLayer[] => {
   const out: UnifiedLayer[] = [];
-  const level = clamp01(drive.fieldLevel);
+  const level = clamp01(drive.fieldLevels.beam);
   const share = clamp01(axes.membraneBeam);
   const skeleton = clamp01(axes.skeleton);
   const z = depthOf(axes, 0.32);

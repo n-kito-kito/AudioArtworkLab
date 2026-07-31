@@ -35,7 +35,96 @@ export const TIME = {
   decaySeconds: { min: 0.028, max: 1.9 },
   /** これを下回ったら消えたとみなす（尾を無限に引きずらない）。 */
   epsilon: 0.0015,
+  /**
+   * **二重の時間軸（`Stagger` 軸）。**
+   *
+   * 速い光が先に散り、遅い膜が後から開いて長く残る、という構造。
+   * 全部が同じ時計で明滅すると、層が何枚あっても「1 枚の絵が点滅する」ようにしか見えない。
+   * 値は Reactive Lab の実測（Sheet は Core の 2.1 倍・Haze は 3.2 倍・Ray は 0.42 倍）から。
+   */
+  stagger: {
+    /** 種別ごとの開く遅れ（秒）。軸 1 のときの値で、軸 0 では全部 0。 */
+    delay: {
+      core: 0,
+      beam: 0.02,
+      fan: 0.05,
+      fragment: 0.08,
+      membrane: 0.14,
+      haze: 0.22,
+    } as Readonly<Record<string, number>>,
+    /** 種別ごとの尾の長さ（倍率）。軸 1 のときの値で、軸 0 では全部 1。 */
+    decayScale: {
+      core: 1,
+      beam: 0.42,
+      fan: 0.7,
+      fragment: 1,
+      membrane: 2.1,
+      haze: 3.2,
+    } as Readonly<Record<string, number>>,
+  },
 } as const;
+
+/** `Stagger` 軸から、その種別の遅れ（秒）と尾の倍率を出す。両端は連続に混ざる。 */
+export const staggerOf = (
+  stagger: number,
+  kind: string,
+): { readonly delay: number; readonly decayScale: number } => {
+  const amount = clamp01(stagger);
+  return {
+    delay: (TIME.stagger.delay[kind] ?? 0) * amount,
+    decayScale: mix(1, TIME.stagger.decayScale[kind] ?? 1, amount),
+  };
+};
+
+/**
+ * **短い遅延線。**
+ *
+ * 「後から開く」を作るために、素の駆動値を数フレームぶん覚えておいて
+ * 指定した秒数だけ前の値を読む。補間するので、遅れを連続に動かしても値が跳ばない。
+ */
+export class DelayLine {
+  private readonly capacity: number;
+  private readonly times: Float64Array;
+  private readonly values: Float64Array;
+  private head = -1;
+  private count = 0;
+
+  constructor(capacity = 64) {
+    this.capacity = capacity;
+    this.times = new Float64Array(capacity);
+    this.values = new Float64Array(capacity);
+  }
+
+  reset(): void {
+    this.head = -1;
+    this.count = 0;
+  }
+
+  push(time: number, value: number): void {
+    this.head = (this.head + 1) % this.capacity;
+    this.times[this.head] = time;
+    this.values[this.head] = value;
+    if (this.count < this.capacity) this.count += 1;
+  }
+
+  /** `time` 時点の値。履歴より前を求められたら**いちばん古い値**を返す。 */
+  read(time: number): number {
+    if (this.count === 0) return 0;
+    let newer = this.head;
+    for (let step = 0; step < this.count - 1; step++) {
+      const older = (newer - 1 + this.capacity) % this.capacity;
+      if (this.times[older]! <= time) {
+        const t0 = this.times[older]!;
+        const t1 = this.times[newer]!;
+        const span = t1 - t0;
+        const t = span > 1e-6 ? clamp01((time - t0) / span) : 1;
+        return mix(this.values[older]!, this.values[newer]!, t);
+      }
+      newer = older;
+    }
+    return this.values[newer]!;
+  }
+}
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
 const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
@@ -94,8 +183,13 @@ export class EmissionShape {
     tick: number,
     attack: number,
     decay: number,
+    /** 種別ごとの尾の倍率（`Stagger` 軸）。1 で従来どおり。 */
+    decayScale = 1,
   ): void {
-    const tau = target > this.value ? attackTauOf(attack) : decayTauOf(decay);
+    const tau =
+      target > this.value
+        ? attackTauOf(attack)
+        : decayTauOf(decay) * Math.max(decayScale, 1e-3);
     const alpha = 1 - Math.exp(-Math.max(deltaSeconds, 0) / Math.max(tau, 1e-4));
     this.value += (target - this.value) * alpha;
     if (target <= 0 && this.value < TIME.epsilon) this.value = 0;
