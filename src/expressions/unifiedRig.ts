@@ -521,6 +521,45 @@ export const UNIFIED = {
     edgeGainAtOne: 1.75,
     coreFocusGainAtOne: 2.2,
   },
+  /**
+   * **床 ⇄ 独立した板（`Isolation` 軸）の実寸。**
+   *
+   * どれも「軸 1 のときに何倍になるか」で、**軸 0 では厳密に 1 倍**（＝現状のまま）。
+   *
+   * 実測の根拠は `ROADMAP.md` の P9-6/P9-7。`Edge contrast` と `Core focus` を
+   * 両方 1 まで上げても、点灯した横方向の連なりの中央値は 129 → 117 px にしか
+   * 縮まなかった（GIF は 4.8 px）。**縁ではなく面積が床を作っていた** —
+   * 靄は画面全体を覆う 1 枚、常設の膜は可視範囲から逆算した大きな板で、
+   * どちらも「どこにでも薄く乗っている光」なので、要素の縁をいくら立てても
+   * 隣の要素との谷が黒へ落ちない。
+   *
+   * **1 枚あたりの明るさ（`ceiling` も `intensity` の係数）は下げない。**
+   * 削るのは面積と枚数だけなので、板は薄くならずに小さくなる。
+   */
+  isolation: {
+    /** 靄の量（軸 1 で 8%）。0 にしないのは最下段が完全に消えると空間が失われるため。 */
+    hazeAtOne: 0.08,
+    /** 靄の板そのものの大きさ（軸 1 で 62%）。画面全体から少し内側へ引く。 */
+    hazeSizeAtOne: 0.62,
+    /** 常設の膜の量（軸 1 で 12%）。曲に関係なく張られている側を引く。 */
+    fixedMembraneAtOne: 0.12,
+    /** 常設の膜の枚数（軸 1 で 45%）。端数は `countFade` が連続に処理する。 */
+    fixedCountAtOne: 0.45,
+    /**
+     * **打撃ごとの膜 1 枚の濃さ**（軸 1 で 2.2 倍）。引いた床のぶんをイベント側へ移す。
+     * 実測で決めた値 — ここが低いと軸の上側は「板が離れる」ではなく
+     * **「膜が消える」**になり（1.45 では 32×32 に落とすと板が読めなくなった）、
+     * 高いと重なりがまた床を張る（2.8 では連なりの中央値が 68 → 115 に戻った）。
+     */
+    eventMembraneAtOne: 2.2,
+    /**
+     * **膜 1 枚の面積**（軸 1 で 46%）。位置は触らないので、
+     * **散らばりはそのままに板だけが小さくなる** ＝ 重なりが減って谷が黒へ落ちる。
+     * `membraneHalf` の `lightRatio`（明るさの中立化）には**入れない** —
+     * 入れると縮めたぶんだけ明るくなって、また床が張ってしまう。
+     */
+    membraneSizeAtOne: 0.46,
+  },
 } as const;
 
 const TAU = Math.PI * 2;
@@ -841,16 +880,20 @@ const buildHaze = (
   viewport: UnifiedViewport,
 ): UnifiedLayer[] => {
   const floor = clamp01(axes.hazeFloor);
-  const level = clamp01(drive.fieldLevels.haze) * hazeGain(floor);
+  const isolate = clamp01(axes.isolation);
+  const iso = UNIFIED.isolation;
+  // **床を引く。** 靄は画面全体を覆う 1 枚なので、「どこにでも薄く乗る光」の本体。
+  const level = clamp01(drive.fieldLevels.haze) * hazeGain(floor) * mix(1, iso.hazeAtOne, isolate);
   if (level <= 0) return [];
   const z = depthOf(axes, 1);
   const e = halfExtent(z, viewport);
   const d = drift(axes, drive.seed, 91, drive.time);
+  const span = mix(1, iso.hazeSizeAtOne, isolate);
   return [
     {
       kind: 'haze',
       position: [d.x * e.w, d.y * e.h, z],
-      half: [e.w * 1.3, e.h * 1.3],
+      half: [e.w * 1.3 * span, e.h * 1.3 * span],
       spin: 0,
       tiltX: 0,
       tiltY: 0,
@@ -1028,15 +1071,41 @@ const buildMembranes = (
   // **明るさの配分。** 0 で固定のリグだけ、1 で打撃の膜だけ。途中は両方が出る。
   const eventShare = clamp01(axes.eventMembrane);
   const out: UnifiedLayer[] = [];
-  const fixedShare = 1 - eventShare;
+  /**
+   * **`Isolation` は配分そのものを傾ける。** 常設の側を引き、打撃の側へ光を移すので、
+   * 軸を上げると「曲に関係なく張られている板」が減って「打撃ごとに生まれる板」が残る。
+   * どちらの係数も軸 0 で厳密に 1 倍。
+   */
+  const isolate = clamp01(axes.isolation);
+  const iso = UNIFIED.isolation;
+  const fixedShare = (1 - eventShare) * mix(1, iso.fixedMembraneAtOne, isolate);
   if (level > 0 && fixedShare > 0) {
     out.push(...buildFixedMembranes(drive, axes, viewport, share, scale, fixedShare, level));
   }
   if (eventShare > 0) {
-    out.push(...buildEventMembranes(drive, axes, viewport, share, scale, eventShare));
+    out.push(
+      ...buildEventMembranes(
+        drive,
+        axes,
+        viewport,
+        share,
+        scale,
+        eventShare * mix(1, iso.eventMembraneAtOne, isolate),
+      ),
+    );
   }
   return out;
 };
+
+/**
+ * **膜 1 枚の面積を局所へ絞る（`Isolation` 軸）。**
+ *
+ * 位置には触らないので、**散らばりは保ったまま板だけが小さくなる**。
+ * 明るさの中立化（`membraneLightGain`）へは通さない — 通すと縮めたぶん明るくなり、
+ * 重なりがまた床を張ってしまう。軸 0 では厳密に 1 倍。
+ */
+const membraneSpan = (axes: UnifiedAxes): number =>
+  mix(1, UNIFIED.isolation.membraneSizeAtOne, clamp01(axes.isolation));
 
 /**
  * **打撃ごとに生まれて死ぬ膜。**
@@ -1067,10 +1136,11 @@ const buildEventMembranes = (
     const tilt = tiltOf(axes, seed + 4409, slot);
     const wide = 0.5 + h(2) * 0.7;
     const size = membraneHalf(axes, e, wide, share);
+    const span = membraneSpan(axes);
     out.push({
       kind: 'membrane',
       position: [(place.nx + d.x) * e.w * 0.85, (place.ny + d.y) * e.h * 0.7, z],
-      half: [size.w, size.h],
+      half: [size.w * span, size.h * span],
       spin: (h(3) - 0.5) * TAU * 0.5,
       tiltX: tilt.x,
       tiltY: tilt.y,
@@ -1120,8 +1190,12 @@ const buildFixedMembranes = (
   fixedShare: number,
   level: number,
 ): UnifiedLayer[] => {
-  const wanted = mix(1, UNIFIED.membraneCount, share);
+  // 枚数も `Isolation` が引く。端数は `countFade` が連続に処理するので段にならない。
+  const wanted =
+    mix(1, UNIFIED.membraneCount, share) *
+    mix(1, UNIFIED.isolation.fixedCountAtOne, clamp01(axes.isolation));
   const count = Math.max(Math.ceil(wanted), 1);
+  const span = membraneSpan(axes);
   const out: UnifiedLayer[] = [];
   const seed = Math.round(drive.seed);
   for (let index = 0; index < count; index++) {
@@ -1137,7 +1211,7 @@ const buildFixedMembranes = (
     out.push({
       kind: 'membrane',
       position: [(place.nx + d.x) * e.w * 0.8, (place.ny + d.y) * e.h * 0.6, z],
-      half: [size.w, size.h],
+      half: [size.w * span, size.h * span],
       spin: (hash01(seed + 613, index * 11 + 7) - 0.5) * 1.4,
       tiltX: tilt.x,
       tiltY: tilt.y,

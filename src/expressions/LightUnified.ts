@@ -151,6 +151,14 @@ const EVENT_MEMBRANE = {
   countAtStrongStrike: 5,
   /** 同時に生きられる枚数。プールの上限。 */
   poolMaximum: 24,
+  /**
+   * **`Isolation` 軸 1 のときの枚数の倍率**（1 打撃ぶんと、同時に生きられる数）。
+   *
+   * 面積を絞っても**同じ場所へ何枚も重なれば床は戻る**ので、重なりの枚数そのものを
+   * 上限で押さえる。軸 0 では 1 倍 ＝ 従来と 1 枚も変わらない。
+   */
+  countAtIsolated: 0.6,
+  poolAtIsolated: 0.5,
   /** 開くまでの遅れ（秒）。打撃の直後ではなく、少し遅れて膜が追いつく。 */
   delayMinimum: 0.02,
   delayMaximum: 0.22,
@@ -677,6 +685,13 @@ export class LightUnified implements LabExpression {
     }
     const density = clamp(this.lookValue('density'), 0, 1);
     const decay = clamp(this.axes.decay, 0, 1);
+    // **重なりの上限（`Isolation` 軸）。** どちらも軸 0 では 1 倍。
+    const isolate = clamp(this.axes.isolation, 0, 1);
+    const thin = 1 + (EVENT_MEMBRANE.countAtIsolated - 1) * isolate;
+    const pool = Math.max(
+      1,
+      Math.round(EVENT_MEMBRANE.poolMaximum * (1 + (EVENT_MEMBRANE.poolAtIsolated - 1) * isolate)),
+    );
     // 膜は「後から開いて長く残る」側。`Stagger` 軸 0 では遅れず、寿命の倍率も 1。
     const { delay: lagScale, decayScale } = staggerOf(this.axes.stagger, 'membrane');
     const spread = TIME.stagger.delay.membrane! > 0 ? lagScale / TIME.stagger.delay.membrane! : 0;
@@ -690,10 +705,11 @@ export class LightUnified implements LabExpression {
         (EVENT_MEMBRANE.countAtWeakStrike +
           (EVENT_MEMBRANE.countAtStrongStrike - EVENT_MEMBRANE.countAtWeakStrike) * strength) *
           (DENSITY.min + density * (DENSITY.max - DENSITY.min)) *
-          amount,
+          amount *
+          thin,
       );
       for (let slot = 0; slot < wanted; slot++) {
-        if (this.eventMembranes.length >= EVENT_MEMBRANE.poolMaximum) break;
+        if (this.eventMembranes.length >= pool) break;
         const h = (salt: number): number => hash01(strike.seed + 8093, slot * 11 + salt);
         this.eventMembranes.push({
           seed: strike.seed,

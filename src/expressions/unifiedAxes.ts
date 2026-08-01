@@ -216,6 +216,28 @@ export interface UnifiedAxes {
   fragmentCharacter: number;
   /** 靄の床（画面をまとめる最下段の明るさ）。 */
   hazeFloor: number;
+  /**
+   * **床 ⇄ 独立した板。**
+   *
+   * 0 = 現状のまま（**厳密に 1 画素も変わらない**）⇄ 1 = 靄の床がほぼ消え、
+   * 常設の膜が引き、**打撃ごとに生まれる膜が局所の板として散る**。
+   *
+   * `Edge contrast` は要素 1 つの**縁**を締める軸で、要素どうしを引き剥がせなかった
+   * （実測: 点灯した横方向の連なりの中央値は 2 軸とも 1 にしても 117 px で、
+   * Spatial/Reactive 期の GIF の 4.8 px に対し 24 倍つながったまま）。
+   * 残っていたのは**縁ではなく面積**で、画面全体を覆う靄 1 枚と、
+   * 可視範囲から逆算した大きな膜が重なって**明るい床**を張っていた。
+   *
+   * ここは 4 つを 1 本で動かす:
+   *   ① 靄の量（画面をまとめる最下段そのもの）
+   *   ② 常設の膜の量と枚数（曲に関係なく張られている側）
+   *   ③ 膜 1 枚の**面積**（位置の散らばりは保ったまま局所へ絞る）
+   *   ④ 打撃ごとの膜の比重（イベント駆動の側へ光を移す）
+   *
+   * **1 枚あたりの明るさは下げない** — 面積だけを削るので、板は薄くならずに
+   * 「小さく明るい板が離れて浮かぶ」へ寄る。
+   */
+  isolation: number;
   /** 常設の十字（骨格）の存在感。**バーストの原点で交差する。** */
   skeleton: number;
   /** 0 = 短い光条 ⇄ 1 = 画面の外まで貫通する極細線。 */
@@ -294,6 +316,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'beamLength', label: 'Beam length', group: '構成', low: '短い', high: '貫通' },
   { id: 'density', label: 'Density', group: '構成', low: '無し', high: '多い' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
+  { id: 'isolation', label: 'Isolation', group: '構成', low: '一枚の床', high: '独立した板' },
   { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める', detail: true },
   { id: 'coreShape', label: 'Core shape', group: '構成', low: '等方の点', high: '横長の平らな面', detail: true },
   { id: 'coreBloom', label: 'Core bloom', group: '構成', low: '無し', high: 'Spatial 相当', detail: true },
@@ -322,10 +345,11 @@ export const DEFAULT_AXES: UnifiedAxes = {
   decay: 0.45,
   stagger: 0.4,
   blur: 0.5,
-  // **新しい 2 本は 0 が「現状のまま」。** 既定とプリセットの見え方を動かさないための 0 で、
-  // 中立の位置ではない（可動域はここから片側へ伸びる）。
+  // **あとから足した 3 本は 0 が「現状のまま」。** 既定とプリセットの見え方を
+  // 動かさないための 0 で、中立の位置ではない（可動域はここから片側へ伸びる）。
   edgeContrast: 0,
   coreFocus: 0,
+  isolation: 0,
   depthSpread: 0.45,
   hueCoherence: 0.6,
   hueStickiness: 0.5,
@@ -368,9 +392,10 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     stagger: 0.85,
     // にじみは強くしすぎない。0.9 を超えると層の縁が消えて 1 枚の靄になる。
     blur: 0.6,
-    // 現状の見え方をそのまま置くための 0（新しい 2 本は加算式なので 0 で無効）。
+    // 現状の見え方をそのまま置くための 0（あとから足した 3 本は加算式なので 0 で無効）。
     edgeContrast: 0,
     coreFocus: 0,
+    isolation: 0,
     depthSpread: 0.9,
     hueCoherence: 0.35,
     hueStickiness: 0.2,
@@ -406,9 +431,10 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     decay: 0.9,
     stagger: 0.8,
     blur: 0.66,
-    // 現状の見え方をそのまま置くための 0（新しい 2 本は加算式なので 0 で無効）。
+    // 現状の見え方をそのまま置くための 0（あとから足した 3 本は加算式なので 0 で無効）。
     edgeContrast: 0,
     coreFocus: 0,
+    isolation: 0,
     depthSpread: 0.5,
     hueCoherence: 0.45,
     hueStickiness: 0.3,
@@ -443,9 +469,10 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     decay: 0.15,
     stagger: 0.06,
     blur: 0.2,
-    // 現状の見え方をそのまま置くための 0（新しい 2 本は加算式なので 0 で無効）。
+    // 現状の見え方をそのまま置くための 0（あとから足した 3 本は加算式なので 0 で無効）。
     edgeContrast: 0,
     coreFocus: 0,
+    isolation: 0,
     depthSpread: 0.2,
     hueCoherence: 1,
     hueStickiness: 1,
