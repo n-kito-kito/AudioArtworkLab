@@ -257,6 +257,24 @@ export interface UnifiedAxes {
    * コアの再発火の速さを同時にスケールする。
    */
   density: number;
+  /**
+   * **同時に光れるコアの数。**
+   *
+   * 0 = 現状のまま（**最強の 1 帯域だけがコアを出す。1 画素も変わらない**）⇄
+   * 1 = **Bass / Mid / Treble が同時に別々のコアを出す**。
+   *
+   * 検出器（`BandLightEventDetector`）は最初から 3 帯域を独立に判定しているのに、
+   * 後段が「素のフラックスが最大の 1 本」しか通していなかったので、
+   * 1 打撃の中の同時性が捨てられていた（Core Study の実測では
+   * **1 打撃で 3 帯域同時発火が 48% / 2 帯域が 33%**）。
+   *
+   * 軸は `relativeStrengthFloor` を動かす ——「最強帯域のフラックス × floor を
+   * 超えた帯域は全部出す」の floor で、1.0 なら最強のみ、下げるほど 2〜3 本が通る。
+   * 通った帯域は**それぞれ別の位置・別の大きさ・別の色**のコアになる
+   * （位置はその帯域のシード、大きさは帯域そのもの、色は `Hue coherence` の混合）。
+   * 骨格・閃光・扇は**主コアにだけ**付く（下の `UNIFIED.unison` を参照）。
+   */
+  bandUnison: number;
 
   // ---- 動き ----
   /** 0 = 静止 ⇄ 1 = 面内をゆっくり漂う。 */
@@ -317,6 +335,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'density', label: 'Density', group: '構成', low: '無し', high: '多い' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
   { id: 'isolation', label: 'Isolation', group: '構成', low: '一枚の床', high: '独立した板' },
+  { id: 'bandUnison', label: 'Band unison', group: '構成', low: '最強の 1 帯域', high: '3 帯域が同時' },
   { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める', detail: true },
   { id: 'coreShape', label: 'Core shape', group: '構成', low: '等方の点', high: '横長の平らな面', detail: true },
   { id: 'coreBloom', label: 'Core bloom', group: '構成', low: '無し', high: 'Spatial 相当', detail: true },
@@ -345,11 +364,12 @@ export const DEFAULT_AXES: UnifiedAxes = {
   decay: 0.45,
   stagger: 0.4,
   blur: 0.5,
-  // **あとから足した 3 本は 0 が「現状のまま」。** 既定とプリセットの見え方を
+  // **あとから足した 4 本は 0 が「現状のまま」。** 既定とプリセットの見え方を
   // 動かさないための 0 で、中立の位置ではない（可動域はここから片側へ伸びる）。
   edgeContrast: 0,
   coreFocus: 0,
   isolation: 0,
+  bandUnison: 0,
   depthSpread: 0.45,
   hueCoherence: 0.6,
   hueStickiness: 0.5,
@@ -392,10 +412,11 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     stagger: 0.85,
     // にじみは強くしすぎない。0.9 を超えると層の縁が消えて 1 枚の靄になる。
     blur: 0.6,
-    // 現状の見え方をそのまま置くための 0（あとから足した 3 本は加算式なので 0 で無効）。
+    // 現状の見え方をそのまま置くための 0（あとから足した 4 本は加算式なので 0 で無効）。
     edgeContrast: 0,
     coreFocus: 0,
     isolation: 0,
+    bandUnison: 0,
     depthSpread: 0.9,
     hueCoherence: 0.35,
     hueStickiness: 0.2,
@@ -431,10 +452,11 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     decay: 0.9,
     stagger: 0.8,
     blur: 0.66,
-    // 現状の見え方をそのまま置くための 0（あとから足した 3 本は加算式なので 0 で無効）。
+    // 現状の見え方をそのまま置くための 0（あとから足した 4 本は加算式なので 0 で無効）。
     edgeContrast: 0,
     coreFocus: 0,
     isolation: 0,
+    bandUnison: 0,
     depthSpread: 0.5,
     hueCoherence: 0.45,
     hueStickiness: 0.3,
@@ -469,10 +491,11 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     decay: 0.15,
     stagger: 0.06,
     blur: 0.2,
-    // 現状の見え方をそのまま置くための 0（あとから足した 3 本は加算式なので 0 で無効）。
+    // 現状の見え方をそのまま置くための 0（あとから足した 4 本は加算式なので 0 で無効）。
     edgeContrast: 0,
     coreFocus: 0,
     isolation: 0,
+    bandUnison: 0,
     depthSpread: 0.2,
     hueCoherence: 1,
     hueStickiness: 1,

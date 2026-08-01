@@ -266,6 +266,17 @@ const DRIVE = {
    */
   fragmentLiveMaximum: 12,
   /**
+   * **追加コアのいちばん暗い側**（主コアに対する割合）。
+   *
+   * 同時に立った帯域の明るさは「素のフラックスの比」で配るが、比をそのまま使うと
+   * 相対 12% の帯域が 12% の明るさになり、**同時に光っていることが見えない**。
+   * 下限を置いて `min + (1 − min) × 比` に写すので、通った帯域は必ず見える一方、
+   * **主コアより明るくなることはない**（比 ≤ 1 なので上限は主コアと同値）。
+   */
+  companionPulseMinimum: 0.35,
+  /** 追加コアのシードを主コア・断片からずらす塩。位置が相関しないようにする。 */
+  companionSeedSalt: 20749,
+  /**
    * 検出器の運転設定。Light Reactive Lab と同じ既定値をそのまま使う
    * （イベント列を別物にしないため）。開発つまみには出さない。
    */
@@ -429,6 +440,18 @@ export interface OpticsSustained {
   readonly armStrength: number;
   readonly armSeed: number;
   readonly armAlive: boolean;
+  /** 主コアを出した帯域（`bass` / `mid` / `treble`）。まだ無ければ空文字。 */
+  readonly coreBand: string;
+  /**
+   * **同時に光っている追加のコア**（最強でない帯域）。
+   * `relativeStrengthFloor` が 1 のあいだ検出器は 1 打 = 1 帯域しか出さないので、
+   * **既定では常に空**である。
+   */
+  readonly companions: readonly {
+    readonly band: string;
+    readonly seed: number;
+    readonly pulse: number;
+  }[];
   /** 光学クロックのティック番号。 */
   readonly tick: number;
   /** 生きている断片（門を通していないので off ティックのものも含む）。 */
@@ -436,6 +459,9 @@ export interface OpticsSustained {
 }
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
+
+/** 帯域の並び。追加コアのシードを帯域ごとにずらすためだけに使う。 */
+const BAND_ORDER: readonly string[] = ['bass', 'mid', 'treble'];
 
 /**
  * **dt ベースの指数平滑。** `alpha = 1 − exp(−dt/τ)` なので、
@@ -492,6 +518,28 @@ export class OpticsAudioDrive {
   private pulseCount = 0;
   private lastStrength = 0;
   private lastBand: string | null = null;
+  /** 主役（素のフラックスが最大）の帯域。追加コアと区別するために別に持つ。 */
+  private strikeBand = '';
+
+  // ---- 同時発光（統合表現の `Band unison` 軸）----
+  /**
+   * **最強帯域に対する相対の敷居。** 1 なら「最強の 1 本だけ」＝ 従来どおりで、
+   * 検出器は 1 打につき 1 イベントしか返さない。**呼ばない表現は 1 でそのまま。**
+   */
+  private bandFloor: number = DRIVE.detection.relativeStrengthFloor;
+  /**
+   * **同時に光っている追加のコア。** 主コアの状態（`heldCorePulse` など）には
+   * 一切触れないので、`bandFloor` が 1 のあいだ**この配列は常に空**である。
+   */
+  private readonly companionCores: {
+    readonly band: string;
+    readonly seed: number;
+    readonly pulse: number;
+    ticksLeft: number;
+    framesLeft: number;
+  }[] = [];
+  /** このフレームで立った「最強でない帯域」。結合窓 1 つぶんしか入らない。 */
+  private readonly frameCompanions: { band: string; seed: number; share: number }[] = [];
 
   // ---- 光学クロック（ストロボ）----
   /**
@@ -509,6 +557,8 @@ export class OpticsAudioDrive {
   /** コアは打撃の 1 ティックだけ出る。値は打撃の瞬間に確定する。 */
   private heldCorePulse = 0;
   private heldCoreShape = -1;
+  /** その表示期間のコアを出した帯域（大きさの個体差に使う）。 */
+  private heldCoreBand = '';
   private coreTicksLeft = 0;
   private coreFramesLeft = 0;
   /**
@@ -832,6 +882,18 @@ export class OpticsAudioDrive {
   }
 
   /**
+   * **同時に光れる帯域の敷居。**
+   *
+   * 1 で「最強の 1 本だけ」＝ 検出器は 1 打につき 1 イベントしか返さず、
+   * 追加コアは 1 つも生まれない（**呼ばない表現・軸 0 では従来と 1 ビットも変わらない**）。
+   * 下げるほど「最強帯域のフラックス × floor を超えた帯域」が全部通り、
+   * それぞれが自分の位置・大きさ・色のコアを出す。
+   */
+  setBandFloor(floor: number): void {
+    this.bandFloor = clamp01(floor);
+  }
+
+  /**
    * **帯域バランスが決めたチャンネル利得**（Bass = R / Mid = G / Treble = B）。
    *
    * 鳴っている帯域を 1 に置き、**鳴っていない帯域を落とす**ので、
@@ -885,8 +947,11 @@ export class OpticsAudioDrive {
     this.heldHaze = 0;
     this.heldCorePulse = 0;
     this.heldCoreShape = -1;
+    this.heldCoreBand = '';
     this.coreTicksLeft = 0;
     this.coreFramesLeft = 0;
+    this.companionCores.length = 0;
+    this.frameCompanions.length = 0;
     this.heldArmMask = 0;
     this.heldArmStrength = 0;
     this.heldArmSeed = 0;
@@ -919,6 +984,7 @@ export class OpticsAudioDrive {
     this.coreAge = 0;
     this.strikeSeed = 0;
     this.strikeIndex = 0;
+    this.strikeBand = '';
     this.heldFanPower = 0;
     this.heldFanSeed = 0;
     this.fanTicksLeft = 0;
@@ -989,6 +1055,14 @@ export class OpticsAudioDrive {
     if (this.coreFramesLeft > 0) this.coreFramesLeft -= 1;
     if (this.armFramesLeft > 0) this.armFramesLeft -= 1;
     if (this.fanHoldFrames > 0) this.fanHoldFrames -= 1;
+    // 追加コアも主コアとまったく同じ規律で歳を取る（配列が空なら何も起きない）。
+    for (let index = this.companionCores.length - 1; index >= 0; index--) {
+      const companion = this.companionCores[index]!;
+      if (companion.framesLeft > 0) companion.framesLeft -= 1;
+      if (companion.ticksLeft <= 0 && companion.framesLeft <= 0) {
+        this.companionCores.splice(index, 1);
+      }
+    }
 
     // ---- 光学クロック: ティックを跨いだら表示状態を再サンプルする ----
     if (this.strobeEnabled) {
@@ -1021,6 +1095,9 @@ export class OpticsAudioDrive {
       this.heldFanPower = 0;
       this.fanTicksLeft = 0;
       this.fanHoldFrames = 0;
+      // 追加コアも無音では消える（無音 = 黒）。
+      this.companionCores.length = 0;
+      this.frameCompanions.length = 0;
       // 結線の側も 0 に落とす（棚のソースも無音では全部 0）。
       this.opticsStrike = 0;
       this.coreWasArmed = false;
@@ -1048,30 +1125,59 @@ export class OpticsAudioDrive {
       },
       elapsed,
       deltaSeconds,
-      // 不応期だけ密度で短くする（他の検出設定は Reactive Lab と同じまま）。
-      { ...DRIVE.detection, cooldownSeconds: DRIVE.detection.cooldownSeconds / this.densityScale },
+      // 不応期だけ密度で短くし、同時発光の敷居だけ軸から受ける
+      // （他の検出設定は Reactive Lab と同じまま。既定では `bandFloor = 1`）。
+      {
+        ...DRIVE.detection,
+        cooldownSeconds: DRIVE.detection.cooldownSeconds / this.densityScale,
+        relativeStrengthFloor: this.bandFloor,
+      },
     );
 
     // 検出器は**繋ぎ替えても回し続ける** — 断片の誕生と、形状族・アームの向きの
     // シードはここから来るからである。打撃の強さは「アダプタ由来のソース」へ置き、
     // 実際にコア・扇を動かす値は**結線を通したもの**を使う。
     this.opticsStrike = 0;
+    this.frameCompanions.length = 0;
+    /**
+     * **主役の帯域。** 検出器は素のフラックスが最大の帯域を `winningBand` に入れる。
+     * 並びは Bass / Mid / Treble の順なので `siblingIndex` は主役の印にならない。
+     * `bandFloor = 1` のときイベントは 1 本だけで、それが必ず主役になる。
+     */
+    const leadBand = events.length > 0 ? events[0]!.snapshot.winningBand : null;
+    let leadFlux = 0;
+    for (const event of events) if (event.band === leadBand) leadFlux = event.rawFlux;
     for (const event of events) {
       const strength = clamp01(event.strength);
       this.strikeCount += 1;
       this.lastStrength = strength;
       this.lastBand = event.band;
-      this.strikeSeed = clamp01(event.snapshot.audioSeed);
-      this.strikeIndex = event.eventIndex;
+      const seed =
+        (Math.round(clamp01(event.snapshot.audioSeed) * 100003) + event.eventIndex * 7919) | 0;
+      if (event.band === leadBand) {
+        this.strikeSeed = clamp01(event.snapshot.audioSeed);
+        this.strikeIndex = event.eventIndex;
+        this.strikeBand = event.band;
+        // **発火したフレームだけ値が入る衝撃**（減衰させない）。
+        // 減衰させると既定の接続で「1 ティックだけ光る」現行挙動が再現できない。
+        this.opticsStrike = Math.max(this.opticsStrike, strength);
+      } else {
+        /**
+         * **同時に立った別の帯域。** 明るさの配分に使えるのは**素のフラックス**だけで、
+         * `strength` は帯域ごとに別の参照値で割った値なので帯域間では比べられない。
+         */
+        this.frameCompanions.push({
+          band: event.band,
+          seed: (seed + BAND_ORDER.indexOf(event.band) * DRIVE.companionSeedSalt) | 0,
+          share: leadFlux > 1e-9 ? clamp01(event.rawFlux / leadFlux) : 0,
+        });
+      }
       this.frameStrikes.push({
-        seed: (Math.round(clamp01(event.snapshot.audioSeed) * 100003) + event.eventIndex * 7919) | 0,
+        seed,
         index: event.eventIndex,
         strength,
         band: event.band,
       });
-      // **発火したフレームだけ値が入る衝撃**（減衰させない）。
-      // 減衰させると既定の接続で「1 ティックだけ光る」現行挙動が再現できない。
-      this.opticsStrike = Math.max(this.opticsStrike, strength);
 
       // ---- 断片の誕生（Step 3）: **どの打撃も断片を生む**（コアの閾値とは独立）----
       this.spawnFragments(event.snapshot.audioSeed, event.eventIndex, strength,
@@ -1089,6 +1195,27 @@ export class OpticsAudioDrive {
         (1 - DRIVE.coreMinimumPulse) * Math.pow(clamp01(above), DRIVE.coreCurveExponent);
       // **表示のたびに確定する。** この表示期間のあいだ、値は動かない。
       this.heldCorePulse = Math.max(this.heldCorePulse, pulse);
+      this.heldCoreBand = this.strikeBand;
+      /**
+       * **同時発光。** 同じ打撃で立った「最強でない帯域」も自分のコアを出す。
+       * 明るさは**主コアの脈動そのものに比を掛けた値**なので、
+       * 「発光 (All)」を別のソースへ繋ぎ替えても追加コアが一緒に付いてくる
+       * （＝ 下流の時間規律も明るさの根も 1 本のまま）。
+       * `bandFloor = 1` のあいだ `frameCompanions` は空なので、ここは 1 度も通らない。
+       */
+      if (this.frameCompanions.length > 0) {
+        this.companionCores.length = 0;
+        const floor = DRIVE.companionPulseMinimum;
+        for (const companion of this.frameCompanions) {
+          this.companionCores.push({
+            band: companion.band,
+            seed: companion.seed,
+            pulse: pulse * (floor + (1 - floor) * companion.share),
+            ticksLeft: 1,
+            framesLeft: DRIVE.coreMinimumFrames,
+          });
+        }
+      }
       // 形状族は打撃の音のシードで選ぶ。層化して引くので「毎回同じコア」にならない。
       const offset = Math.floor(this.strikeSeed * CORE_SHAPES.length);
       this.heldCoreShape = (this.strikeIndex + offset) % CORE_SHAPES.length;
@@ -1406,6 +1533,10 @@ export class OpticsAudioDrive {
     } else {
       this.heldCorePulse = 0;
     }
+    // 追加コアも主コアと同じで、打撃の 1 ティックだけ点いて消える。
+    for (const companion of this.companionCores) {
+      if (companion.ticksLeft > 0) companion.ticksLeft -= 1;
+    }
     if (this.armTicksLeft > 0) {
       this.armTicksLeft -= 1;
       if (this.armTicksLeft <= 0 && this.armFramesLeft <= 0) this.heldArmMask = 0;
@@ -1523,6 +1654,12 @@ export class OpticsAudioDrive {
       armStrength: this.heldArmStrength,
       armSeed: this.heldArmSeed,
       armAlive: this.armTicksLeft > 0 || this.armFramesLeft > 0,
+      coreBand: this.heldCoreBand,
+      companions: this.companionCores.map((companion) => ({
+        band: companion.band,
+        seed: companion.seed,
+        pulse: companion.pulse,
+      })),
       tick: this.tickIndex,
       fragments: this.liveFragments.map((entry) => ({ spawn: entry.spawn, age: entry.age })),
     };

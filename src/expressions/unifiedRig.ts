@@ -135,6 +135,21 @@ export interface UnifiedDrive {
   readonly corePulse: number;
   /** 核の形状族（−1 で素の芯）。 */
   readonly coreShape: number;
+  /**
+   * **主コアを出した帯域**（`bass` / `mid` / `treble`）。大きさの個体差だけに使う。
+   * 空文字なら個体差なし。`Band unison` 軸 0 では倍率が 1 に戻るので効かない。
+   */
+  readonly coreBand: string;
+  /**
+   * **同時に光る追加のコア**（最強でない帯域）。`Band unison` 軸が 0 のあいだは
+   * 検出器が 1 打 = 1 帯域しか出さないので、**常に空**である。
+   */
+  readonly cores: readonly {
+    readonly seed: number;
+    readonly band: string;
+    /** 主コアと同じ規律を通った明るさ。 */
+    readonly pulse: number;
+  }[];
   /** 光条の方向ビットと強さ。 */
   readonly beamMask: number;
   readonly beamStrength: number;
@@ -240,9 +255,13 @@ export const UNIFIED = {
    * 余りだけを元の並びで配る（`capUnifiedRig`）。
    *
    * 合計は上限より小さくしておくこと（全種別が確実に枠を取れる条件）。
+   *
+   * 核の枠が 4 → 6 なのは `Band unison`（同時発光）のため。**枠は「先取りの上限」で
+   * 事前確保ではない**ので、核が 4 枚以下しか無いあいだ（＝軸 0）は
+   * 6 でも 4 でも 1 層も動かない。合計は 46 で上限 48 より小さいまま。
    */
   reserve: {
-    core: 4,
+    core: 6,
     fan: 2,
     beam: 8,
     haze: 2,
@@ -560,6 +579,28 @@ export const UNIFIED = {
      */
     membraneSizeAtOne: 0.46,
   },
+  /**
+   * **同時発光（`Band unison` 軸）の実寸。**
+   *
+   * 追加のコアは**主コアと同じ規律**（打撃の 1 ティックで出て、`Attack` / `Decay` /
+   * `Strobe` が同じように掛かる）で出る。違うのは位置・大きさ・色だけ。
+   *
+   * **骨格・閃光・扇は主コアにだけ付ける。** 十字も扇も「そのバーストの原点」を
+   * 指す層で、コアの数だけ生やすと画面が格子になる。向きの組（`ARM_SETS`）も
+   * 扇の個体差も**打撃 1 つにつき 1 組**しか無く、帯域ごとには定義されていない。
+   * 追加のコアは自分の中の十字（`CORE_SHAPE_PARAMS` のフレア）だけを持つ。
+   */
+  unison: {
+    /**
+     * **帯域ごとの核の大きさ**（軸 1 のときの倍率）。低い音ほど大きく、高い音ほど小さい。
+     * **主コアにも同じ倍率が掛かる**ので、軸を開くと「大小の違う核が同時に光る」になる。
+     * 軸 0 では 3 本とも 1 倍へ戻るので、現状の大きさは動かない。
+     */
+    coreScaleByBand: { bass: 1.32, mid: 1, treble: 0.66 } as Readonly<Record<string, number>>,
+    /** 追加コアの奥行きの散らばり（`depthOf` の t）。主コアは 0.25 に固定のまま。 */
+    depthMinimum: 0.16,
+    depthMaximum: 0.44,
+  },
 } as const;
 
 const TAU = Math.PI * 2;
@@ -737,12 +778,14 @@ const blinkOf = (
  * `spreadX/Y` を 0 にすれば従来どおり真ん中へ戻る。
  */
 const burstAnchor = (
+  /** 居場所を決めるシード。主コア・骨格・扇は `drive.beamSeed`、追加のコアは自分の seed。 */
+  seedSource: number,
   drive: UnifiedDrive,
   axes: UnifiedAxes,
   viewport: UnifiedViewport,
   z: number,
 ): { readonly x: number; readonly y: number } => {
-  const seed = Math.round(drive.beamSeed);
+  const seed = Math.round(seedSource);
   const place = placeOf(axes, seed + 977, 1);
   const d = drift(axes, seed + 977, 1, drive.time);
   const e = halfExtent(z, viewport);
@@ -1267,7 +1310,7 @@ const buildBeams = (
   const skeleton = clamp01(axes.skeleton);
   const z = depthOf(axes, 0.32);
   const e = halfExtent(z, viewport);
-  const anchor = burstAnchor(drive, axes, viewport, z);
+  const anchor = burstAnchor(drive.beamSeed, drive, axes, viewport, z);
   // 貫通させるときは、原点が端に寄っていても画面を突き抜ける長さが要る。
   const reach =
     (Math.max(e.w, e.h) + Math.max(Math.abs(anchor.x), Math.abs(anchor.y))) * beamReach(axes);
@@ -1372,90 +1415,179 @@ const buildBeams = (
 };
 
 /**
+ * **核 1 個ぶんの注文。** 主コアも追加コアも同じ 1 本の式を通る（違うのは引数だけ）。
+ * 追加コアは `Band unison` 軸が 0 のあいだ 1 つも作られないので、
+ * 軸 0 では主コアだけがこの一覧に入る ＝ 従来と厳密に同じ絵になる。
+ */
+interface CoreOrder {
+  readonly seed: number;
+  /** 居場所を決めるシード（丸める前）。 */
+  readonly anchorSeed: number;
+  readonly pulse: number;
+  readonly band: string;
+  readonly shapeIndex: number;
+  /** `depthOf` に渡す 0〜1。主コアは 0.25 に固定。 */
+  readonly depth: number;
+  readonly hue: number;
+  readonly hueSeed: number;
+  /** 素材と色の旅の index の起点（主コアは 5）。 */
+  readonly indexBase: number;
+  /** 明滅の位相の起点（主コアは 0）。 */
+  readonly blinkBase: number;
+  /** 板ごとの向きの index の起点（主コアは 20）。 */
+  readonly spinBase: number;
+  /** 板の枚数（端数は `countFade` が処理する）。追加コアは常に 1 枚。 */
+  readonly plates: number;
+}
+
+/**
+ * **帯域ごとの核の大きさ。** `Band unison` 軸 0 では 3 帯域とも 1 倍へ戻るので、
+ * 現状の核の大きさは 1 画素も動かない。
+ */
+const coreBandScale = (band: string, unison: number): number =>
+  mix(1, UNIFIED.unison.coreScaleByBand[band] ?? 1, clamp01(unison));
+
+/**
  * **核。** 白へ届いてよい唯一の層。
  *
  * 位置も `spreadX/Y` と `anchorPull` に従う。**中心に固定しない**のは、
  * 空間に散る側の見え方では白熱もあちこちで起きるからで、
  * 軸を 0 にすれば従来どおり画面の真ん中に戻る（打撃ごとの居場所は
  * その打撃のシードから決まるので決定論）。
+ *
+ * `Band unison` 軸を開くと、**同じ打撃の別の帯域**が自分の核を持つ。
+ * 位置はその帯域のシード、大きさは帯域そのもの、色は `Hue coherence` の混合
+ * （＝ 全体 1 色へ寄せていればコアどうしも同じ色相になる）で決まる。
  */
 const buildCore = (
   drive: UnifiedDrive,
   axes: UnifiedAxes,
   viewport: UnifiedViewport,
 ): UnifiedLayer[] => {
-  const pulse = clamp01(drive.corePulse);
-  if (pulse <= 0) return [];
-  const index = Math.round(drive.coreShape);
-  const shape =
-    index >= 0 && index < CORE_SHAPE_PARAMS.length
-      ? CORE_SHAPE_PARAMS[index]!
-      : ([-1, 0, 0, 1] as const);
   const a = UNIFIED.coreSizeAxis;
   const grow = clamp01(axes.coreSize);
-  const z = depthOf(axes, 0.25);
-  const anchor = burstAnchor(drive, axes, viewport, z);
-  const seed = Math.round(drive.beamSeed);
-  const base = coreSize(axes, seed) * mix(0.8, 1.15, pulse);
   const cross = coreCrossGain(axes);
   const roll = crossRoll(axes, drive.beamSeed);
   const form = clamp01(axes.coreShape);
-  /**
-   * **板の枚数。** 中心を 1 枚の点で描くと、どれだけ広げても「大きな点」にしかならない。
-   * 大きい側では 1 → 3 枚を少しずつずらして重ね、**面として**光らせる。
-   * 既定（0.4）では 1 枚のままなので、従来と 1 画素も変わらない。
-   */
-  const wanted = 1 + (a.plateCountMaximum - 1) * smoothstep(a.plateGrowthFrom, 1, grow);
-  const count = Math.max(Math.ceil(wanted), 1);
-  const out: UnifiedLayer[] = [];
-  for (let index = 0; index < count; index++) {
-    const h = (salt: number): number => hash01(seed + 5303, index * 7 + salt);
-    // 2 枚目以降は少し小さく、少しずれる。1 枚目は従来とまったく同じ位置と大きさ。
-    const shrink = index === 0 ? 1 : mix(1, a.plateSizeFalloff, h(1));
-    const size = base * shrink;
-    const spread = index === 0 ? 0 : a.plateOffset * size;
-    /**
-     * **薄め方。** `0.2 / size` は大きさをちょうど打ち消すので、これまでは
-     * 広げても白くならなかった。指数を `Core size` に載せ、大きい側では薄め方を弱める。
-     */
-    const dilute = Math.pow(
-      Math.min(UNIFIED.coreSmall / Math.max(size, 1e-3) + 0.1, 1),
-      mix(a.diluteCurveAtZero, a.diluteCurveAtOne, grow),
-    );
-    out.push({
-      kind: 'core',
-      position: [
-        anchor.x + (h(2) - 0.5) * 2 * spread,
-        anchor.y + (h(3) - 0.5) * 2 * spread,
-        z - index * 0.01,
-      ],
-      half: [size * mix(1, UNIFIED.coreShapeAxis.wide, form), size * mix(1, UNIFIED.coreShapeAxis.tall, form)],
-      // 核の中の十字は板ごと回す（斜めの十字が作れる）。
-      spin: roll + crossSkew(axes, seed, 20 + index),
-      tiltX: 0,
-      tiltY: 0,
+  const unison = clamp01(axes.bandUnison);
+
+  const orders: CoreOrder[] = [];
+  const pulse = clamp01(drive.corePulse);
+  if (pulse > 0) {
+    orders.push({
+      seed: Math.round(drive.beamSeed),
+      anchorSeed: drive.beamSeed,
+      pulse,
+      band: drive.coreBand,
+      shapeIndex: Math.round(drive.coreShape),
+      depth: 0.25,
       hue: drive.hue,
-      hueSpan: 0.08,
-      ...hueRamp(axes, drive.hue, 0.08, drive.beamSeed, 5 + index),
-      gradientForm: 1,
-      intensity:
-        mix(0.4, 1.55, pulse) *
-        dilute *
-        blinkOf(axes, drive, 'core', index) *
-        countFade(wanted, index, count),
-      // [形状族, 横フレア, 縦スパイク, 芯の強さ]。フレアは十字なので軸に連動させる。
-      shape: [shape[0], shape[1] * cross, shape[2] * cross, shape[3]],
-      edge: clamp01(axes.blur),
-      // 大きい塊にさらに広いハロを足すと画面が白く埋まる。半径で割り戻す。
-      halo: haloOf(axes, 'core') * Math.min((UNIFIED.coreSmall * 2.4) / Math.max(size, 1e-3), 1),
-      pad: padOf(axes),
-      // 核では「性格」は点 ⇄ 面（頂の平らさ）を表す。
-      character: form,
-      material: materialOf(axes, 'core', drive.beamSeed, 5 + index),
-      whiteAllowed: true,
-      ceiling: 1,
-      channel: [1, 1, 0, 0],
+      hueSeed: drive.beamSeed,
+      indexBase: 5,
+      blinkBase: 0,
+      spinBase: 20,
+      /**
+       * **板の枚数。** 中心を 1 枚の点で描くと、どれだけ広げても「大きな点」にしかならない。
+       * 大きい側では 1 → 3 枚を少しずつずらして重ね、**面として**光らせる。
+       * 既定（0.4）では 1 枚のままなので、従来と 1 画素も変わらない。
+       */
+      plates: 1 + (a.plateCountMaximum - 1) * smoothstep(a.plateGrowthFrom, 1, grow),
     });
+  }
+  for (let n = 0; n < drive.cores.length; n++) {
+    const extra = drive.cores[n]!;
+    const extraPulse = clamp01(extra.pulse);
+    if (extraPulse <= 0) continue;
+    const seed = Math.round(extra.seed);
+    orders.push({
+      seed,
+      anchorSeed: extra.seed,
+      pulse: extraPulse,
+      band: extra.band,
+      // 形状族もその帯域のシードが引く（主コアと同じ族が並ばない）。
+      shapeIndex: Math.floor(hash01(seed + 7717, 17) * CORE_SHAPE_PARAMS.length),
+      depth: mix(
+        UNIFIED.unison.depthMinimum,
+        UNIFIED.unison.depthMaximum,
+        hash01(seed + 7717, 31),
+      ),
+      // **色は要素ごとの seed 色と全体色の混合。** `Hue coherence` の契約に乗せる。
+      hue: hueOf(axes, drive.hue, seed, 7),
+      hueSeed: extra.seed,
+      indexBase: 11 + n * 3,
+      blinkBase: 3 + n,
+      spinBase: 40 + n * 4,
+      // 追加コアは 1 枚。白の予算と層の枠を主コアと取り合わせないため。
+      plates: 1,
+    });
+  }
+  if (orders.length === 0) return [];
+
+  const out: UnifiedLayer[] = [];
+  for (const order of orders) {
+    const shape =
+      order.shapeIndex >= 0 && order.shapeIndex < CORE_SHAPE_PARAMS.length
+        ? CORE_SHAPE_PARAMS[order.shapeIndex]!
+        : ([-1, 0, 0, 1] as const);
+    const z = depthOf(axes, order.depth);
+    const anchor = burstAnchor(order.anchorSeed, drive, axes, viewport, z);
+    const seed = order.seed;
+    const base =
+      coreSize(axes, seed) * mix(0.8, 1.15, order.pulse) * coreBandScale(order.band, unison);
+    const wanted = order.plates;
+    const count = Math.max(Math.ceil(wanted), 1);
+    for (let index = 0; index < count; index++) {
+      const h = (salt: number): number => hash01(seed + 5303, index * 7 + salt);
+      // 2 枚目以降は少し小さく、少しずれる。1 枚目は従来とまったく同じ位置と大きさ。
+      const shrink = index === 0 ? 1 : mix(1, a.plateSizeFalloff, h(1));
+      const size = base * shrink;
+      const spread = index === 0 ? 0 : a.plateOffset * size;
+      /**
+       * **薄め方。** `0.2 / size` は大きさをちょうど打ち消すので、これまでは
+       * 広げても白くならなかった。指数を `Core size` に載せ、大きい側では薄め方を弱める。
+       */
+      const dilute = Math.pow(
+        Math.min(UNIFIED.coreSmall / Math.max(size, 1e-3) + 0.1, 1),
+        mix(a.diluteCurveAtZero, a.diluteCurveAtOne, grow),
+      );
+      out.push({
+        kind: 'core',
+        position: [
+          anchor.x + (h(2) - 0.5) * 2 * spread,
+          anchor.y + (h(3) - 0.5) * 2 * spread,
+          z - index * 0.01,
+        ],
+        half: [
+          size * mix(1, UNIFIED.coreShapeAxis.wide, form),
+          size * mix(1, UNIFIED.coreShapeAxis.tall, form),
+        ],
+        // 核の中の十字は板ごと回す（斜めの十字が作れる）。
+        spin: roll + crossSkew(axes, seed, order.spinBase + index),
+        tiltX: 0,
+        tiltY: 0,
+        hue: order.hue,
+        hueSpan: 0.08,
+        ...hueRamp(axes, order.hue, 0.08, order.hueSeed, order.indexBase + index),
+        gradientForm: 1,
+        intensity:
+          mix(0.4, 1.55, order.pulse) *
+          dilute *
+          blinkOf(axes, drive, 'core', order.blinkBase + index) *
+          countFade(wanted, index, count),
+        // [形状族, 横フレア, 縦スパイク, 芯の強さ]。フレアは十字なので軸に連動させる。
+        shape: [shape[0], shape[1] * cross, shape[2] * cross, shape[3]],
+        edge: clamp01(axes.blur),
+        // 大きい塊にさらに広いハロを足すと画面が白く埋まる。半径で割り戻す。
+        halo: haloOf(axes, 'core') * Math.min((UNIFIED.coreSmall * 2.4) / Math.max(size, 1e-3), 1),
+        pad: padOf(axes),
+        // 核では「性格」は点 ⇄ 面（頂の平らさ）を表す。
+        character: form,
+        material: materialOf(axes, 'core', order.hueSeed, order.indexBase + index),
+        whiteAllowed: true,
+        ceiling: 1,
+        channel: [1, 1, 0, 0],
+      });
+    }
   }
   return out;
 };
@@ -1559,7 +1691,7 @@ const buildFan = (
   const b = seed >= 0 ? hash01(seed, 102) : 0.5;
   const c = seed >= 0 ? hash01(seed, 103) : 0.5;
   const z = depthOf(axes, 0.3);
-  const anchor = burstAnchor(drive, axes, viewport, z);
+  const anchor = burstAnchor(drive.beamSeed, drive, axes, viewport, z);
   return [
     {
       kind: 'fan',

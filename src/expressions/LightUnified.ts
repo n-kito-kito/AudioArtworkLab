@@ -141,6 +141,16 @@ const HUE = { confirmMin: 0.2, confirmMax: 1.8, holdMin: 1, holdMax: 10 } as con
 const DENSITY = { min: 0.45, max: 2.6 } as const;
 
 /**
+ * **`Band unison` 軸 → 検出器の相対の敷居。**
+ *
+ * 1.0 は「最強の 1 帯域だけ」＝ 現状。0.12 まで下げると、最強帯域の 12% 以上の
+ * フラックスを出した帯域が全部通る（実測では 2〜3 帯域が同時に立つ）。
+ * ここを 0 にはしない — 0 にすると鳴っていない帯域の微小なフラックスまで拾って
+ * 「いつも 3 個」になり、同時発光が出来事として読めなくなる。
+ */
+const UNISON = { floorAtOne: 0.12, poolMaximum: 3 } as const;
+
+/**
  * **打撃ごとに生まれる膜（`Event membrane` 軸）の実寸。**
  *
  * 数値はここにしか書かない。寿命は `Decay` 軸が伸ばし、枚数は `Density` 軸が掛ける。
@@ -197,6 +207,8 @@ const SILENT_DRIVE: UnifiedDrive = {
   beamSeed: 0,
   fanPower: 0,
   fanSeed: -1,
+  coreBand: '',
+  cores: [],
   fragments: [],
   membranes: [],
   hue: 0,
@@ -261,6 +273,16 @@ export class LightUnified implements LabExpression {
   private readonly fanLine = new DelayLine();
   private readonly beamLine = new DelayLine();
   private readonly coreLight = { emission: new EmissionShape(), hold: -1 };
+  /**
+   * **同時に光る追加のコア 1 個ずつの時間の形。**
+   *
+   * 主コアと同じ `Attack` / `Decay` / `Strobe` を通す（尾の倍率も核の `Stagger`）。
+   * `Band unison` 軸が 0 のあいだ生成核が 1 つも出さないので、この表は常に空である。
+   */
+  private readonly companionCores = new Map<
+    string,
+    { band: string; seed: number; pulse: number; emission: EmissionShape; alive: boolean }
+  >();
   private readonly fanLight = { emission: new EmissionShape(), hold: -1 };
   private readonly beamShape = new EmissionShape();
   private beamMaskHeld = 0;
@@ -565,6 +587,47 @@ export class LightUnified implements LabExpression {
     );
     const corePulse = this.coreLight.emission.read(strobe);
 
+    // ---- 同時に光る追加のコア（`Band unison` 軸 0 では 1 個も来ない）----
+    for (const entry of this.companionCores.values()) entry.alive = false;
+    for (const live of raw.companions) {
+      /**
+       * **枠は帯域ごとに 1 つ。** 主コアが 1 スロットしか持たない（新しい打撃が
+       * 前の打撃を上書きする）のと同じ規律にしてある。seed で持つと尾が溜まって
+       * 「同時に 9 個」になり、**同時発光ではなく残像の山**になってしまう。
+       */
+      let entry = this.companionCores.get(live.band);
+      if (!entry) {
+        if (this.companionCores.size >= UNISON.poolMaximum) continue;
+        entry = {
+          band: live.band,
+          seed: live.seed,
+          pulse: live.pulse,
+          emission: new EmissionShape(),
+          alive: true,
+        };
+        this.companionCores.set(live.band, entry);
+      }
+      entry.band = live.band;
+      entry.seed = live.seed;
+      entry.pulse = live.pulse;
+      entry.alive = true;
+      entry.emission.advance(live.pulse, delta, tick, attack, decay, coreLag.decayScale);
+    }
+    const cores: UnifiedDrive['cores'][number][] = [];
+    for (const [key, entry] of this.companionCores) {
+      // 死んだ追加コアも、尾を引いているあいだは主コアと同じ時定数で消えていく。
+      if (!entry.alive) {
+        entry.emission.advance(0, delta, tick, attack, decay, coreLag.decayScale);
+        if (entry.emission.level <= 0) {
+          this.companionCores.delete(key);
+          continue;
+        }
+      }
+      const gain = entry.emission.read(strobe);
+      if (gain <= 0) continue;
+      cores.push({ seed: entry.seed, band: entry.band, pulse: gain });
+    }
+
     // ---- 扇 ----
     if (raw.fanAlive) this.fanLight.hold = raw.fanSeed;
     const fanLag = lag('fan');
@@ -644,6 +707,8 @@ export class LightUnified implements LabExpression {
       fieldLevels,
       corePulse,
       coreShape: corePulse > 0 ? this.coreLight.hold : -1,
+      coreBand: raw.coreBand,
+      cores,
       beamMask: beamStrength > 0 ? this.beamMaskHeld : 0,
       beamStrength,
       beamSeed: this.beamSeedHeld,
@@ -765,6 +830,15 @@ export class LightUnified implements LabExpression {
     this.audioDrive.setDensity(DENSITY.min + clamp(density, 0, 1) * (DENSITY.max - DENSITY.min));
   }
 
+  /**
+   * `Band unison` 軸を検出器へ渡す。**軸 0 では敷居 1.0 ＝ 最強の 1 帯域だけ**なので、
+   * 検出器のイベント列も追加コアも従来と 1 ビットも変わらない。
+   */
+  private applyUnison(): void {
+    const unison = clamp(this.axes.bandUnison, 0, 1);
+    this.audioDrive.setBandFloor(1 - unison * (1 - UNISON.floorAtOne));
+  }
+
   private applyStickiness(): void {
     const sticky = clamp(this.axes.hueStickiness, 0, 1);
     // 粘りが強いほど「色の回」が長くなる。確認時間も一緒に伸びる。
@@ -790,6 +864,7 @@ export class LightUnified implements LabExpression {
     this.beamLine.reset();
     this.coreLight.emission.reset();
     this.coreLight.hold = -1;
+    this.companionCores.clear();
     this.fanLight.emission.reset();
     this.fanLight.hold = -1;
     this.beamShape.reset();
@@ -1451,6 +1526,7 @@ export class LightUnified implements LabExpression {
     for (const decl of MASTER_LOOK_PARAMS) this.lookResolver.updateParam(decl.id, delta);
     // **結線した `Density` を生成核へも通す**（枚数・同時数・不応期はここが決める）。
     this.applyDensity();
+    this.applyUnison();
     this.audioDrive.update(audio, spectrum, elapsed, delta);
     this.previousElapsed = elapsed;
     this.advanceDrive(elapsed, delta);
