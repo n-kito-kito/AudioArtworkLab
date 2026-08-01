@@ -38,6 +38,25 @@ export const SHELF = {
   bandDecaySeconds: 0.22,
   /** 打撃の強さのパルスが落ちる時定数（秒）。 */
   onsetDecaySeconds: 0.18,
+  /**
+   * **周波数全体（`spectrum`）のピーク追従。**
+   *
+   * engine の帯域正規化とまったく同じ流儀（天井は超えたら即上がり、下回ると
+   * ゆっくり降りる・下限を持つ）にしてある。曲ごとに音圧が違っても
+   * 「その曲の中でどれだけ鳴っているか」として読めるようにするため。
+   */
+  spectrumCeilingDecay: 0.9997,
+  spectrumCeilingFloor: 0.06,
+  /**
+   * **周波数全体を数えるときの帯域の切り方（Hz）。**
+   * engine（`FileAudioEngine`）と帯域イベント検出（`bandLightEvents`）と同じ境目に揃える。
+   * ビンの範囲は nyquist から毎回計算するので、サンプルレートが変わっても崩れない。
+   */
+  spectrumBands: [
+    [20, 250],
+    [250, 4000],
+    [4000, 16000],
+  ] as readonly (readonly [number, number])[],
 } as const;
 
 const clamp01 = (value: number): number => Math.min(Math.max(value, 0), 1);
@@ -123,6 +142,29 @@ export class AudioSourceShelf {
   private levelTreble = 0;
   private levelBrightness = 0;
   private levelRise = 0.5;
+  /**
+   * **周波数全体（`Bass` / `Mid` / `Treble` をまとめた 1 本）。**
+   *
+   * 3 帯域の平均を取り、**そのあとで 1 本だけ正規化する**。
+   *
+   * - **帯域ごとに平均してから足す**のは、単純に全ビンを平均すると
+   *   ビン数の多い高域が答えを決めてしまうため。実測（reference.wav・25 秒）で
+   *   全ビン平均は `Treble` と **r = 0.973** ＝ ほぼ同じ動きになり、棚に置く意味がなかった。
+   *   帯域ごとに揃えると最大でも `Bass` と 0.69 で、既存のどれとも重ならない。
+   * - **正規化を 1 本にまとめる**のが `Bass` / `Mid` / `Treble` を 3 本並べるのとの違い。
+   *   棚の 3 本は engine が**帯域ごとの天井**で割った値なので、高域しか無い区間でも
+   *   `Treble` は 1 に張り付く。こちらは 3 帯域の素の高さを足してから 1 つの天井で割るので、
+   *   **帯域どうしの釣り合いがそのまま残る**（＝「全体としてどれだけ鳴っているか」）。
+   * - `Volume` との違いも実測で出ている（**r = 0.42**）。`Volume` は**時間波形**の
+   *   実効値なので低音の振幅が支配し（`Bass` と r = 0.63）、こちらは**周波数軸**の
+   *   dB 目盛りなので、細い高音やノイズが増えただけでも上がる。
+   *
+   * 「新しい解析はしない」の原則は守っている — engine が 1 フレーム 1 回
+   * 取り直している `getSpectrum()` のバッファを読むだけで、FFT は 1 回のままである。
+   */
+  private levelSpectrum = 0;
+  /** 周波数全体のピーク追従の天井。 */
+  private spectrumCeiling: number = SHELF.spectrumCeilingFloor;
 
   constructor(engine: AudioEngine & FeatureCapable) {
     this.engine = engine;
@@ -132,6 +174,12 @@ export class AudioSourceShelf {
       { id: 'bass', label: 'Bass (低域)', kind: 'level', value: () => this.levelBass },
       { id: 'mid', label: 'Mid (中域)', kind: 'level', value: () => this.levelMid },
       { id: 'treble', label: 'Treble (高域)', kind: 'level', value: () => this.levelTreble },
+      {
+        id: 'spectrum',
+        label: 'Spectrum (周波数全体)',
+        kind: 'level',
+        value: () => this.levelSpectrum,
+      },
       { id: 'onset', label: 'Onset (打撃)', kind: 'event', value: () => this.onsetLevel },
       {
         id: 'brightness',
@@ -183,6 +231,29 @@ export class AudioSourceShelf {
     this.levelTreble = 0;
     this.levelBrightness = 0;
     this.levelRise = 0.5;
+    this.levelSpectrum = 0;
+    this.spectrumCeiling = SHELF.spectrumCeilingFloor;
+  }
+
+  /**
+   * **3 帯域の平均（0〜1）。** 各帯域はそのビン範囲の平均で、帯域幅の違いを
+   * ここで消してから 3 本を足す。スペクトルを出せないエンジンでは 0
+   *（棚は空にならず、繋いでも黒いまま = 無音扱いになる）。
+   */
+  private rawSpectrum(): number {
+    const frame = this.engine.getSpectrum?.();
+    if (!frame || frame.magnitudes.length === 0 || !(frame.nyquist > 0)) return 0;
+    const bins = frame.magnitudes.length;
+    const band = (low: number, high: number): number => {
+      const from = Math.max(Math.floor((low / frame.nyquist) * bins), 0);
+      const to = Math.min(Math.ceil((high / frame.nyquist) * bins), bins);
+      if (to <= from) return 0;
+      let total = 0;
+      for (let index = from; index < to; index++) total += frame.magnitudes[index]!;
+      return total / ((to - from) * 255);
+    };
+    const [bass, mid, treble] = SHELF.spectrumBands;
+    return clamp01((band(bass[0], bass[1]) + band(mid[0], mid[1]) + band(treble[0], treble[1])) / 3);
   }
 
   /**
@@ -213,6 +284,7 @@ export class AudioSourceShelf {
       this.levelMid = 0;
       this.levelTreble = 0;
       this.levelBrightness = 0;
+      this.levelSpectrum = 0;
       // 盛り上がりは 0.5 が中立なので、無音では中立へ戻す。
       this.levelRise = 0.5;
       return;
@@ -266,6 +338,16 @@ export class AudioSourceShelf {
     this.levelTreble = follow(this.levelTreble, parameters.treble ?? 0);
     // 音色の明るさは重心。観察用の特徴と同じ値を使う（新しい解析はしない）。
     this.levelBrightness = follow(this.levelBrightness, parameters.centroid ?? 0);
+    // 周波数全体。engine の帯域と同じピーク追従で「その曲の中での鳴り具合」にする。
+    const spectrum = this.rawSpectrum();
+    this.spectrumCeiling = Math.min(
+      Math.max(
+        Math.max(spectrum, this.spectrumCeiling * SHELF.spectrumCeilingDecay),
+        SHELF.spectrumCeilingFloor,
+      ),
+      1,
+    );
+    this.levelSpectrum = follow(this.levelSpectrum, spectrum / this.spectrumCeiling);
     // 盛り上がり = 速い包絡 − 遅い包絡（0.5 が中立）。観察用の特徴をそのまま使う。
     this.levelRise = features
       ? follow(this.levelRise, features.envelopeDelta)
