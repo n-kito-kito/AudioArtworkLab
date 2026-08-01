@@ -469,6 +469,58 @@ export const UNIFIED = {
     membrane: 0,
     haze: 0,
   },
+  /**
+   * **縁の締まり（`Edge contrast` / `Core focus`）の実寸。**
+   *
+   * どれも「軸 1 のときに何倍になるか」で、**軸 0 では厳密に 1 倍**（＝現状のまま）。
+   * 可動域を片側へ伸ばすだけの足し方なので、既定値もプリセットも動かない。
+   *
+   * 実測の根拠は `ROADMAP.md` の P9-6。丸いハロ（`base + halo·exp(−r²·w)`）が
+   * **核の裾のほぼ全部**を作っていた — 既定（blur 0.5）では半径 0.5 の位置で
+   * 核の明るさ 0.106 のうち 0.106 がハロで、形そのものの寄与は 0.0007 しかない。
+   */
+  definition: {
+    /** ハロの量（`Edge contrast` 1 で 15%）。0 にしないのは光り物の柔らかさを残すため。 */
+    haloAtOne: 0.15,
+    /** ハロの広がりを詰める倍率（指数に掛ける。3.6 倍で半径は 1/1.9）。 */
+    haloTightenAtOne: 3.6,
+    /** 核だけの追加のハロ削り（`Core focus` 1 で 18%）。 */
+    coreHaloAtOne: 0.18,
+    /** `softEdge` の窓幅（`Edge contrast` 1 で 1/6.25）。 */
+    edgeWidthAtOne: 0.16,
+    /** 種別ごとの局所ハロ（膜の帯・光条の芯が使う）の幅。 */
+    kindHaloAtOne: 0.18,
+    /** 多角形マスク（`Silhouette`）の縁の柔らかさ。 */
+    maskSoftnessAtOne: 0.22,
+    /** 素材（アトラス）のガンマを 1 へ寄せる倍率。筋と地の差が開く。 */
+    grainGammaAtOne: 1.85,
+    /**
+     * **ガンマを立てたぶんの明るさの戻し。**
+     * `pow(x, γ)` の γ を上げると素材が暗くなるので、その中央値ぶんを利得へ返す。
+     * 実測で決めた値（`Edge contrast` 1 で平均輝度がほぼ動かない高さ）。
+     */
+    grainGainAtOne: 1.62,
+    /** 核の超ガウス指数の伸び（半値半径は保つ）。 */
+    coreSuperGaussAtOne: 1.5,
+    /** 核の散乱片（`flakes`）の裾を詰める倍率。 */
+    coreFlakeTightenAtOne: 3.2,
+    /** ブルームの閾値の持ち上げと半径の詰め。 */
+    bloomThresholdRise: 0.55,
+    bloomRadiusAtOne: 0.2,
+    /**
+     * **明るさの中立化（縁を締めたぶんの戻し）。**
+     *
+     * 縁を締めると裾（こぼれた光）が消えるので、そのままでは軸が
+     * **「シャープ」ではなく「暗い」として読める**（実測で 2 本とも 1 にすると
+     * 平均輝度 38.4 → 16.4 ＝ 57% の目減り）。**明るさを決めるのは `Intensity` の
+     * 1 本だけ**という状態を保つために、消えた裾のぶんを利得へ返す。
+     *
+     * 裾へこぼれていた光を形へ集め直すだけで、**天井（白の予算）は動かさない**。
+     * 核の側が大きいのは、`Core focus` がブルームの寄与ごと畳むためである。
+     */
+    edgeGainAtOne: 1.75,
+    coreFocusGainAtOne: 2.2,
+  },
 } as const;
 
 const TAU = Math.PI * 2;
@@ -605,9 +657,18 @@ const tiltOf = (
  */
 const padOf = (axes: UnifiedAxes): number => 1 + clamp01(axes.blur) * UNIFIED.padAtFullBlur;
 
-/** **にじみのハロ。** `blur` 軸が種別ごとの上限まで散乱を広げる。 */
-const haloOf = (axes: UnifiedAxes, kind: keyof typeof UNIFIED.halo): number =>
-  clamp01(axes.blur) * UNIFIED.halo[kind];
+/**
+ * **にじみのハロ。** `blur` 軸が種別ごとの上限まで散乱を広げ、
+ * `edgeContrast` がその量を削る（核はさらに `coreFocus` が削る）。
+ *
+ * どちらの軸も 0 では厳密に 1 倍なので、**現状の見え方は 1 画素も動かない**。
+ */
+const haloOf = (axes: UnifiedAxes, kind: keyof typeof UNIFIED.halo): number => {
+  const d = UNIFIED.definition;
+  const trim = mix(1, d.haloAtOne, clamp01(axes.edgeContrast));
+  const coreTrim = kind === 'core' ? mix(1, d.coreHaloAtOne, clamp01(axes.coreFocus)) : 1;
+  return clamp01(axes.blur) * UNIFIED.halo[kind] * trim * coreTrim;
+};
 
 /**
  * **枚数の段を消す。**

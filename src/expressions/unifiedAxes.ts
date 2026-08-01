@@ -77,6 +77,22 @@ export interface UnifiedAxes {
    * 縁の `smoothstep` 幅・ハロの利得・散乱の広がりを**1 本の軸で束ねる**。
    */
   blur: number;
+  /**
+   * **縁の締まり（`Blur` の届かなかった側へ可動域を伸ばす 1 本）。**
+   *
+   * 0 = 現状のまま（**厳密に 1 画素も変わらない**）⇄ 1 = 破片・膜・光条・扇の
+   * 縁の窓が 1/6 まで詰まり、丸いハロがほぼ消え、素材の筋が立つ。
+   *
+   * `Blur` は「縁の柔らかさ」と「ハロの広さ」を**同じ 1 本**で持っていて、
+   * 既定 0.5 では要素どうしが溶けて 1 つの塊に見えていた（実測: 隣接勾配の
+   * p90 が Spatial/Reactive 期の 0.26 に対し 0.098 ＝ 2.7 分の 1、
+   * 高周波の割合は 10 分の 1、点灯した横方向の連なりの中央値は 4.8 px 対 131 px）。
+   *
+   * `Blur` の写像そのものは動かさない — 既定値もプリセットも現状のままで、
+   * **この軸を上げたぶんだけ縁が締まる**という足し方にしてある（D17 の焼き込みは
+   * 「作者が向きを決めるノブを置かない」ことであって、可動域を狭めることではない）。
+   */
+  edgeContrast: number;
 
   // ---- 空間 ----
   /** 0 = 平面（全部同じ奥行き）⇄ 1 = Near/Far に散る。 */
@@ -175,6 +191,24 @@ export interface UnifiedAxes {
    */
   coreBloom: number;
   /**
+   * **核の滲みを切り詰める。**
+   *
+   * 0 = 現状のまま（**厳密に 1 画素も変わらない**）⇄ 1 = 頂の平らな実体を残したまま
+   * 裾だけが急に落ち、丸いハロと広い散乱片が消え、ブルームも閾値が上がって半径が詰まる。
+   *
+   * **大きさは動かさない。** 半値半径を保ったまま超ガウスの指数だけを上げるので
+   *（`k = kBase · (kBase/ln2)^(n/nBase − 1)`）、核は「小さくなる」のではなく
+   * 「同じ大きさのまま縁が硬くなる」。
+   *
+   * 実測の根拠: 現状の核は半値半径 36 px に対し 1/10 まで落ちるのが 67 px
+   *（200 px 換算・裾の比 1.87）。Spatial/Reactive 期は 18.9 px と 46 px で、
+   * **実体が厚く裾が短い**。現状は逆に「細い芯 + 長い滲み」になっていた。
+   *
+   * `Core bloom` はブルームの**強さ**を持つ軸で、こちらは**広がり方**を持つ。
+   * 両方を独立に置いてあるので「強く光るが滲まない核」も作れる。
+   */
+  coreFocus: number;
+  /**
    * **破片の性格。** 0 = 角のある破片 ⇄ 1 = 引っ掻き傷のような羽毛・筋。
    * `Blur`（光学のにじみ）とは別軸にしてある — 鋭い筋と滲んだ破片を
    * それぞれ独立に出せるようにするため。
@@ -243,8 +277,9 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'decay', label: 'Decay', group: '時間', low: '一瞬', high: '長い尾', detail: true },
   { id: 'stagger', label: 'Stagger', group: '時間', low: '全層同時', high: '種別ごとにずれる', detail: true },
 
-  // ---- 光学（上段 1）----
+  // ---- 光学（上段 2）----
   { id: 'blur', label: 'Blur', group: '光学', low: 'シャープ', high: 'にじみ' },
+  { id: 'edgeContrast', label: 'Edge contrast', group: '光学', low: '現状', high: '縁が締まる' },
 
   // ---- 色（上段 1・詳細 3。`Colour lock` マスターが代表）----
   { id: 'channelBalance', label: 'Channel balance', group: '色', low: 'R 優勢', high: 'B 優勢' },
@@ -262,6 +297,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める', detail: true },
   { id: 'coreShape', label: 'Core shape', group: '構成', low: '等方の点', high: '横長の平らな面', detail: true },
   { id: 'coreBloom', label: 'Core bloom', group: '構成', low: '無し', high: 'Spatial 相当', detail: true },
+  { id: 'coreFocus', label: 'Core focus', group: '構成', low: '現状', high: '裾を切る', detail: true },
   { id: 'membraneScale', label: 'Membrane scale', group: '構成', low: '画面基準', high: 'ワールド固定', detail: true },
   { id: 'eventMembrane', label: 'Event membrane', group: '構成', low: '固定の膜', high: '打撃ごとに生死', detail: true },
   { id: 'textureGrain', label: 'Texture grain', group: '構成', low: '手続き形状', high: '素材が支配', detail: true },
@@ -286,6 +322,10 @@ export const DEFAULT_AXES: UnifiedAxes = {
   decay: 0.45,
   stagger: 0.4,
   blur: 0.5,
+  // **新しい 2 本は 0 が「現状のまま」。** 既定とプリセットの見え方を動かさないための 0 で、
+  // 中立の位置ではない（可動域はここから片側へ伸びる）。
+  edgeContrast: 0,
+  coreFocus: 0,
   depthSpread: 0.45,
   hueCoherence: 0.6,
   hueStickiness: 0.5,
@@ -328,6 +368,9 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     stagger: 0.85,
     // にじみは強くしすぎない。0.9 を超えると層の縁が消えて 1 枚の靄になる。
     blur: 0.6,
+    // 現状の見え方をそのまま置くための 0（新しい 2 本は加算式なので 0 で無効）。
+    edgeContrast: 0,
+    coreFocus: 0,
     depthSpread: 0.9,
     hueCoherence: 0.35,
     hueStickiness: 0.2,
@@ -363,6 +406,9 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     decay: 0.9,
     stagger: 0.8,
     blur: 0.66,
+    // 現状の見え方をそのまま置くための 0（新しい 2 本は加算式なので 0 で無効）。
+    edgeContrast: 0,
+    coreFocus: 0,
     depthSpread: 0.5,
     hueCoherence: 0.45,
     hueStickiness: 0.3,
@@ -397,6 +443,9 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     decay: 0.15,
     stagger: 0.06,
     blur: 0.2,
+    // 現状の見え方をそのまま置くための 0（新しい 2 本は加算式なので 0 で無効）。
+    edgeContrast: 0,
+    coreFocus: 0,
     depthSpread: 0.2,
     hueCoherence: 1,
     hueStickiness: 1,

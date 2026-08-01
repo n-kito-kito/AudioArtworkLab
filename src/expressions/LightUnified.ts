@@ -98,6 +98,8 @@ const LIMITS = {
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
+const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
+
 /** 0〜1 の滑らかな立ち上がり（GLSL の同名関数と同じ形）。 */
 const smoothstep = (edge0: number, edge1: number, value: number): number => {
   const t = clamp((value - edge0) / Math.max(edge1 - edge0, 1e-6), 0, 1);
@@ -863,6 +865,13 @@ export class LightUnified implements LabExpression {
           value: new THREE.Vector2(this.maskAtlas?.columns ?? 1, this.maskAtlas?.rows ?? 1),
         },
         uMaskSoftness: { value: LIMITS.maskSoftness },
+        /**
+         * **縁の締まり。** どちらも 0 で厳密に現状（すべての式が 1 倍 / 恒等）へ戻る。
+         * `uEdgeContrast` は破片・膜・光条・扇・素材・多角形マスクの縁に、
+         * `uCoreFocus` は核の裾だけに効く。
+         */
+        uEdgeContrast: { value: 0 },
+        uCoreFocus: { value: 0 },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -948,6 +957,8 @@ export class LightUnified implements LabExpression {
         uniform sampler2D uMask;
         uniform vec2 uMaskGrid;
         uniform float uMaskSoftness;
+        uniform float uEdgeContrast;
+        uniform float uCoreFocus;
         varying vec2 vUv;
         varying vec4 vTone;
         varying vec4 vShape;
@@ -971,6 +982,23 @@ export class LightUnified implements LabExpression {
         const float FRAME_START = 0.86;
 
         const float TAU = 6.28318530718;
+        const float LN2 = 0.69314718;
+
+        /**
+         * **縁の締まりの実寸**（UNIFIED.definition）。質感の数値はコードへ直接書かず、
+         * ここでも tuning 側の 1 か所から流し込む。どれも「軸 1 のときの倍率」で、
+         * 軸 0 では mix(1.0, X, 0.0) = 1.0 なので恒等式に戻る。
+         */
+        const float EDGE_WIDTH_AT_ONE = ${UNIFIED.definition.edgeWidthAtOne.toFixed(4)};
+        const float KIND_HALO_AT_ONE = ${UNIFIED.definition.kindHaloAtOne.toFixed(4)};
+        const float HALO_TIGHTEN_AT_ONE = ${UNIFIED.definition.haloTightenAtOne.toFixed(4)};
+        const float GRAIN_GAMMA_AT_ONE = ${UNIFIED.definition.grainGammaAtOne.toFixed(4)};
+        const float GRAIN_GAIN_AT_ONE = ${UNIFIED.definition.grainGainAtOne.toFixed(4)};
+        const float MASK_SOFTNESS_AT_ONE = ${UNIFIED.definition.maskSoftnessAtOne.toFixed(4)};
+        const float CORE_SUPER_GAUSS_AT_ONE = ${UNIFIED.definition.coreSuperGaussAtOne.toFixed(4)};
+        const float CORE_FLAKE_TIGHTEN_AT_ONE = ${UNIFIED.definition.coreFlakeTightenAtOne.toFixed(4)};
+        const float EDGE_GAIN_AT_ONE = ${UNIFIED.definition.edgeGainAtOne.toFixed(4)};
+        const float CORE_FOCUS_GAIN_AT_ONE = ${UNIFIED.definition.coreFocusGainAtOne.toFixed(4)};
 
         vec3 spectrum(float h) {
           vec3 phase = vec3(0.0, 2.0943951, 4.1887902);
@@ -1002,16 +1030,21 @@ export class LightUnified implements LabExpression {
           return 1.0 - smoothstep(uCoreMaterial.y, uCoreMaterial.z, length(p));
         }
 
-        /** **縁の柔らかさ。** Blur 軸が 0 なら鋭く、1 なら広くにじむ。 */
+        /**
+         * **縁の柔らかさ。** Blur 軸が 0 なら鋭く、1 なら広くにじむ。
+         * Edge contrast は**その窓幅そのものを詰める**ので、Blur を動かさずに
+         * 「にじんだ光のまま縁だけ硬い」まで行ける。軸 0 では厳密に従来の幅。
+         */
         float softEdge(float d, float width) {
-          float w = mix(0.008, 0.16, clamp(vEdge, 0.0, 1.0)) + width;
+          float w = mix(0.008, 0.16, clamp(vEdge, 0.0, 1.0)) * mix(1.0, EDGE_WIDTH_AT_ONE, uEdgeContrast) + width;
           return 1.0 - smoothstep(-w, w, d);
         }
 
         /** 要素ごとの形。**分岐は種別だけで、軸は係数として入っている。** */
         float baseMask(vec2 p) {
           float kind = vTone.z;
-          float halo = mix(0.04, 0.4, clamp(vEdge, 0.0, 1.0));
+          // 種別ごとの局所ハロ（膜の帯・光条の芯が裾として使う）。
+          float halo = mix(0.04, 0.4, clamp(vEdge, 0.0, 1.0)) * mix(1.0, KIND_HALO_AT_ONE, uEdgeContrast);
 
           // ---- 扇 ----
           if (kind > 4.5) {
@@ -1021,7 +1054,7 @@ export class LightUnified implements LabExpression {
             delta = atan(sin(delta), cos(delta));
             float sector = exp(-pow(delta / max(vShape.y, 1e-3), 4.0));
             if (sector <= 0.002) return 0.0;
-            float blades = pow(abs(cos(delta * vShape.z)), mix(15.0, 5.0, vEdge));
+            float blades = pow(abs(cos(delta * vShape.z)), mix(15.0, 5.0, vEdge) * mix(1.0, 2.2, uEdgeContrast));
             float radial = smoothstep(0.05, 0.3, r) * exp(-pow(r / max(vShape.w, 1e-3), 2.0));
             return sector * blades * radial;
           }
@@ -1052,9 +1085,15 @@ export class LightUnified implements LabExpression {
              * 端は必ず 0 へ落ちる（板の縁とは無関係に、形そのものが閉じている）。
              */
             vec2 f = vec2(p.x, p.y * mix(1.0, 3.2, character));
-            float spine = exp(-abs(f.y) * mix(5.0, 2.0, vEdge));
-            float along = 1.0 - smoothstep(0.12, 0.96, abs(f.x));
-            float barbs = 0.45 + 0.55 * abs(sin(f.x * 7.0 + f.y * 3.0 + vShape.y));
+            float spine = exp(-abs(f.y) * mix(5.0, 2.0, vEdge) * mix(1.0, 2.8, uEdgeContrast));
+            float along = 1.0 - smoothstep(mix(0.12, 0.55, uEdgeContrast), 0.96, abs(f.x));
+            /**
+             * **羽毛の濃淡の谷を深くする。** 0.45 の底は「筋のあいだも半分は光る」
+             * ということで、引っ掻き傷が地と分かれない主因だった。底を下げつつ
+             * 山は 1 のまま（floor + (1 − floor)·|sin|）なので、明るさの頭は動かない。
+             */
+            float barbFloor = mix(0.45, 0.12, uEdgeContrast);
+            float barbs = barbFloor + (1.0 - barbFloor) * abs(sin(f.x * 7.0 + f.y * 3.0 + vShape.y));
             float taper = 1.0 - smoothstep(0.0, 1.5, abs(f.y) * (0.35 + abs(f.x)));
             float filament = spine * along * barbs * max(taper, 0.0);
             return mix(shard, filament, character);
@@ -1071,15 +1110,19 @@ export class LightUnified implements LabExpression {
           // ---- 膜 ----
           if (kind > 1.5) {
             float folds = 0.5 + 0.5 * sin(p.x * vShape.y + p.y * vShape.w * 2.0);
-            float band = 1.0 - smoothstep(vShape.z * 0.6, vShape.z * 1.6 + halo, abs(p.y));
-            float ends = 1.0 - smoothstep(0.72, 1.0, abs(p.x));
-            return band * ends * mix(0.55, 1.0, folds);
+            // 帯の内側の平らな部分を広げ、落ちるところで落とす（幅は変えない）。
+            float band = 1.0 - smoothstep(vShape.z * mix(0.6, 0.9, uEdgeContrast), vShape.z * 1.6 + halo, abs(p.y));
+            float ends = 1.0 - smoothstep(mix(0.72, 0.91, uEdgeContrast), 1.0, abs(p.x));
+            // 襞の谷を深くする。山は 1 のままなので明るさの頭は動かない。
+            return band * ends * mix(mix(0.55, 0.16, uEdgeContrast), 1.0, folds);
           }
 
           // ---- 光条 ----
           if (kind > 0.5) {
-            float core = 1.0 - smoothstep(vShape.x * 0.4, vShape.x + halo, abs(p.y));
-            float glow = exp(-abs(p.y) / max(vShape.y + halo, 1e-3)) * 0.5;
+            float core = 1.0 - smoothstep(vShape.x * mix(0.4, 0.85, uEdgeContrast), vShape.x + halo, abs(p.y));
+            // 芯の外へ広がる裾。締めると線が「太い光」から「細い筋」になる。
+            float glow = exp(-abs(p.y) / max(vShape.y + halo, 1e-3) * mix(1.0, 2.6, uEdgeContrast)) *
+                         mix(0.5, 0.22, uEdgeContrast);
             float along = 1.0 - smoothstep(vShape.z, vShape.w, abs(p.x));
             /**
              * **片側化と根元のフェード。**
@@ -1108,7 +1151,19 @@ export class LightUnified implements LabExpression {
            */
           float form = clamp(vAxis.w, 0.0, 1.0);
           float rr = max(r * r, 1e-6);
-          float centre = exp(-pow(rr, mix(1.0, 1.9, form)) * mix(120.0, 7.0, vEdge)) * vShape.w;
+          /**
+           * **Core focus: 大きさを変えずに裾だけを切る。**
+           *
+           * 超ガウス exp(−(r²)^n · k) の半値半径は r² = (ln2/k)^(1/n) なので、
+           * n を上げるときに k = kBase · (kBase/ln2)^(n/nBase − 1) と置けば
+           * **半値半径はそのまま**で、頂が平らになり裾だけが急に落ちる。
+           * 軸 0 では指数が 0 ＝ pow(x, 0.0) = 1.0 なので k = kBase に厳密に戻る。
+           */
+          float nBase = mix(1.0, 1.9, form);
+          float n = nBase + uCoreFocus * CORE_SUPER_GAUSS_AT_ONE;
+          float kBase = mix(120.0, 7.0, vEdge);
+          float k = kBase * pow(kBase / LN2, n / nBase - 1.0);
+          float centre = exp(-pow(rr, n) * k) * vShape.w;
           // 芯の白熱。シャープ側ほど小さく強い点になる。
           float spark = exp(-r * r * mix(900.0, 40.0, vEdge)) * mix(1.4, 0.35, vEdge);
           // 貫通線。シャープ側は極細で遠くまで、にじみ側は太く短い。
@@ -1117,7 +1172,7 @@ export class LightUnified implements LabExpression {
           float lineV = exp(-abs(p.x) * mix(220.0, 11.0, vEdge)) *
                         (1.0 - smoothstep(mix(0.75, 0.2, vEdge), 1.0, abs(p.y))) * vShape.z;
           // フレア片。シャープ側では点在する小さなかけら、にじみ側では広い裾。
-          float flakes = exp(-r * mix(22.0, 2.6, vEdge)) *
+          float flakes = exp(-r * mix(22.0, 2.6, vEdge) * mix(1.0, CORE_FLAKE_TIGHTEN_AT_ONE, uCoreFocus)) *
                          (0.35 + 0.65 * abs(sin(atan(p.y, p.x) * 5.0 + r * 9.0))) *
                          mix(0.18, 0.45, vEdge);
           // **緩い楕円窓。** 縁を板の内側で溶かす。芯には届かない広さに取ってある。
@@ -1131,7 +1186,15 @@ export class LightUnified implements LabExpression {
         float elementMask(vec2 p) {
           float base = baseMask(p);
           if (vHalo <= 0.0) return base;
-          return base + vHalo * exp(-dot(p, p) * mix(6.0, 1.6, clamp(vEdge, 0.0, 1.0)));
+          /**
+           * **丸いハロが「大きく滲んだ塊」の正体だった。**
+           * 既定（Blur 0.5）では、核の半径 0.5 の位置の明るさ 0.106 のうち
+           * 形そのものの寄与は 0.0007 しかなく、残りは全部このハロである。
+           * 量はリグ側（haloOf）が削り、広がりはここで詰める。どちらも軸 0 で 1 倍。
+           */
+          float spread = mix(6.0, 1.6, clamp(vEdge, 0.0, 1.0)) *
+                         mix(1.0, HALO_TIGHTEN_AT_ONE, uEdgeContrast);
+          return base + vHalo * exp(-dot(p, p) * spread);
         }
 
         void main() {
@@ -1187,7 +1250,14 @@ export class LightUnified implements LabExpression {
           float luminance = dot(tex, vec3(0.2126, 0.7152, 0.0722));
           // 黒浮きを加算の前に落とす。これが無いと薄い霧が画面全体を灰色に持ち上げる。
           luminance *= smoothstep(uGrain.x, uGrain.x + uGrain.y, luminance);
-          luminance = pow(max(luminance, 0.0), uGrain.z) * uGrainGain;
+          /**
+           * **素材のガンマ。** 既定の 0.45 は暗部を持ち上げる向きで、素材の中の
+           * 筋と地の差を潰していた。Edge contrast はガンマを 1 の側へ寄せて
+           * 差を開き、そのぶん暗くなる中央値を利得で返す（明るさは中立）。
+           */
+          float grainGamma = uGrain.z * mix(1.0, GRAIN_GAMMA_AT_ONE, uEdgeContrast);
+          luminance = pow(max(luminance, 0.0), grainGamma) * uGrainGain *
+                      mix(1.0, GRAIN_GAIN_AT_ONE, uEdgeContrast);
           /**
            * **核だけは素材を「足す」。**
            * 他の種別は素材で削る（乗算）が、核でそれをやると芯が痩せるだけで
@@ -1225,7 +1295,9 @@ export class LightUnified implements LabExpression {
           float maskColumn = mod(vTexture.w, max(uMaskGrid.x, 1.0));
           float maskRow = floor(vTexture.w / max(uMaskGrid.x, 1.0));
           float sdf = texture2D(uMask, (vec2(maskColumn, maskRow) + maskCell) / max(uMaskGrid, vec2(1.0))).r;
-          float polygon = smoothstep(0.5 - uMaskSoftness, 0.5 + uMaskSoftness, sdf);
+          // 多角形の縁も同じ 1 本で締める（0.3 の柔らかさが外形をぼかしていた）。
+          float maskSoftness = max(uMaskSoftness * mix(1.0, MASK_SOFTNESS_AT_ONE, uEdgeContrast), 1e-4);
+          float polygon = smoothstep(0.5 - maskSoftness, 0.5 + maskSoftness, sdf);
           float silhouette = mix(1.0, polygon, clamp(vMask, 0.0, 1.0));
 
           /**
@@ -1238,10 +1310,20 @@ export class LightUnified implements LabExpression {
           float coreNeutral =
             1.0 / (1.0 + isCore * grain * uCoreMaterial.x * uCoreGrainNeutral);
 
+          /**
+           * **縁を締めたぶんの明るさの戻し。**
+           * 裾（こぼれた光）を消すと総量が落ちるので、そのぶんを利得へ返す
+           * ＝ 軸が動かすのは光の**配り方**だけで、明るさは Intensity の 1 本が持つ。
+           * 核の側は isCore で選ぶので、他の種別には 1 画素も掛からない。
+           * どちらの軸も 0 では mix が 1.0 を返すので、厳密に恒等へ戻る。
+           */
+          float defGain = mix(1.0, EDGE_GAIN_AT_ONE, uEdgeContrast) *
+                          mix(1.0, mix(1.0, CORE_FOCUS_GAIN_AT_ONE, isCore), uCoreFocus);
+
           vec3 colour = channels * uChannelGain * tint;
-          colour *= uIntensity * vAxis.x * material * silhouette * coreNeutral;
+          colour *= uIntensity * vAxis.x * material * silhouette * coreNeutral * defGain;
           // **核へ素材を加算する。** 楕円窓の内側だけなので、板の四角さは出ない。
-          colour += tint * uChannelGain * uIntensity * vAxis.x * frame * coreNeutral *
+          colour += tint * uChannelGain * uIntensity * vAxis.x * frame * coreNeutral * defGain *
                     isCore * grain * uCoreMaterial.x * clamp(luminance, 0.0, 2.2) * coreWindow(p);
           // **白の予算。** 核以外はここで頭を押さえる。
           colour = min(colour, vec3(vAxis.y));
@@ -1368,14 +1450,25 @@ export class LightUnified implements LabExpression {
       material.uniforms.uDecorrelation!.value = look.dispersion;
       const gain = channelBalanceGain(look.channelBalance);
       (material.uniforms.uChannelGain!.value as THREE.Vector3).set(gain[0], gain[1], gain[2]);
+      // **縁の締まり。** どちらも 0 で式が恒等へ戻るので、渡すだけで安全。
+      material.uniforms.uEdgeContrast!.value = clamp(look.edgeContrast, 0, 1);
+      material.uniforms.uCoreFocus!.value = clamp(look.coreFocus, 0, 1);
     }
     // **内部ブルームと露出。** どちらも軸そのものが混合係数なので、0 で素通しへ戻る。
     // `Core` マスターの配下なので、結線を通した実効値を使う。
     const bloom = clamp(this.effectiveAxes().coreBloom, 0, 1);
+    /**
+     * **`Core focus` はブルームの広がり方だけを動かす。**
+     * 閾値を上げて滲む画素を芯へ絞り、半径を詰める。強さ（`Core bloom`）は触らないので、
+     * 「強く光るが滲まない核」も「弱く広く滲む核」も作れる。軸 0 で従来の値に厳密に戻る。
+     */
+    const focus = clamp(this.effectiveAxes().coreFocus, 0, 1);
     if (this.bloomPass) {
       this.bloomPass.strength = bloom * UNIFIED.bloom.strengthAtOne;
-      this.bloomPass.radius = UNIFIED.bloom.radius;
-      this.bloomPass.threshold = UNIFIED.bloom.threshold;
+      this.bloomPass.radius =
+        UNIFIED.bloom.radius * mix(1, UNIFIED.definition.bloomRadiusAtOne, focus);
+      this.bloomPass.threshold =
+        UNIFIED.bloom.threshold + focus * UNIFIED.definition.bloomThresholdRise;
       this.bloomPass.enabled = bloom > 0;
     }
     if (this.displayMaterial) {
