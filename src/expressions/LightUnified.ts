@@ -114,18 +114,23 @@ const smoothstep = (edge0: number, edge1: number, value: number): number => {
  */
 const UNIFIED_LOOK_PARAMS: readonly ParamDecl[] = [
   { id: 'intensity', label: 'Intensity', min: 0, max: 1, default: 0.5, kind: 'continuous' },
-  { id: 'dispersion', label: 'Channel decorrelation', min: 0, max: 1, default: 0.35, kind: 'continuous' },
-  { id: 'depthSpread', label: 'Depth', min: 0, max: 1, default: 0.45, kind: 'continuous' },
+  { id: 'blur', label: 'Blur', min: 0, max: 1, default: 0.5, kind: 'continuous' },
   { id: 'channelBalance', label: 'Channel balance', min: 0, max: 1, default: 0.5, kind: 'continuous' },
+  { id: 'density', label: 'Density', min: 0, max: 1, default: 0.55, kind: 'continuous' },
 ];
 
 const LOOK_KEYS = new Set(UNIFIED_LOOK_PARAMS.map((entry) => entry.id));
 
 /**
  * **結線に出すマスター。** 軸そのものではなくマスターへ繋ぐので、
- * 1 本の音が配下をまとめて動かす（例: `Core` は大きさ・形・ブルームを同時に押す）。
+ * 1 本の音が配下をまとめて動かす（`Core` なら大きさ・形・ブルームが一緒に押される）。
  */
-const MASTER_LOOK_KEYS = new Set<string>();
+const MASTER_LOOK_PARAMS: readonly ParamDecl[] = [
+  { id: 'spread', label: 'Spread', min: 0, max: 1, default: 0.53, kind: 'continuous' },
+  { id: 'core', label: 'Core', min: 0, max: 1, default: 0.42, kind: 'continuous' },
+];
+
+const MASTER_LOOK_KEYS = new Set(MASTER_LOOK_PARAMS.map((entry) => entry.id));
 
 /** `Hue stickiness` が伸ばす時間（秒）。 */
 const HUE = { confirmMin: 0.2, confirmMax: 1.8, holdMin: 1, holdMax: 10 } as const;
@@ -354,12 +359,13 @@ export class LightUnified implements LabExpression {
     this.previousElapsed = -1;
     this.shelf = getSourceShelf(context.audioEngine);
     this.audioDrive.setShelf(this.shelf);
-    this.lookResolver.declare(UNIFIED_LOOK_PARAMS);
+    this.lookResolver.declare([...UNIFIED_LOOK_PARAMS, ...MASTER_LOOK_PARAMS]);
     this.lookResolver.setSources(this.shelf.list());
     this.lookResolver.reset();
     for (const decl of UNIFIED_LOOK_PARAMS) {
       this.lookResolver.setBase(decl.id, this.axes[decl.id as keyof UnifiedAxes]);
     }
+    this.syncMasterBases();
 
     this.applyStickiness();
     this.applyDensity();
@@ -471,13 +477,44 @@ export class LightUnified implements LabExpression {
     return clamp(this.lookResolver.valueOf(key), 0, 1);
   }
 
-  /** 描画が実際に使う軸。結線した 4 本だけが基準値から動く。 */
+  /**
+   * **描画が実際に使う軸。** 結線した軸とマスターだけが基準値から動く。
+   *
+   * マスターは**この写しの上へ**書く（`this.axes` は触らない）ので、
+   * 音が揺らしてもユーザーのスライダー位置は失われない ＝ 結線の契約
+   *「基準値 ± 変調」がマスターでもそのまま成り立つ。
+   */
   private effectiveAxes(): UnifiedAxes {
     const out = { ...this.axes };
     for (const decl of UNIFIED_LOOK_PARAMS) {
       out[decl.id as keyof UnifiedAxes] = this.lookValue(decl.id);
     }
+    for (const decl of MASTER_LOOK_PARAMS) {
+      const binding = this.lookResolver.getBinding(decl.id);
+      if (!binding || !binding.sourceId) continue;
+      const value = clamp(this.lookResolver.valueOf(decl.id), 0, 1);
+      Object.assign(out, this.masterPatch(decl.id, value, out));
+    }
     return out;
+  }
+
+  /**
+   * **マスターの基準値をスライダーの側から取り直す。**
+   * マスターは状態を持たないので、基準値は毎フレーム配下から逆算する
+   *（詳細を直接動かしたときも、結線の中心がそこへ付いてくる）。
+   */
+  private syncMasterBases(): void {
+    for (const decl of MASTER_LOOK_PARAMS) {
+      this.lookResolver.setBase(decl.id, this.readMaster(decl.id, this.axes));
+    }
+  }
+
+  /** マスター 1 本の位置を軸から逆算する。 */
+  private readMaster(id: string, axes: UnifiedAxes): number {
+    if (id === 'spread') return readSpread(axes);
+    if (id === 'aspect') return readAspect(axes);
+    const master = AXIS_MASTERS.find((entry) => entry.id === id);
+    return master ? readMaster(master, axes) : 0;
   }
 
   private advanceDrive(elapsed: number, delta: number): void {
@@ -636,7 +673,7 @@ export class LightUnified implements LabExpression {
       this.eventMembranes.length = 0;
       return;
     }
-    const density = clamp(this.axes.density, 0, 1);
+    const density = clamp(this.lookValue('density'), 0, 1);
     const decay = clamp(this.axes.decay, 0, 1);
     // 膜は「後から開いて長く残る」側。`Stagger` 軸 0 では遅れず、寿命の倍率も 1。
     const { delay: lagScale, decayScale } = staggerOf(this.axes.stagger, 'membrane');
@@ -706,7 +743,8 @@ export class LightUnified implements LabExpression {
 
   /** `Density` 軸を生成核へ渡す（1 バーストの枚数・同時数・打撃の間隔）。 */
   private applyDensity(): void {
-    this.audioDrive.setDensity(DENSITY.min + clamp(this.axes.density, 0, 1) * (DENSITY.max - DENSITY.min));
+    const density = this.lookValue('density');
+    this.audioDrive.setDensity(DENSITY.min + clamp(density, 0, 1) * (DENSITY.max - DENSITY.min));
   }
 
   private applyStickiness(): void {
@@ -1310,7 +1348,11 @@ export class LightUnified implements LabExpression {
     const audio = engine?.getParameters() ?? {};
     const spectrum = engine?.getSpectrum?.() ?? null;
     this.shelf?.update(delta);
+    this.syncMasterBases();
     for (const decl of UNIFIED_LOOK_PARAMS) this.lookResolver.updateParam(decl.id, delta);
+    for (const decl of MASTER_LOOK_PARAMS) this.lookResolver.updateParam(decl.id, delta);
+    // **結線した `Density` を生成核へも通す**（枚数・同時数・不応期はここが決める）。
+    this.applyDensity();
     this.audioDrive.update(audio, spectrum, elapsed, delta);
     this.previousElapsed = elapsed;
     this.advanceDrive(elapsed, delta);
@@ -1328,7 +1370,8 @@ export class LightUnified implements LabExpression {
       (material.uniforms.uChannelGain!.value as THREE.Vector3).set(gain[0], gain[1], gain[2]);
     }
     // **内部ブルームと露出。** どちらも軸そのものが混合係数なので、0 で素通しへ戻る。
-    const bloom = clamp(this.axes.coreBloom, 0, 1);
+    // `Core` マスターの配下なので、結線を通した実効値を使う。
+    const bloom = clamp(this.effectiveAxes().coreBloom, 0, 1);
     if (this.bloomPass) {
       this.bloomPass.strength = bloom * UNIFIED.bloom.strengthAtOne;
       this.bloomPass.radius = UNIFIED.bloom.radius;
@@ -1531,18 +1574,16 @@ export class LightUnified implements LabExpression {
       step: 0.01,
       value: this.axes[decl.id],
     };
-    const isHue = decl.id === 'hueCoherence';
-    if (!LOOK_KEYS.has(decl.id) && !isHue) return row;
-    const hue = this.audioDrive.hueBinding();
-    const binding = isHue ? null : this.lookResolver.getBinding(decl.id);
+    if (!LOOK_KEYS.has(decl.id)) return row;
+    const binding = this.lookResolver.getBinding(decl.id);
     return {
       ...row,
       bind: {
         paramId: decl.id,
-        sourceId: isHue ? hue.sourceId : (binding?.sourceId ?? null),
-        depth: isHue ? hue.depth : (binding?.depth ?? 1),
+        sourceId: binding?.sourceId ?? null,
+        depth: binding?.depth ?? 1,
         sources: this.sourceList(),
-        liveValue: isHue ? this.drive.hue : this.lookValue(decl.id),
+        liveValue: this.lookValue(decl.id),
       },
     };
   }
@@ -1626,9 +1667,13 @@ export class LightUnified implements LabExpression {
   }
 
   /** マスター 1 本ぶんの「配下へ書く値」。`Spread` と `Aspect` は同じ 2 軸の別座標。 */
-  private masterPatch(id: string, value: number): Partial<Record<keyof UnifiedAxes, number>> {
-    if (id === 'spread') return applySpread(this.axes, value);
-    if (id === 'aspect') return applyAspect(this.axes, value);
+  private masterPatch(
+    id: string,
+    value: number,
+    axes: UnifiedAxes = this.axes,
+  ): Partial<Record<keyof UnifiedAxes, number>> {
+    if (id === 'spread') return applySpread(axes, value);
+    if (id === 'aspect') return applyAspect(axes, value);
     const master = AXIS_MASTERS.find((entry) => entry.id === id);
     return master ? applyMaster(master, value) : {};
   }
@@ -1655,6 +1700,20 @@ export class LightUnified implements LabExpression {
 
   /** マスターに音のソースを添える（結線に出すマスターだけ）。 */
   private masterBind(id: string): Partial<ExpressionNumberParam> {
+    // 色のまとめ役の行には**色相 H** を添える（H は下流の時間規律を持つので
+    // 軸ではなく `OpticsAudioDrive` 側の 1 本へ繋ぐ）。行は増やさない。
+    if (id === 'colourLock') {
+      const hue = this.audioDrive.hueBinding();
+      return {
+        bind: {
+          paramId: 'colourLock',
+          sourceId: hue.sourceId,
+          depth: hue.depth,
+          sources: this.sourceList(),
+          liveValue: this.drive.hue,
+        },
+      };
+    }
     if (!MASTER_LOOK_KEYS.has(id)) return {};
     const binding = this.lookResolver.getBinding(id);
     return {
@@ -1700,7 +1759,7 @@ export class LightUnified implements LabExpression {
     if (key.startsWith('bind:')) {
       const [, paramId, what] = key.split(':');
       if (!paramId) return;
-      const isHue = paramId === 'hueCoherence';
+      const isHue = paramId === 'colourLock';
       const hue = this.audioDrive.hueBinding();
       const binding = isHue ? null : this.lookResolver.getBinding(paramId);
       if (what === 'source') {

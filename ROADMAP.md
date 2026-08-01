@@ -1621,6 +1621,44 @@ RecordingController・QualityMonitor は再接続済み。
         そのあと `Texture grain` を直接 0.9 にするとマスターの表示が 0.333 へ動く（詳細が優先）/
         4 プリセットの画素統計は**マスター導入の前後で完全一致** /
         lint・build 通過 / コンソールエラー 0
+
+        **P9-4（結線を 8 本へ）**:
+        繋ぎ先が 20 本あっても選べないので、**音で動かして意味がある 8 本**へ絞った。
+        **Emission（発光 All）/ Intensity / Spread / Core / Blur /
+        Hue（色相 H）/ Channel balance / Density**。
+
+        外したもの: **`Dispersion`**（実測 0→1 で点灯 0.256 → 0.288・彩度 +0.05 と効きが最小）と
+        **`Depth spread`**（同 白 0.128% → 0.197% のみ）。どちらも軸としては残っている。
+        入れなかったもの: 時間の形（`Strobe` / `Attack` / `Decay` / `Stagger` / `Hue stickiness`）は
+        音で揺らすと「音への反応」ではなく**反応の仕方が揺れる**ことになり因果が読めなくなる。
+        質感（`Texture grain` / `Silhouette` / `Fragment character` / `Core shape` / `Membrane scale`）は
+        1 曲の中で変わると別の表現に見える。
+
+        **マスターへ繋げるようにした。** `Spread` と `Core` は軸ではなくマスターへ繋ぐので、
+        **1 本の音が配下をまとめて動かす**（実測: `Core ← Rise` で
+        `Core size` / `Core shape` / `Core bloom` が (0.45, 0.30, 0.30) → (0.58, 0.52, 0.43) へ同時に動く）。
+        変調は**描画用の写しの上へ**書くので `this.axes` は触らず、
+        「基準値 ± 変調」の契約がマスターでもそのまま成り立つ（結線を外すと基準値へ戻る）。
+        マスターは状態を持たないので、基準値は毎フレーム配下から逆算する
+        （詳細を直接動かしても結線の中心がそこへ付いてくる）。
+        色相 H は下流の時間規律（確認時間・最短保持）を持つため、これまでどおり
+        `OpticsAudioDrive` 側の 1 本へ繋ぎ、行は増やさず `Colour lock` の行に添えた。
+
+        **「結線しても動かない軸」を塞いだ**（分析で洗い出した配線の穴）:
+        `Core bloom` は `this.axes` の直読みだったので `effectiveAxes()` 経由へ /
+        `Density` は 2 経路（`advanceEventMembranes` と `applyDensity`）とも結線値が通るようにし、
+        `applyDensity()` を毎フレーム呼ぶようにした。
+        **結線に出しているのは、実際に動く 8 本だけ**である。
+
+        実測（既定・深さ +1）: `Intensity ← Volume` で平均 52.7 → 68.4 /
+        `Spread ← Onset` で広がり (0.167, 0.161) → (0.190, 0.179)・点灯 0.708 → 0.805 /
+        `Blur ← Treble` で 52.7 → 60.1 / `Density ← Bass` で層 45.5 → 47.7 /
+        `Core ← Rise` で白 0.119% → 0.758% / `Channel balance ← Onset` で
+        RGB (27.4, 52.4, 46.9) → (20.6, 36.5, 46.3)・彩度 0.525 → 0.615 /
+        `Hue ← Treble` で RGB (36.2, 61.5, 44.2) / `発光 All ← Volume` で 52.7 → 15.8。
+        **4 プリセットの画素統計は再読込をまたいで完全一致**
+        （53.472 / 57.877 / 68.920 / 11.879）/ 無音 = 黒 / 白の予算は不変 /
+        lint・build 通過 / コンソールエラー 0
   - [ ] Light Element Lab 2 — 音由来の seed → `seed`（断片・カーテンの散らばり）は未配線。
         Bass / Mid / Treble → R / G / B の発色駆動、オフセット量と非相関量を
         どの特徴に結ぶかは未決
