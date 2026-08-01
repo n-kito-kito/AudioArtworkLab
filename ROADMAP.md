@@ -1659,6 +1659,25 @@ RecordingController・QualityMonitor は再接続済み。
         **4 プリセットの画素統計は再読込をまたいで完全一致**
         （53.472 / 57.877 / 68.920 / 11.879）/ 無音 = 黒 / 白の予算は不変 /
         lint・build 通過 / コンソールエラー 0
+
+        **P9-5（Light 系の実験表現をセレクトから隠す）**:
+        Light Unified へ収斂させる途中なので、それ以前の実験表現は**選べないようにした**。
+        隠したのは 6 ファミリー — Light Traces / Light Traces — Core Study /
+        Light Traces — Spatial Study / Light Element Lab / Light Element Lab 2 /
+        Light Reactive Lab。セレクトに残るのは
+        **Cymatics / Modular Pattern Field / Light Unified / Reactive Geometry** の 4 つ。
+
+        **コードは 1 行も消していない**（D33 の判断が出るまで比較用に温存する）。
+        `ExpressionFamily` に `hidden` を足し、UI が一覧から外すだけの最小の変更で、
+        `createExpression` の分岐も `KNOWN_EXPRESSION_IDS` もそのまま。
+        したがって `normalizeExpressionId` は**隠した id も有効なまま**受ける。
+        さらに `visibleExpressionFamilies(current)` は
+        **いま選ばれているものだけは一覧に残す**ので、保存済みのプリセットが
+        隠した表現を指していても選択が勝手に別の表現へ飛ばない。
+        実測: `expressionId: 'light-spatial-study-v1'` を保存した状態で読み込むと
+        Spatial Study がそのまま描画され（コンソールエラー 0）、一覧にもその 1 つだけが現れる。
+        Light Unified へ切り替えると一覧から消える。
+        lint・build 通過 / コンソールエラー 0
   - [ ] Light Element Lab 2 — 音由来の seed → `seed`（断片・カーテンの散らばり）は未配線。
         Bass / Mid / Treble → R / G / B の発色駆動、オフセット量と非相関量を
         どの特徴に結ぶかは未決

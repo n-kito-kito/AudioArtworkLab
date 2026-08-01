@@ -5,7 +5,7 @@ import type {
   EffectParameterValue,
 } from '../effects/Effect';
 import { THEMES } from '../engine/themes';
-import { ASPECT_RATIOS, EXPRESSION_FAMILIES, type ExpressionId } from '../expressions/catalog';
+import { ASPECT_RATIOS, visibleExpressionFamilies, type ExpressionId } from '../expressions/catalog';
 import type { StudioShell } from './StudioShell';
 
 /**
@@ -201,10 +201,14 @@ export class LabControls {
     this.compositionBody.replaceChildren();
     // 表現は「ファミリー（サイマティクス等）」→「版（V1/V2）」の 2 段で選ぶ。
     // 今後の表現はファミリーとして増え、版の比較は D22 の収斂判断が出るまで残す。
+    // Light 系の実験表現は Light Unified へ収斂させる途中なので一覧に出さない
+    // （コードは温存）。いま選ばれているものだけは残るので、保存済みのプリセットが
+    // 隠した表現を指していても選択が勝手に飛ばない。
+    const families = visibleExpressionFamilies(this.composition.id);
     const currentFamily =
-      EXPRESSION_FAMILIES.find((family) =>
+      families.find((family) =>
         family.versions.some((version) => version.id === this.composition.id),
-      ) ?? EXPRESSION_FAMILIES[0]!;
+      ) ?? families[0]!;
 
     const field = document.createElement('label');
     field.className = 'control-row control-row--inline';
@@ -212,7 +216,7 @@ export class LabControls {
     fieldName.textContent = 'Expression';
     const fieldSelect = document.createElement('select');
     fieldSelect.setAttribute('aria-label', 'Expression');
-    for (const family of EXPRESSION_FAMILIES) {
+    for (const family of families) {
       const option = document.createElement('option');
       option.value = family.id;
       option.textContent = family.label;
@@ -220,7 +224,7 @@ export class LabControls {
       fieldSelect.append(option);
     }
     fieldSelect.addEventListener('change', () => {
-      const family = EXPRESSION_FAMILIES.find((entry) => entry.id === fieldSelect.value);
+      const family = families.find((entry) => entry.id === fieldSelect.value);
       if (family && family.id !== currentFamily.id) {
         this.onExpressionChange(family.versions[0]!.id);
       }

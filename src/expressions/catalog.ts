@@ -65,6 +65,15 @@ export interface ExpressionFamily {
   readonly id: string;
   readonly label: string;
   readonly versions: readonly ExpressionVersion[];
+  /**
+   * **セレクトに出さない。**
+   *
+   * Light 系の実験表現は Light Unified へ収斂させる途中なので、
+   * **選べないようにするだけ**でコードは温存する（D33 の判断が出るまで比較用に残す）。
+   * `normalizeExpressionId` は隠した id も**有効なまま**受けるので、
+   * 保存済みのプリセットが隠した id を指していても壊れない。
+   */
+  readonly hidden?: boolean;
 }
 
 /**
@@ -115,6 +124,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   },
   {
     id: 'light-traces',
+    hidden: true,
     label: 'Light Traces',
     versions: [{ id: 'light-traces-v1', label: 'V1' }],
   },
@@ -122,6 +132,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   // Light Traces 本体とはコードも状態も共有しない。
   {
     id: 'light-core-study',
+    hidden: true,
     label: 'Light Traces — Core Study',
     versions: [{ id: 'light-core-study-v1', label: 'V1' }],
   },
@@ -129,6 +140,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   // 「固定カメラの奥行きで前後関係が読めるか」だけを見る。2D は温存する。
   {
     id: 'light-spatial-study',
+    hidden: true,
     label: 'Light Traces — Spatial Study',
     versions: [{ id: 'light-spatial-study-v1', label: 'V1' }],
   },
@@ -136,6 +148,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   // 各 Version は同じ固定条件を使い、最後の Composite だけで再結合する。
   {
     id: 'light-element-lab',
+    hidden: true,
     label: 'Light Element Lab',
     versions: [
       { id: 'light-element-core-v1', label: 'Core' },
@@ -154,6 +167,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   // Version はリファレンス分析の 4 層構造（骨格 / コア / 断片 / 扇）と 1 対 1。
   {
     id: 'light-element-lab-2',
+    hidden: true,
     label: 'Light Element Lab 2',
     versions: [
       { id: 'light-element2-haze-v1', label: 'Haze' },
@@ -169,6 +183,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   // Trigger → Texture → Variation → Composite の順に、接続する音の関係を増やす。
   {
     id: 'light-reactive-lab',
+    hidden: true,
     label: 'Light Reactive Lab',
     versions: [
       { id: 'light-reactive-trigger-v1', label: 'Trigger' },
@@ -187,6 +202,20 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
 const KNOWN_EXPRESSION_IDS = new Set<string>(
   EXPRESSION_FAMILIES.flatMap((family) => family.versions.map((version) => version.id)),
 );
+
+/**
+ * **セレクトに出す表現。**
+ *
+ * 隠した表現でも、**いま選ばれているものだけは一覧に残す** — 保存済みのプリセットが
+ * それを指していたときに、選択が勝手に別の表現へ飛ばないようにするため。
+ */
+export function visibleExpressionFamilies(
+  current: ExpressionId,
+): readonly ExpressionFamily[] {
+  return EXPRESSION_FAMILIES.filter(
+    (family) => !family.hidden || family.versions.some((version) => version.id === current),
+  );
+}
 
 const LIGHT_ELEMENT_MODES: Partial<Record<ExpressionId, LightElementMode>> = {
   'light-element-core-v1': 'core',
