@@ -1836,6 +1836,57 @@ RecordingController・QualityMonitor は再接続済み。
         **隠した表現・他表現は差分ゼロ**（触ったのは Light Unified の 4 ファイルだけで、
         `OpticsAudioDrive` の `bandFloor` は既定 1 ＝ Element Lab 2 の挙動は 1 ビットも変わらない）。
         lint・build 通過 / コンソールエラー 0
+
+        **P9-9（上段の全パラメーターを結線可能にする）**:
+        結線先は 8 本（発光 All / Intensity / Spread / Core / Blur / H / Channel balance /
+        Density）しかなく、**上段に出ている行の半分以上が音へ繋げなかった**。
+        アコーディオンを開かずに見えている行は**全部**繋げるようにした（**21 行**）。
+        折りたたみの中（詳細の軸）は対象外で、そちらはマスター経由で動く。
+
+        | まとまり | 結線できる上段の行 |
+        |---|---|
+        | 明るさ | 発光 All / Intensity |
+        | 配置・空間 | Spread（マスター）/ Depth |
+        | 時間 | Time（マスター）/ Strobe |
+        | 光学 | Blur / Edge contrast |
+        | 色 | Colour lock（＝ 色相 H）/ Channel balance |
+        | 構成 | Core・Membrane・Material（マスター）/ Membrane–Beam / Skeleton / Beam length / Density / Haze floor / Isolation / Band unison |
+        | 動き | Motion |
+
+        **一覧を手で書かない。** `UNIFIED_LOOK_PARAMS` は `AXIS_DECLS` から
+        `detail !== true` を引いて作る。「常に見えている行はすべて音へ繋げる」という
+        規則そのものが書いてあるので、上段の軸を足したときに**繋げない行が生まれない**。
+
+        **繋いでも動かない行を作らないための下ごしらえのほうが本体だった。**
+        軸の値を読む場所が `this.axes`（スライダーの位置）と `effectiveAxes()`
+        （結線を通した値）に割れていて、前者を読んでいる軸は繋いでも動かない。
+        読む場所を**1 フレーム 1 枚の写し（`this.look`）へ一本化**し、
+        時間の形（`advanceDrive` の Attack / Decay / Strobe / Stagger）・
+        打撃ごとの膜（`eventMembrane` / `decay` / `stagger` / `isolation`）・
+        検出器へ渡す敷居（`bandUnison`）・密度・色の粘りを全部そこから読ませた。
+        さらに**光学クロックの速さ**（`Strobe` → `tickRateOf`）は設定のときだけ
+        渡していたので毎フレーム渡すようにした（繋いでも明滅の速さが変わらなかった）。
+
+        実測: 21 行に 1 本ずつソースを繋いで 240 フレーム進め、画素ハッシュを
+        繋ぐ前と比べた。**21 行すべてで絵が変わった。** 効きの大きい順に
+        Membrane–Beam（平均輝度 −41.1）/ 発光 All（−42.3）/ Isolation（−28.5）/
+        Intensity（+23.9）/ Strobe（−18.6）/ Density（−17.3）/ Blur（+16.8）/
+        Time（+10.4）で、小さいものでも Skeleton（+0.7）・Motion（+0.1）・
+        Band unison（+0.0 だが同時コア数が増えてハッシュは変わる）まで
+        **ハッシュは全部動いた**。
+
+        時間の形（`Strobe` / `Time`）を音へ繋ぐと、**音が時間の刻みを決め、その刻みで
+        音を見せる**という二重の因果になる。指示どおり出してあるが、
+        使い方によっては「音に合っている」ではなく「音が滑る」ように見えるはずで、
+        そこは実際に触ってから判断する。
+
+        **既定（全 None）は 1 画素も動いていない。** 4 プリセットのハッシュは
+        P9-8 の値と完全一致（`d2708400` / `361dfe58` / `4ea4257f` / `e88e126d`）。
+        21 行すべてを繋いだ状態でも**無音 = 黒**（30 秒で合計 0・層 0）。
+        負荷は `update()` の CPU 時間 0.39 ms/フレームで変わらず。
+        **他表現は差分ゼロ**（触ったのは Light Unified の 1 ファイルだけ）。
+        lint・build 通過 / コンソールエラー 0
+
   - [ ] `Isolation` を上げても連なりは GIF の 2 倍（15.5 px 対 7 px）で、
         差は**粒**にある。GIF は点灯した画素が 0.647 と多いのに連なりが短い
         ＝ 明るい面の中を細かい濃淡が刻んでいる。こちらは面が滑らかなので、

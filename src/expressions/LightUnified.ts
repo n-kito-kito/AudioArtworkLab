@@ -107,29 +107,59 @@ const smoothstep = (edge0: number, edge1: number, value: number): number => {
 };
 
 /**
- * **音へ繋げる軸。**
+ * **音へ繋げる軸 —— 上段に出ているものは全部。**
  *
  * 「触る場所」と「繋ぐ場所」を分けない — スライダーのそこにソース選択を直付けする。
  * どれも 0〜1 の連続量なので、基準値 ± 変調という結線の契約にそのまま乗る。
  * 発光そのもの（場・打撃・扇）と色相 H は、下流の時間規律を壊さないために
  * `OpticsAudioDrive` 側の 1 本（発光 All / H の音色）へ繋ぐ。
+ *
+ * **一覧は `AXIS_DECLS` から引く。** 「常に見えている行（`detail !== true`）は
+ * すべて音へ繋げる」という規則そのものを書いてあるので、上段の軸を足したときに
+ * ここを書き足し忘れて**繋げない行が生まれる**ことがない。
+ * 折りたたみの中（詳細）は対象外で、そちらはマスター経由で動かす。
  */
-const UNIFIED_LOOK_PARAMS: readonly ParamDecl[] = [
-  { id: 'intensity', label: 'Intensity', min: 0, max: 1, default: 0.5, kind: 'continuous' },
-  { id: 'blur', label: 'Blur', min: 0, max: 1, default: 0.5, kind: 'continuous' },
-  { id: 'channelBalance', label: 'Channel balance', min: 0, max: 1, default: 0.5, kind: 'continuous' },
-  { id: 'density', label: 'Density', min: 0, max: 1, default: 0.55, kind: 'continuous' },
-];
+const UNIFIED_LOOK_PARAMS: readonly ParamDecl[] = AXIS_DECLS.filter(
+  (decl) => decl.detail !== true,
+).map((decl) => ({
+  id: decl.id,
+  label: decl.label,
+  min: 0,
+  max: 1,
+  default: DEFAULT_AXES[decl.id],
+  kind: 'continuous' as const,
+}));
 
 const LOOK_KEYS = new Set(UNIFIED_LOOK_PARAMS.map((entry) => entry.id));
 
 /**
  * **結線に出すマスター。** 軸そのものではなくマスターへ繋ぐので、
  * 1 本の音が配下をまとめて動かす（`Core` なら大きさ・形・ブルームが一緒に押される）。
+ * マスターは上段に常時出ているので、`Spread` を含めて全部が対象になる。
+ *
+ * `Colour lock` だけは**入れない** — その行にはもともと**色相 H** が添えてあり
+ *（H は下流に状態機械を持つので `OpticsAudioDrive` 側の 1 本へ繋ぐ）、
+ * ここへも入れると同じ行から 2 系統が同時に駆動されてしまう。
  */
 const MASTER_LOOK_PARAMS: readonly ParamDecl[] = [
-  { id: 'spread', label: 'Spread', min: 0, max: 1, default: 0.53, kind: 'continuous' },
-  { id: 'core', label: 'Core', min: 0, max: 1, default: 0.42, kind: 'continuous' },
+  {
+    id: 'spread',
+    label: 'Spread',
+    min: 0,
+    max: 1,
+    default: readSpread(DEFAULT_AXES),
+    kind: 'continuous',
+  },
+  ...AXIS_MASTERS.filter((master) => master.id !== 'spread' && master.id !== 'colourLock').map(
+    (master) => ({
+      id: master.id,
+      label: master.label,
+      min: 0,
+      max: 1,
+      default: readMaster(master, DEFAULT_AXES),
+      kind: 'continuous' as const,
+    }),
+  ),
 ];
 
 const MASTER_LOOK_KEYS = new Set(MASTER_LOOK_PARAMS.map((entry) => entry.id));
@@ -243,6 +273,18 @@ export class LightUnified implements LabExpression {
 
   /** 連続軸。**この 20 本が見え方のすべてを決める。** */
   private readonly axes: UnifiedAxes = { ...DEFAULT_AXES };
+  /**
+   * **結線を通した実効値（このフレームぶん）。**
+   *
+   * 上段の軸をすべて音へ繋げるようにしたので、**軸を読む場所は 1 つに揃える**必要が出た。
+   * `this.axes` を直接読んでいる場所が 1 つでも残っていると、その軸だけ
+   * 「繋いでも動かない」という壊れ方をする。ここは 1 フレームに 1 回だけ作り、
+   * 描画も時間の形も検出器への受け渡しも全部この写しから読む。
+   *
+   * 繋いでいない軸は基準値（スライダーの位置）がそのまま入るので、
+   * **全部 None の既定では `this.axes` と同じ値**である。
+   */
+  private look: UnifiedAxes = { ...DEFAULT_AXES };
 
   /** 音 → 生成核。3 表現と同じ検出・結線・痕跡場をそのまま使う。 */
   private readonly audioDrive = new OpticsAudioDrive();
@@ -551,7 +593,9 @@ export class LightUnified implements LabExpression {
 
   private advanceDrive(elapsed: number, delta: number): void {
     const raw = this.audioDrive.sustained();
-    const { attack, decay, strobe, stagger } = this.axes;
+    // **結線を通した値で回す。** 繋いでいなければ基準値そのものなので、
+    // 既定では `this.axes` を読んでいたときと 1 ビットも変わらない。
+    const { attack, decay, strobe, stagger } = this.look;
     const tick = raw.tick;
     /**
      * **二重の時間軸。** 種別ごとに「どれだけ遅れて開くか」と「どれだけ長く残るか」を
@@ -737,7 +781,7 @@ export class LightUnified implements LabExpression {
    * 寿命は `Decay` 軸が決める。位置も形も**その打撃の seed** から決まるので決定論。
    */
   private advanceEventMembranes(delta: number): void {
-    const amount = clamp(this.axes.eventMembrane, 0, 1);
+    const amount = clamp(this.look.eventMembrane, 0, 1);
     for (let index = this.eventMembranes.length - 1; index >= 0; index--) {
       const entry = this.eventMembranes[index]!;
       entry.age += delta;
@@ -748,17 +792,17 @@ export class LightUnified implements LabExpression {
       this.eventMembranes.length = 0;
       return;
     }
-    const density = clamp(this.lookValue('density'), 0, 1);
-    const decay = clamp(this.axes.decay, 0, 1);
+    const density = clamp(this.look.density, 0, 1);
+    const decay = clamp(this.look.decay, 0, 1);
     // **重なりの上限（`Isolation` 軸）。** どちらも軸 0 では 1 倍。
-    const isolate = clamp(this.axes.isolation, 0, 1);
+    const isolate = clamp(this.look.isolation, 0, 1);
     const thin = 1 + (EVENT_MEMBRANE.countAtIsolated - 1) * isolate;
     const pool = Math.max(
       1,
       Math.round(EVENT_MEMBRANE.poolMaximum * (1 + (EVENT_MEMBRANE.poolAtIsolated - 1) * isolate)),
     );
     // 膜は「後から開いて長く残る」側。`Stagger` 軸 0 では遅れず、寿命の倍率も 1。
-    const { delay: lagScale, decayScale } = staggerOf(this.axes.stagger, 'membrane');
+    const { delay: lagScale, decayScale } = staggerOf(this.look.stagger, 'membrane');
     const spread = TIME.stagger.delay.membrane! > 0 ? lagScale / TIME.stagger.delay.membrane! : 0;
     for (const strike of this.audioDrive.strikes()) {
       const strength = clamp(strike.strength, 0, 1);
@@ -802,7 +846,7 @@ export class LightUnified implements LabExpression {
    * `Attack` 軸が開き方の速さを決める（0 で即座に開く）。
    */
   private eventMembraneDrive(): UnifiedDrive['membranes'] {
-    const attack = clamp(this.axes.attack, 0, 1);
+    const attack = clamp(this.look.attack, 0, 1);
     const rise =
       EVENT_MEMBRANE.attackFractionAtSharp +
       attack * (EVENT_MEMBRANE.attackFractionAtSlow - EVENT_MEMBRANE.attackFractionAtSharp);
@@ -826,7 +870,7 @@ export class LightUnified implements LabExpression {
 
   /** `Density` 軸を生成核へ渡す（1 バーストの枚数・同時数・打撃の間隔）。 */
   private applyDensity(): void {
-    const density = this.lookValue('density');
+    const density = this.look.density;
     this.audioDrive.setDensity(DENSITY.min + clamp(density, 0, 1) * (DENSITY.max - DENSITY.min));
   }
 
@@ -835,7 +879,7 @@ export class LightUnified implements LabExpression {
    * 検出器のイベント列も追加コアも従来と 1 ビットも変わらない。
    */
   private applyUnison(): void {
-    const unison = clamp(this.axes.bandUnison, 0, 1);
+    const unison = clamp(this.look.bandUnison, 0, 1);
     this.audioDrive.setBandFloor(1 - unison * (1 - UNISON.floorAtOne));
   }
 
@@ -847,7 +891,7 @@ export class LightUnified implements LabExpression {
   }
 
   private hueOf(): number {
-    const sticky = clamp(this.axes.hueStickiness, 0, 1);
+    const sticky = clamp(this.look.hueStickiness, 0, 1);
     const smooth = hueOfPhase(this.audioDrive.levels().timbre);
     const state = this.audioDrive.huePhase();
     let delta = state - smooth;
@@ -876,7 +920,10 @@ export class LightUnified implements LabExpression {
   }
 
   private rebuild(): void {
-    const rig = buildUnifiedRig(this.drive, this.effectiveAxes(), {
+    // 設定や preset から呼ばれたときのために、ここでも写しを取り直す。
+    // フレームの中では `update()` が先に取っているので、同じ値をもう一度作るだけ。
+    this.look = this.effectiveAxes();
+    const rig = buildUnifiedRig(this.drive, this.look, {
       aspectRatio: this.aspectRatio,
     });
     this.rigLayers = rig.length;
@@ -1524,9 +1571,15 @@ export class LightUnified implements LabExpression {
     this.syncMasterBases();
     for (const decl of UNIFIED_LOOK_PARAMS) this.lookResolver.updateParam(decl.id, delta);
     for (const decl of MASTER_LOOK_PARAMS) this.lookResolver.updateParam(decl.id, delta);
+    // **このフレームの実効値を 1 回だけ作る。** 以降はどこもここを読む。
+    this.look = this.effectiveAxes();
     // **結線した `Density` を生成核へも通す**（枚数・同時数・不応期はここが決める）。
     this.applyDensity();
     this.applyUnison();
+    // **`Strobe` を繋いだときに時計も付いてくる。** 光学クロックの速さは軸から来るので、
+    // 設定のときだけ渡していると「繋いでも明滅の速さが変わらない」になる。
+    // 繋いでいなければ設定で渡した値と同じなので、既定では何も起きない。
+    this.audioDrive.setStrobe(true, tickRateOf(this.look));
     this.audioDrive.update(audio, spectrum, elapsed, delta);
     this.previousElapsed = elapsed;
     this.advanceDrive(elapsed, delta);
@@ -1534,7 +1587,7 @@ export class LightUnified implements LabExpression {
 
     const material = this.material;
     if (material) {
-      const look = this.effectiveAxes();
+      const look = this.look;
       material.uniforms.uIntensity!.value =
         UNIFIED.intensityRange.min +
         look.intensity * (UNIFIED.intensityRange.max - UNIFIED.intensityRange.min);
@@ -1548,13 +1601,13 @@ export class LightUnified implements LabExpression {
     }
     // **内部ブルームと露出。** どちらも軸そのものが混合係数なので、0 で素通しへ戻る。
     // `Core` マスターの配下なので、結線を通した実効値を使う。
-    const bloom = clamp(this.effectiveAxes().coreBloom, 0, 1);
+    const bloom = clamp(this.look.coreBloom, 0, 1);
     /**
      * **`Core focus` はブルームの広がり方だけを動かす。**
      * 閾値を上げて滲む画素を芯へ絞り、半径を詰める。強さ（`Core bloom`）は触らないので、
      * 「強く光るが滲まない核」も「弱く広く滲む核」も作れる。軸 0 で従来の値に厳密に戻る。
      */
-    const focus = clamp(this.effectiveAxes().coreFocus, 0, 1);
+    const focus = clamp(this.look.coreFocus, 0, 1);
     if (this.bloomPass) {
       this.bloomPass.strength = bloom * UNIFIED.bloom.strengthAtOne;
       this.bloomPass.radius =
@@ -1954,7 +2007,10 @@ export class LightUnified implements LabExpression {
           this.audioDrive.setHueSource(sourceId, hue.depth);
           return;
         }
-        const decl = UNIFIED_LOOK_PARAMS.find((entry) => entry.id === paramId);
+        // 軸でもマスターでも同じ扱いにする（打撃のソースには自動で包絡が挟まる）。
+        const decl =
+          UNIFIED_LOOK_PARAMS.find((entry) => entry.id === paramId) ??
+          MASTER_LOOK_PARAMS.find((entry) => entry.id === paramId);
         const source = this.lookResolver.listSources().find((entry) => entry.id === sourceId);
         this.lookResolver.bind({
           paramId,
