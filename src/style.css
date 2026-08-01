@@ -2599,3 +2599,57 @@ body[data-ui-variant='3'] .dev-hud__toggles {
   padding-left: 10px;
   border-left: 2px solid #2c2c2c;
 }
+
+/* ---- 軸のまとまり（Light Unified の開発パネル）-------------------------- */
+/* 31 本の軸を 7 つのまとまりへ畳む。詳細は各まとまりの中で既定は閉じておく。
+   閉じているだけで、つまみは 1 つも減っていない（到達できる見え方は同じ）。 */
+.axis-group {
+  border-top: 1px solid rgb(255 255 255 / 8%);
+  margin-top: 8px;
+  padding-top: 4px;
+}
+
+.axis-group__summary,
+.axis-detail__summary {
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  list-style: none;
+  opacity: 0.72;
+  padding: 4px 0;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.axis-group__summary::-webkit-details-marker,
+.axis-detail__summary::-webkit-details-marker {
+  display: none;
+}
+
+.axis-group__summary::before,
+.axis-detail__summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform 120ms ease;
+}
+
+.axis-group[open] > .axis-group__summary::before,
+.axis-detail[open] > .axis-detail__summary::before {
+  transform: rotate(90deg);
+}
+
+.axis-group__summary:hover,
+.axis-detail__summary:hover {
+  opacity: 1;
+}
+
+.axis-detail {
+  border-left: 1px solid rgb(255 255 255 / 8%);
+  margin: 4px 0 2px;
+  padding-left: 8px;
+}
+
+.axis-detail__summary {
+  font-size: 10px;
+  opacity: 0.55;
+}

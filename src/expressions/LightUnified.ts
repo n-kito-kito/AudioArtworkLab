@@ -9,7 +9,7 @@ import { getSourceShelf, type AudioSourceShelf } from '../engine/binding/sources
 import { BindingResolver } from '../engine/binding/resolve';
 import { defaultTransformFor, type ParamDecl } from '../engine/binding/types';
 import type { CompositionContext, DesignLayerCanvases } from '../compositions/Composition';
-import type { ExpressionParam, LabExpression } from './Expression';
+import type { ExpressionNumberParam, ExpressionParam, LabExpression } from './Expression';
 import type { ExpressionId } from './catalog';
 import { OpticsAudioDrive, hueOfPhase } from './opticsAudioDrive';
 import { channelBalanceGain } from './channelBalance';
@@ -21,8 +21,18 @@ import {
   AXIS_PRESETS,
   DEFAULT_AXES,
   tickRateOf,
+  UNIFIED_GROUPS,
   type UnifiedAxes,
 } from './unifiedAxes';
+import {
+  AXIS_MASTERS,
+  applyAspect,
+  applyMaster,
+  applySpread,
+  readAspect,
+  readMaster,
+  readSpread,
+} from './unifiedMasters';
 import {
   UNIFIED,
   UNIFIED_KIND_INDEX,
@@ -110,6 +120,12 @@ const UNIFIED_LOOK_PARAMS: readonly ParamDecl[] = [
 ];
 
 const LOOK_KEYS = new Set(UNIFIED_LOOK_PARAMS.map((entry) => entry.id));
+
+/**
+ * **結線に出すマスター。** 軸そのものではなくマスターへ繋ぐので、
+ * 1 本の音が配下をまとめて動かす（例: `Core` は大きさ・形・ブルームを同時に押す）。
+ */
+const MASTER_LOOK_KEYS = new Set<string>();
 
 /** `Hue stickiness` が伸ばす時間（秒）。 */
 const HUE = { confirmMin: 0.2, confirmMax: 1.8, holdMin: 1, holdMax: 10 } as const;
@@ -1508,6 +1524,8 @@ export class LightUnified implements LabExpression {
     const row = {
       key: decl.id,
       label: `${decl.label} (${decl.low} ⇄ ${decl.high})`,
+      group: decl.group,
+      detail: decl.detail === true,
       min: 0,
       max: 1,
       step: 0.01,
@@ -1545,8 +1563,109 @@ export class LightUnified implements LabExpression {
         value: 'keep',
       },
       this.emissionParam(),
-      ...AXIS_DECLS.map((decl) => this.axisRow(decl)),
+      ...this.groupedRows(),
     ];
+  }
+
+  /**
+   * **グループごとに、マスター → 上段の軸 → 詳細の軸 の順で並べる。**
+   *
+   * マスターは状態を持たない（`unifiedMasters.ts`）ので、値は毎回配下から逆算する。
+   * 詳細を直接動かせばマスターの表示がそちらへ付いてくる ＝ **詳細のほうが常に優先**。
+   */
+  private groupedRows(): ExpressionParam[] {
+    const out: ExpressionParam[] = [];
+    for (const group of UNIFIED_GROUPS) {
+      for (const master of AXIS_MASTERS) {
+        if (master.group !== group) continue;
+        // `Spread` は「量」と「偏り」の 2 座標で出すので、この汎用の並びには載せない。
+        if (master.id === 'spread') continue;
+        out.push({
+          key: `master:${master.id}`,
+          label: `${master.label} (${master.low} ⇄ ${master.high})`,
+          group,
+          min: 0,
+          max: 1,
+          step: 0.01,
+          value: readMaster(master, this.axes),
+          ...this.masterBind(master.id),
+        });
+      }
+      // 散らばりの量（`Spread`）と縦横の偏り（`Aspect`）は同じ 2 軸を別の座標で見たもの。
+      // 量はマスター、偏りは詳細。**`Spread X` / `Spread Y` も生のまま残してある。**
+      if (group === '配置・空間') {
+        out.push({
+          key: 'master:spread',
+          label: 'Spread (中心 ⇄ ばらける)',
+          group,
+          min: 0,
+          max: 1,
+          step: 0.01,
+          value: readSpread(this.axes),
+          ...this.masterBind('spread'),
+        });
+        out.push({
+          key: 'master:aspect',
+          label: 'Aspect (縦長 ⇄ 横長)',
+          group,
+          detail: true,
+          min: 0,
+          max: 1,
+          step: 0.01,
+          value: readAspect(this.axes),
+        });
+      }
+      for (const decl of AXIS_DECLS) {
+        if (decl.group === group && decl.detail !== true) out.push(this.axisRow(decl));
+      }
+      for (const decl of AXIS_DECLS) {
+        if (decl.group === group && decl.detail === true) out.push(this.axisRow(decl));
+      }
+    }
+    return out;
+  }
+
+  /** マスター 1 本ぶんの「配下へ書く値」。`Spread` と `Aspect` は同じ 2 軸の別座標。 */
+  private masterPatch(id: string, value: number): Partial<Record<keyof UnifiedAxes, number>> {
+    if (id === 'spread') return applySpread(this.axes, value);
+    if (id === 'aspect') return applyAspect(this.axes, value);
+    const master = AXIS_MASTERS.find((entry) => entry.id === id);
+    return master ? applyMaster(master, value) : {};
+  }
+
+  /**
+   * **軸をまとめて書く。** 1 本ずつの `setExpressionParam` と同じ副作用
+   *（結線の基準値・光学クロック・痕跡場・色の粘り・密度）を必ず通す。
+   */
+  private writeAxes(patch: Partial<Record<keyof UnifiedAxes, number>>): void {
+    let clock = false;
+    for (const [id, next] of Object.entries(patch)) {
+      if (typeof next !== 'number' || !Number.isFinite(next)) continue;
+      const axis = id as keyof UnifiedAxes;
+      this.axes[axis] = clamp(next, 0, 1);
+      if (LOOK_KEYS.has(axis)) this.lookResolver.setBase(axis, this.axes[axis]);
+      if (axis === 'strobe') clock = true;
+      if (axis === 'trace') this.audioDrive.setTraceAmount(this.axes.trace);
+      if (axis === 'hueStickiness') this.applyStickiness();
+      if (axis === 'density') this.applyDensity();
+    }
+    if (clock) this.audioDrive.setStrobe(true, tickRateOf(this.axes));
+    this.rebuild();
+  }
+
+  /** マスターに音のソースを添える（結線に出すマスターだけ）。 */
+  private masterBind(id: string): Partial<ExpressionNumberParam> {
+    if (!MASTER_LOOK_KEYS.has(id)) return {};
+    const binding = this.lookResolver.getBinding(id);
+    return {
+      bind: {
+        paramId: id,
+        sourceId: binding?.sourceId ?? null,
+        depth: binding?.depth ?? 1,
+        sources: this.sourceList(),
+        liveValue: this.lookValue(id),
+      },
+    };
   }
 
   setExpressionParam(key: string, value: number | string): void {
@@ -1615,6 +1734,14 @@ export class LightUnified implements LabExpression {
           transform: binding?.transform ?? null,
         });
       }
+      return;
+    }
+    // ---- マスター（配下へ書くだけ。状態は持たない）----
+    if (key.startsWith('master:')) {
+      const id = key.slice('master:'.length);
+      const next = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(next)) return;
+      this.writeAxes(this.masterPatch(id, clamp(next, 0, 1)));
       return;
     }
     if (key === 'preset') {

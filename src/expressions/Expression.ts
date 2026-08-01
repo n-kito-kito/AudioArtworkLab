@@ -25,6 +25,17 @@ import type { ExpressionId } from './catalog';
 export interface ExpressionParamBase {
   readonly key: string;
   readonly label: string;
+  /**
+   * **UI のまとまり（アコーディオンの見出し）。**
+   * 省略した宣言は今までどおり並び順のまま平らに描かれる。
+   */
+  readonly group?: string;
+  /**
+   * **詳細か。** true は既定で折りたたまれた中に入る。
+   * 「常に見えるのは代表だけ、細かいものは開いたときだけ」を UI へ伝えるための印で、
+   * **つまみ自体が消えるわけではない**（到達できる見え方は減らない）。
+   */
+  readonly detail?: boolean;
 }
 
 /**

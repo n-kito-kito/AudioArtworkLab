@@ -186,28 +186,70 @@ export class AudioInspector {
           : 'Core Study (dev)';
     this.coreBlock.append(title);
 
+    /**
+     * **まとまりごとのアコーディオン。**
+     *
+     * `group` を持つ宣言だけがまとまりへ入り、持たないものは今までどおり平らに並ぶ
+     *（他の表現の宣言を変えないため）。`detail` は各まとまりの中の折りたたみへ入れ、
+     * **既定では閉じておく**。閉じているだけで、つまみは 1 つも減っていない。
+     */
+    let openGroup: { readonly name: string; readonly body: HTMLElement } | null = null;
+    let openDetails: HTMLElement | null = null;
+    const hostFor = (parameter: { group?: string; detail?: boolean }): HTMLElement => {
+      if (!parameter.group) return this.coreBlock;
+      if (!openGroup || openGroup.name !== parameter.group) {
+        const box = document.createElement('details');
+        box.className = 'axis-group';
+        box.open = true;
+        const head = document.createElement('summary');
+        head.className = 'axis-group__summary';
+        head.textContent = parameter.group;
+        const body = document.createElement('div');
+        body.className = 'axis-group__body';
+        box.append(head, body);
+        this.coreBlock.append(box);
+        openGroup = { name: parameter.group, body };
+        openDetails = null;
+      }
+      if (parameter.detail !== true) return openGroup.body;
+      if (!openDetails) {
+        const box = document.createElement('details');
+        box.className = 'axis-detail';
+        const head = document.createElement('summary');
+        head.className = 'axis-detail__summary';
+        head.textContent = '詳細';
+        const body = document.createElement('div');
+        body.className = 'axis-detail__body';
+        box.append(head, body);
+        openGroup.body.append(box);
+        openDetails = body;
+      }
+      return openDetails;
+    };
+
     for (const parameter of composition.getExpressionParams()) {
       if (parameter.type === 'action') continue;
+      const host = hostFor(parameter);
       if (parameter.type === 'binding') {
-        this.coreBlock.append(this.binding(parameter, composition));
+        host.append(this.binding(parameter, composition));
         continue;
       }
       if (parameter.type === 'select') {
         // 適応の on/off のような排他の切り替え。切り分け検証のために出す。
-        this.coreBlock.append(
+        host.append(
           this.select(parameter.label, parameter.options, parameter.value, (next) =>
             composition.setExpressionParam(parameter.key, next),
           ),
         );
         continue;
       }
-      this.coreBlock.append(
+      host.append(
         this.range(parameter.label, parameter.value, parameter.min, parameter.max, parameter.step, (next) =>
           composition.setExpressionParam(parameter.key, next),
         ),
       );
       // **既存スライダーに音を添える。** 未選択なら見た目はほぼ変わらない。
-      if (parameter.bind) this.coreBlock.append(this.sourceTail(parameter.bind, composition));
+      if (parameter.bind) host.append(this.sourceTail(parameter.bind, composition));
     }
     // 音を読まない表現には Core の読み出しも音源ボタンも意味がないので出さない。
     if (element2) return;

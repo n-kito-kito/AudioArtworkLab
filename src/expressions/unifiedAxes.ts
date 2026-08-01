@@ -26,7 +26,15 @@
 export interface AxisDecl {
   readonly id: keyof UnifiedAxes;
   readonly label: string;
+  /** UI のまとまり（アコーディオンの見出し）。7 つに揃えてある。 */
   readonly group: string;
+  /**
+   * **詳細か。** true は既定で折りたたまれた中に入る。
+   * マスター（`unifiedMasters.ts`）が代わりに代表として上段へ出るもの、
+   * および実測で効きが小さいものをここへ落とす。
+   * **つまみが消えるわけではない** — 到達できる見え方は 1 つも減らない。
+   */
+  readonly detail?: boolean;
   /** 0 側 / 1 側が何を意味するか。UI の補足に出す。 */
   readonly low: string;
   readonly high: string;
@@ -204,41 +212,67 @@ export interface UnifiedAxes {
   intensity: number;
 }
 
-/** 軸の並び（UI の順序でもある）。 */
-export const AXIS_DECLS: readonly AxisDecl[] = [
-  { id: 'spreadX', label: 'Spread X', group: '配置', low: '中心', high: 'ばらける' },
-  { id: 'spreadY', label: 'Spread Y', group: '配置', low: '中心', high: 'ばらける' },
-  { id: 'anchorPull', label: 'Anchor pull', group: '配置', low: '自由', high: '軸へ吸着' },
-  { id: 'strobe', label: 'Strobe', group: '時間', low: '連続', high: 'コマ送り' },
-  { id: 'attack', label: 'Attack', group: '時間', low: '即時', high: 'ゆっくり' },
-  { id: 'decay', label: 'Decay', group: '時間', low: '一瞬', high: '長い尾' },
-  { id: 'stagger', label: 'Stagger', group: '時間', low: '全層同時', high: '種別ごとにずれる' },
-  { id: 'blur', label: 'Blur', group: '光学', low: 'シャープ', high: 'にじみ' },
-  { id: 'depthSpread', label: 'Depth spread', group: '空間', low: '平面', high: '前後に散る' },
-  { id: 'hueCoherence', label: 'Hue coherence', group: '色', low: '要素ごと', high: '全体 1 色' },
-  { id: 'hueStickiness', label: 'Hue stickiness', group: '色', low: '滑らか', high: '離散・保持' },
-  { id: 'hueDepth', label: 'Hue depth', group: '色', low: 'ほぼ単色', high: '4 点 + 往復' },
-  { id: 'dispersion', label: 'Dispersion', group: '色', low: '重なる', high: 'ずれる' },
-  { id: 'channelBalance', label: 'Channel balance', group: '色', low: 'R 優勢', high: 'B 優勢' },
-  { id: 'membraneBeam', label: 'Membrane–Beam', group: '構成', low: '膜', high: '光条' },
-  { id: 'membraneScale', label: 'Membrane scale', group: '構成', low: '画面基準', high: 'ワールド固定' },
-  { id: 'eventMembrane', label: 'Event membrane', group: '構成', low: '固定の膜', high: '打撃ごとに生死' },
-  { id: 'textureGrain', label: 'Texture grain', group: '構成', low: '手続き形状', high: '素材が支配' },
-  { id: 'silhouette', label: 'Silhouette', group: '構成', low: '素の縁', high: '多角形で削る' },
-  { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める' },
-  { id: 'coreShape', label: 'Core shape', group: '構成', low: '等方の点', high: '横長の平らな面' },
-  { id: 'coreBloom', label: 'Core bloom', group: '光学', low: '無し', high: 'Spatial 相当' },
-  { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
-  { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
-  { id: 'skeleton', label: 'Skeleton', group: '構成', low: '無し', high: 'はっきり' },
-  { id: 'beamLength', label: 'Beam length', group: '構成', low: '短い', high: '貫通' },
-  { id: 'crossAngle', label: 'Cross angle', group: '構成', low: '上下左右', high: '自由な向き' },
-  { id: 'density', label: 'Density', group: '構成', low: '少ない', high: '多い' },
-  { id: 'motion', label: 'Motion', group: '動き', low: '静止', high: '漂う' },
-  { id: 'trace', label: 'Trace', group: '動き', low: '無し', high: '強い' },
-  { id: 'intensity', label: 'Intensity', group: '明るさ', low: '暗い', high: '明るい' },
+/**
+ * **UI のまとまり（アコーディオンの見出し）。この順に並べる。**
+ * 7 つに揃えてあり、各まとまりの中は「マスター → 上段の軸 → 詳細の軸」の順。
+ */
+export const UNIFIED_GROUPS: readonly string[] = [
+  '明るさ',
+  '配置・空間',
+  '時間',
+  '光学',
+  '色',
+  '構成',
+  '動き',
 ];
 
+/** 軸の並び（UI の順序でもある）。 */
+export const AXIS_DECLS: readonly AxisDecl[] = [
+  // ---- 明るさ（上段 1）----
+  { id: 'intensity', label: 'Intensity', group: '明るさ', low: '暗い', high: '明るい' },
+
+  // ---- 配置・空間（上段 1・詳細 2。`Spread` マスターが代表）----
+  { id: 'depthSpread', label: 'Depth', group: '配置・空間', low: '平面', high: '前後に散る' },
+  { id: 'spreadX', label: 'Spread X', group: '配置・空間', low: '中心', high: 'ばらける', detail: true },
+  { id: 'spreadY', label: 'Spread Y', group: '配置・空間', low: '中心', high: 'ばらける', detail: true },
+  { id: 'anchorPull', label: 'Anchor pull', group: '配置・空間', low: '自由', high: '軸へ吸着', detail: true },
+
+  // ---- 時間（上段 1・詳細 2。`Time` マスターが Attack を畳み込む）----
+  { id: 'strobe', label: 'Strobe', group: '時間', low: '連続', high: 'コマ送り' },
+  { id: 'attack', label: 'Attack', group: '時間', low: '即時', high: 'ゆっくり', detail: true },
+  { id: 'decay', label: 'Decay', group: '時間', low: '一瞬', high: '長い尾', detail: true },
+  { id: 'stagger', label: 'Stagger', group: '時間', low: '全層同時', high: '種別ごとにずれる', detail: true },
+
+  // ---- 光学（上段 1）----
+  { id: 'blur', label: 'Blur', group: '光学', low: 'シャープ', high: 'にじみ' },
+
+  // ---- 色（上段 1・詳細 3。`Colour lock` マスターが代表）----
+  { id: 'channelBalance', label: 'Channel balance', group: '色', low: 'R 優勢', high: 'B 優勢' },
+  { id: 'hueCoherence', label: 'Hue coherence', group: '色', low: '要素ごと', high: '全体 1 色', detail: true },
+  { id: 'hueStickiness', label: 'Hue stickiness', group: '色', low: '滑らか', high: '離散・保持', detail: true },
+  { id: 'hueDepth', label: 'Hue depth', group: '色', low: 'ほぼ単色', high: '4 点 + 往復', detail: true },
+  { id: 'dispersion', label: 'Dispersion', group: '色', low: '重なる', high: 'ずれる', detail: true },
+
+  // ---- 構成（上段 5・詳細 9。`Core` / `Membrane` / `Material` マスターが代表）----
+  { id: 'membraneBeam', label: 'Membrane–Beam', group: '構成', low: '膜', high: '光条' },
+  { id: 'skeleton', label: 'Skeleton', group: '構成', low: '無し', high: 'はっきり' },
+  { id: 'beamLength', label: 'Beam length', group: '構成', low: '短い', high: '貫通' },
+  { id: 'density', label: 'Density', group: '構成', low: '無し', high: '多い' },
+  { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
+  { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める', detail: true },
+  { id: 'coreShape', label: 'Core shape', group: '構成', low: '等方の点', high: '横長の平らな面', detail: true },
+  { id: 'coreBloom', label: 'Core bloom', group: '構成', low: '無し', high: 'Spatial 相当', detail: true },
+  { id: 'membraneScale', label: 'Membrane scale', group: '構成', low: '画面基準', high: 'ワールド固定', detail: true },
+  { id: 'eventMembrane', label: 'Event membrane', group: '構成', low: '固定の膜', high: '打撃ごとに生死', detail: true },
+  { id: 'textureGrain', label: 'Texture grain', group: '構成', low: '手続き形状', high: '素材が支配', detail: true },
+  { id: 'silhouette', label: 'Silhouette', group: '構成', low: '素の縁', high: '多角形で削る', detail: true },
+  { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋', detail: true },
+  { id: 'crossAngle', label: 'Cross angle', group: '構成', low: '上下左右', high: '自由な向き', detail: true },
+
+  // ---- 動き（上段 1・詳細 1）----
+  { id: 'motion', label: 'Motion', group: '動き', low: '静止', high: '漂う' },
+  { id: 'trace', label: 'Trace', group: '動き', low: '無し', high: '強い', detail: true },
+];
 /**
  * **既定値。** 3 つのプリセット座標のだいたい中間から始める。
  * ここが「まだ誰も見ていない中間の見え方」の出発点になる。
