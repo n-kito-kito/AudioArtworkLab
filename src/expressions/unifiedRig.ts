@@ -378,6 +378,59 @@ export const UNIFIED = {
    * 削るだけだと芯が痩せるだけで質感が乗らない — Lab 2 は 0.8・Reactive は 1.38 の加算。
    */
   coreMaterialGain: 0.8,
+  /**
+   * **明るさの中立化。**
+   *
+   * `Intensity` は全層の共通倍率だが、非核層は `min(colour, ceiling)` で頭打ちになる。
+   * `Membrane scale` / `Haze floor` / `Texture grain` が総光量を大きく動かすと、
+   * **`Intensity` は表現の軸ではなく帳尻を合わせる補正ノブになる**
+   * （実際、核の加算素材とブルームを入れた回にプリセットの `Intensity` を
+   * spatial 0.40 → 0.24 / reactive 0.22 → 0.11 と下げて辻褄を合わせていた）。
+   *
+   * ここは 3 本それぞれに**局所の補償係数**を置いて、
+   * 「軸は構造を変え、明るさは `Intensity` だけが決める」へ戻す。
+   * `Core shape` の面積保存（1.45 × 0.78 = 1.13）や `grain.gain = 2.4`
+   * （マスクの平均をおよそ 1 に置く）と同じ流儀で、**どれも軸 0 では厳密に 1** になる。
+   */
+  neutral: {
+    /**
+     * **膜の面積補償の指数。** 1 で「画面上の面積 × 帯の太さ × 明るさ」が保存される。
+     * 0 なら補償なし（従来）。途中の値も連続に効く。
+     */
+    membraneArea: 1,
+    /**
+     * **補償の基準点。** 軸のどこを「据え置く」かで、平らにしたときの絵が決まる。
+     * 端（軸 0）ではなく**既定値**に合わせてあるので、既定のままなら
+     * 中立化の前後で膜も靄も明るさが変わらない（動くのは軸の両端の側）。
+     */
+    membraneReference: 0.45,
+    hazeReference: 0.45,
+    /**
+     * **靄の上側の圧縮。** 靄は画面全体を覆う 1 枚なので、明るさと面積を
+     * 取り引きする余地が無い — 完全に中立にすると軸そのものが消える
+     * （0 = 無し ⇄ 1 = 厚い という意味が保てなくなる）。
+     * そこで**上側だけ**を圧縮し、減らした光量は裾の広がり（`hazeReach`）へ回す。
+     * 1 で圧縮なし。**0 での傾きは 1 のまま**なので、軸の根元は従来と変わらない。
+     */
+    hazeCompression: 3.2,
+    /** 圧縮したぶん、軸の上側で靄の裾を広げる（「厚い」が明るさではなく広がりで出る）。 */
+    hazeReach: 0.72,
+    /**
+     * **核へ足す素材の期待値。** `Texture grain` を上げると核だけは素材が
+     * **加算**されるので、他の種別（乗算・マスクの平均が 1）と違って総量が増える。
+     * 加算のぶんだけ土台を割り戻して核の光量を保つための係数。
+     * 実測（軸 0→1 で核の明るさが変わらない高さ）で置く。
+     */
+    coreGrainMean: 0.62,
+  },
+  /**
+   * **`Intensity` 軸の実寸（全層の共通倍率）。**
+   *
+   * 中立化で 3 本が持ち去っていた明るさが `Intensity` へ戻ってくるので、
+   * 幅もそれに合わせて広げる（旧 0.6〜3.0）。**明るさを決めるのはこの 1 本だけ**
+   * という状態にするための幅で、3 プリセットはどれも 0.30〜0.66 に収まる。
+   */
+  intensityRange: { min: 0.6, max: 3 },
   /** 核の楕円窓（この半径から外へ向けて 0 へ）。板の縁の手前で溶ける。 */
   coreWindow: { start: 0.58, end: 1.03 },
   /** 場の利得。音量の持続をそのまま輝度にすると暗すぎるので 1 本だけ通す。 */
@@ -670,6 +723,23 @@ const CORE_SHAPE_PARAMS: readonly (readonly [number, number, number, number])[] 
 ];
 
 /**
+ * **靄の明るさの曲げ（明るさの中立化）。**
+ *
+ * 靄は画面全体を覆う 1 枚なので、明るさがそのまま画面の平均輝度になる
+ * （実測で 1 段あたり 8.2 ＝ 全軸で 3 位）。上側だけを圧縮して、
+ * `Intensity` と張り合わないようにする。**0 での傾きは 1** なので軸の根元は変わらず、
+ * `hazeFloor = 0` はこれまでどおり厳密に「靄なし」のままである。
+ */
+const hazeGain = (floor: number): number => {
+  const f = clamp01(floor);
+  const k = UNIFIED.neutral.hazeCompression;
+  const reference = clamp01(UNIFIED.neutral.hazeReference);
+  // 基準点で 1 に戻す（既定のままなら中立化の前後で靄の濃さが変わらない）。
+  const normalise = 1 + (k - 1) * reference;
+  return (f / (1 + (k - 1) * f)) * normalise;
+};
+
+/**
  * **靄。** 画面をまとめる最下段。`hazeFloor` が量を決める。
  * `blur` が縁の柔らかさを、`depthSpread` が奥行きを決める。
  */
@@ -678,7 +748,8 @@ const buildHaze = (
   axes: UnifiedAxes,
   viewport: UnifiedViewport,
 ): UnifiedLayer[] => {
-  const level = clamp01(drive.fieldLevels.haze) * clamp01(axes.hazeFloor);
+  const floor = clamp01(axes.hazeFloor);
+  const level = clamp01(drive.fieldLevels.haze) * hazeGain(floor);
   if (level <= 0) return [];
   const z = depthOf(axes, 1);
   const e = halfExtent(z, viewport);
@@ -697,7 +768,14 @@ const buildHaze = (
       gradientForm: 1,
       intensity: 0.2 * level * depthDim(z) * blinkOf(axes, drive, 'haze', 0),
       // [減衰, 縁の始まり, 縁の終わり, 分光の深さ]
-      shape: [mix(2.6, 1.4, clamp01(axes.blur)), 0.32, 0.78, 0.55],
+      // 圧縮したぶんは裾へ回す。**減衰を小さくすると靄が遠くまで届く** ので、
+      // 軸の上側は「明るい靄」ではなく「厚く広がった靄」として読める。
+      shape: [
+        mix(2.6, 1.4, clamp01(axes.blur)) * mix(1, UNIFIED.neutral.hazeReach, floor),
+        0.32,
+        0.78,
+        0.55,
+      ],
       edge: clamp01(axes.blur),
       halo: haloOf(axes, 'haze'),
       pad: padOf(axes),
@@ -805,14 +883,42 @@ const membraneHalf = (
   extent: { readonly w: number; readonly h: number },
   wide: number,
   share: number,
-): { readonly w: number; readonly h: number } => {
+): { readonly w: number; readonly h: number; readonly lightRatio: number } => {
   const scale = clamp01(axes.membraneScale);
   const world = UNIFIED.membraneWorldHalf;
-  return {
-    w: mix(extent.w, world, scale) * wide * mix(0.5, 1.05, share),
-    h: mix(extent.h * mix(0.28, 0.7, share), world * mix(0.4, 0.95, share), scale),
-  };
+  const reference = clamp01(UNIFIED.neutral.membraneReference);
+  const sizeAt = (s: number): { readonly w: number; readonly h: number } => ({
+    w: mix(extent.w, world, s) * wide * mix(0.5, 1.05, share),
+    h: mix(extent.h * mix(0.28, 0.7, share), world * mix(0.4, 0.95, share), s),
+  });
+  const here = sizeAt(scale);
+  const base = sizeAt(reference);
+  // 光る面積の比 = 板の面積 × 帯の太さ。**基準点で 1** になるよう割る。
+  const area = (here.w * here.h) / Math.max(base.w * base.h, 1e-9);
+  const band = membraneBand(scale) / membraneBand(reference);
+  return { w: here.w, h: here.h, lightRatio: Math.max(area * band, 1e-6) };
 };
+
+/**
+ * **帯の太さの期待値。** 1 枚ごとの半幅は `mix(0.24,0.5,s) + h × mix(0.26,0.5,s)` で、
+ * `h` は 0〜1 の一様な決定論ハッシュなので期待値は下の式になる。
+ * 光る面積の比を出すためだけに使う（形そのものは各 build が決める）。
+ */
+const membraneBand = (scale: number): number => mix(0.24, 0.5, scale) + 0.5 * mix(0.26, 0.5, scale);
+
+/**
+ * **膜の明るさの補償（明るさの中立化）。**
+ *
+ * `Membrane scale` は板の面積と帯の太さを同時に広げるので、
+ * 補償しないと総光量が跳ね上がる（実測で 1 段あたり 13.2 ＝ 全 35 軸で最大）。
+ * 広がったぶんだけ割り戻して、**軸は遠近の効き方だけを変える**ようにする。
+ * 指数 0 で従来どおり、1 で「面積 × 明るさ」が保存される。
+ * 比は基準点で 1 になるよう作ってあり、そこへ従来の濃さ（基準点での `mix(1, 2.1, s)`）
+ * を掛け戻すので、**既定のままなら中立化の前後で 1 画素も変わらない**。
+ */
+const membraneLightGain = (lightRatio: number): number =>
+  mix(1, 2.1, clamp01(UNIFIED.neutral.membraneReference)) *
+  Math.pow(Math.max(lightRatio, 1e-6), -UNIFIED.neutral.membraneArea);
 
 /**
  * **膜。** Sheet・カーテン・マクロ膜をまとめた語。
@@ -885,7 +991,8 @@ const buildEventMembranes = (
         // 同じ濃さで出すと画面が塗りになる。濃いのは重なった場所だけ。
         (0.1 + 0.13 * share) *
         UNIFIED.eventMembraneScale *
-        mix(1, 2.1, scale) *
+        // **明るさの中立化。** 広がったぶんだけ割り戻す（軸 0 では 1）。
+        membraneLightGain(size.lightRatio) *
         mix(0.55, 1.25, clamp01(born.strength)) *
         gain *
         eventShare *
@@ -948,8 +1055,8 @@ const buildFixedMembranes = (
       gradientForm: 2,
       intensity:
         (0.1 + 0.13 * share) *
-        // ワールド固定側では 1 枚が濃くなる（天井も同じ 1 本で上がる）。
-        mix(1, 2.1, scale) *
+        // **明るさの中立化。** 広がったぶんだけ割り戻す（軸 0 では 1）。
+        membraneLightGain(size.lightRatio) *
         fixedShare *
         level *
         depthDim(z) *

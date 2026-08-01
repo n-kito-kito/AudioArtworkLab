@@ -291,7 +291,7 @@ export const DEFAULT_AXES: UnifiedAxes = {
   density: 0.55,
   motion: 0.35,
   trace: 0.4,
-  intensity: 0.5,
+  intensity: 0.545,
 };
 
 /**
@@ -338,7 +338,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     density: 0.85,
     motion: 0.5,
     trace: 0.35,
-    intensity: 0.24,
+    intensity: 0.42,
   },
   /** Reactive Lab 風: 膜が優勢・長い尾・にじむ。 */
   reactive: {
@@ -376,7 +376,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     density: 0.8,
     motion: 0.3,
     trace: 0.5,
-    intensity: 0.11,
+    intensity: 0.20,
   },
   /** Element Lab 2 風: 中心に固定・フルコマ送り・シャープ・1 色相。 */
   optics: {
@@ -414,7 +414,7 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     density: 0.5,
     motion: 0.05,
     trace: 0.2,
-    intensity: 0.56,
+    intensity: 0.30,
   },
 };
 

@@ -795,6 +795,12 @@ export class LightUnified implements LabExpression {
             UNIFIED.coreWindow.end,
           ),
         },
+        /**
+         * **核へ足す素材の期待値（明るさの中立化）。**
+         * 核だけは素材を加算するので、`Texture grain` を上げると核の光量が増える。
+         * 加算のぶんだけ土台を割り戻して、軸が明るさではなく**質感**だけを変えるようにする。
+         */
+        uCoreGrainNeutral: { value: UNIFIED.neutral.coreGrainMean },
         // アトラスが届くまでは 0。**素材が無い間は手続きの形だけで描く**
         //（1x1 の黒を掛けて画面が消えないようにするため）。
         uHasAtlas: { value: 0 },
@@ -883,6 +889,7 @@ export class LightUnified implements LabExpression {
         uniform vec4 uGrain;
         uniform float uGrainGain;
         uniform vec3 uCoreMaterial;
+        uniform float uCoreGrainNeutral;
         uniform float uHasAtlas;
         uniform sampler2D uMask;
         uniform vec2 uMaskGrid;
@@ -1167,10 +1174,20 @@ export class LightUnified implements LabExpression {
           float polygon = smoothstep(0.5 - uMaskSoftness, 0.5 + uMaskSoftness, sdf);
           float silhouette = mix(1.0, polygon, clamp(vMask, 0.0, 1.0));
 
+          /**
+           * **核の素材を明るさ中立にする。** 核だけは素材を**加算**するので、
+           * Texture grain を上げると核の光量そのものが増えてしまう
+           *（他の種別は乗算で、マスクの平均が 1 になるよう grain.gain が置いてある）。
+           * 加算で足すぶんだけ土台を割り戻し、軸が**質感の配り方**だけを変えるようにする。
+           * grain = 0 では厳密に 1 なので、素材が無いときの見え方は変わらない。
+           */
+          float coreNeutral =
+            1.0 / (1.0 + isCore * grain * uCoreMaterial.x * uCoreGrainNeutral);
+
           vec3 colour = channels * uChannelGain * tint;
-          colour *= uIntensity * vAxis.x * material * silhouette;
+          colour *= uIntensity * vAxis.x * material * silhouette * coreNeutral;
           // **核へ素材を加算する。** 楕円窓の内側だけなので、板の四角さは出ない。
-          colour += tint * uChannelGain * uIntensity * vAxis.x * frame *
+          colour += tint * uChannelGain * uIntensity * vAxis.x * frame * coreNeutral *
                     isCore * grain * uCoreMaterial.x * clamp(luminance, 0.0, 2.2) * coreWindow(p);
           // **白の予算。** 核以外はここで頭を押さえる。
           colour = min(colour, vec3(vAxis.y));
@@ -1286,7 +1303,9 @@ export class LightUnified implements LabExpression {
     const material = this.material;
     if (material) {
       const look = this.effectiveAxes();
-      material.uniforms.uIntensity!.value = 0.6 + look.intensity * 2.4;
+      material.uniforms.uIntensity!.value =
+        UNIFIED.intensityRange.min +
+        look.intensity * (UNIFIED.intensityRange.max - UNIFIED.intensityRange.min);
       material.uniforms.uOffset!.value = 0.01 + look.dispersion * 0.09;
       material.uniforms.uDecorrelation!.value = look.dispersion;
       const gain = channelBalanceGain(look.channelBalance);
