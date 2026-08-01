@@ -204,6 +204,23 @@ export const UNIFIED = {
   fragmentCount: 16,
   beamCount: 4,
   /**
+   * **破片の濃さ（旧 `Fragments` 軸の焼き込み）。**
+   * 3 プリセット + 既定の 4 つの値（0.5 / 0.6 / 0.6 / 0.55）の中央。
+   */
+  fragmentAmount: 0.55,
+  /**
+   * **`Density` が破片の枚数へ掛ける倍率の上限。**
+   * 下限は 0（＝ 旧 `Fragments = 0` の「破片を出さない」がここへ移った）。
+   * 既定 0.55 で旧 `mix(0.5, 2.2, 0.55) = 1.435` をちょうど通るよう置いてある。
+   */
+  fragmentDensityAtOne: 2.61,
+  /**
+   * **奥行きが連れて動かす傾きの量（旧 `Tilt` 軸の吸収）。**
+   * 3 プリセットの (`depthSpread`, `tilt`) は (0.9, 0.75) / (0.5, 0.35) / (0.2, 0.05) で、
+   * 傾き ≈ 奥行き × 0.8 にほぼ乗っている。
+   */
+  tiltFromDepth: 0.8,
+  /**
    * **ワールド固定側の膜の半径**（ワールド単位）。中間の奥行きで画面をほぼ埋める。
    * 可視範囲で割らないので、手前に置かれた膜は画面を越え、奥のものは小さく写る
    * ＝ 遠近が相殺されない（Spatial の `macroWorldHalfSize` と同じ流儀）。
@@ -560,13 +577,21 @@ const placeOf = (
   };
 };
 
-/** 傾き。`tilt` が 0 なら正面。 */
+/**
+ * **傾き。** 旧 `Tilt` 軸を `Depth spread` が吸収したもの。
+ *
+ * 独立した軸として持っていたときの実測は平均輝度 9.14 → 8.84・広がり 0.1569 → 0.1595 で、
+ * **画素の上ではほとんど見えなかった**。3 プリセットでも `Depth spread` と
+ * 完全に同じ順（0.9 / 0.5 / 0.2 と 0.75 / 0.35 / 0.05）で動いており、
+ * 「奥行きを散らす」と「面を傾ける」は 1 つの空間の軸だった。
+ * 奥行き 0 なら正面のまま（＝旧 `Tilt` 0 と同じ）。
+ */
 const tiltOf = (
   axes: UnifiedAxes,
   seed: number,
   index: number,
 ): { readonly x: number; readonly y: number } => {
-  const amount = clamp01(axes.tilt);
+  const amount = clamp01(axes.depthSpread) * UNIFIED.tiltFromDepth;
   if (amount <= 0) return { x: 0, y: 0 };
   return {
     x: (hash01(seed + 3301, index * 3 + 1) - 0.5) * 1.1 * amount,
@@ -642,12 +667,18 @@ const beamReach = (axes: UnifiedAxes): number => mix(0.3, 2.8, clamp01(axes.beam
 const crossGain = (axes: UnifiedAxes): number => smoothstep(0, 0.12, clamp01(axes.beamLength));
 
 /**
- * **バースト全体の向き。**
+ * **バースト全体の向き。** 旧 `Cross rotation` 軸を `Cross angle` が吸収したもの。
  *
- * 原点を中心にする層（核・骨格・閃光・扇）の面内回転へ一律に足す角度。
- * 形は変えず向きだけを連続に振るので、0 では従来とまったく同じ絵になる。
+ * 原点を中心にする層（核・骨格・閃光・扇）の面内回転へ**一律に**足す角度なので、
+ * どの層も同じだけ回る（十字はほどけない）。
+ *
+ * 軸として持っていたときは 3 プリセットも既定値も 0 のまま一度も使われず、
+ * **作者が画の向きを決めるノブ**でもあった（D17 の恣意性の排除に反する）。
+ * ここでは向きを**打撃のシード**に決めさせ、`Cross angle` が
+ * 「どれだけ自由に振れてよいか」だけを持つ。軸 0 では厳密に 0 ＝ 従来の向き。
  */
-const crossRoll = (axes: UnifiedAxes): number => clamp01(axes.crossRotation) * Math.PI;
+const crossRoll = (axes: UnifiedAxes, seed: number): number =>
+  (hash01(Math.round(seed) + 1301, 3) * 2 - 1) * Math.PI * clamp01(axes.crossAngle);
 
 /**
  * **1 本ごとの向きのばらつき。**
@@ -1108,7 +1139,7 @@ const buildBeams = (
 
   // ---- 常設の軸（骨格）。`skeleton` か `Beam length` が 0 なら 1 枚も出ない ----
   const cross = crossGain(axes);
-  const roll = crossRoll(axes);
+  const roll = crossRoll(axes, drive.beamSeed);
   if (level > 0 && skeleton > 0 && cross > 0) {
     const widths: readonly [number, number, number][] = [
       [0.012, 0.05, 0.36],
@@ -1232,7 +1263,7 @@ const buildCore = (
   const seed = Math.round(drive.beamSeed);
   const base = coreSize(axes, seed) * mix(0.8, 1.15, pulse);
   const cross = coreCrossGain(axes);
-  const roll = crossRoll(axes);
+  const roll = crossRoll(axes, drive.beamSeed);
   const form = clamp01(axes.coreShape);
   /**
    * **板の枚数。** 中心を 1 枚の点で描くと、どれだけ広げても「大きな点」にしかならない。
@@ -1294,15 +1325,26 @@ const buildCore = (
   return out;
 };
 
-/** **破片。** 4 つの形状族。`fragments` 軸が量を決める。 */
+/**
+ * **破片。** 4 つの形状族。量は `Density` 1 本が決める。
+ *
+ * 旧 `Fragments` 軸は `Density` と**数式が完全な積**だった
+ *（`fragmentCount × fragments × mix(0.5, 2.2, density)`）ので、
+ * 同じ量を 2 本のつまみで別々に触っている状態だった。
+ * 3 プリセットでも 0.55〜0.60 とほとんど動いていない（レンジ 0.05）。
+ * ここでは濃さを定数へ焼き込み、**枚数は `Density` の下限を 0 まで下げて**
+ * 「破片を出さない」（旧 `Fragments = 0`）も引き続き出せるようにする。
+ */
 const buildFragments = (
   drive: UnifiedDrive,
   axes: UnifiedAxes,
   viewport: UnifiedViewport,
 ): UnifiedLayer[] => {
-  const amount = clamp01(axes.fragments);
-  if (amount <= 0 || drive.fragments.length === 0) return [];
-  const wanted = UNIFIED.fragmentCount * amount * mix(0.5, 2.2, clamp01(axes.density));
+  const amount = UNIFIED.fragmentAmount;
+  if (drive.fragments.length === 0) return [];
+  const wanted =
+    UNIFIED.fragmentCount * amount * mix(0, UNIFIED.fragmentDensityAtOne, clamp01(axes.density));
+  if (wanted <= 0) return [];
   const limit = Math.max(Math.ceil(wanted), 1);
   const out: UnifiedLayer[] = [];
   let placed = -1;
@@ -1388,7 +1430,7 @@ const buildFan = (
       kind: 'fan',
       position: [anchor.x, anchor.y, z],
       half: [2.5 * mix(0.82, 1, gate), 2.5 * mix(0.82, 1, gate)],
-      spin: crossRoll(axes),
+      spin: crossRoll(axes, drive.beamSeed),
       tiltX: 0,
       tiltY: 0,
       hue: hueOf(axes, drive.hue, seed, 3),
@@ -1399,7 +1441,7 @@ const buildFan = (
       // [基準角, 広がり, 本数, 到達]。基準角は板ローカルなので、板ごと回すぶんを打ち消さない
       // よう**ここにも足す**（扇の開く向きが `Cross rotation` に付いてくる）。
       shape: [
-        -1.42 + (a - 0.5) * 0.5 + crossRoll(axes),
+        -1.42 + (a - 0.5) * 0.5 + crossRoll(axes, drive.beamSeed),
         0.82 + (b - 0.5) * 0.4,
         3.2 + (c - 0.5) * 1.2,
         mix(0.46, 0.66, gate),

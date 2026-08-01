@@ -1641,7 +1641,8 @@ export class LightUnified implements LabExpression {
     if (!Number.isFinite(next)) return;
     this.axes[decl.id] = clamp(next, 0, 1);
     if (LOOK_KEYS.has(decl.id)) this.lookResolver.setBase(decl.id, this.axes[decl.id]);
-    if (decl.id === 'tickRate') this.audioDrive.setStrobe(true, tickRateOf(this.axes));
+    // 光学クロックの速さは `Strobe` が持つ（旧 `Tick rate` 軸を吸収した）。
+    if (decl.id === 'strobe') this.audioDrive.setStrobe(true, tickRateOf(this.axes));
     if (decl.id === 'trace') this.audioDrive.setTraceAmount(this.axes.trace);
     if (decl.id === 'hueStickiness') this.applyStickiness();
     if (decl.id === 'density') this.applyDensity();

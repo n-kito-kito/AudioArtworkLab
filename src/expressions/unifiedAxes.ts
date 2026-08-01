@@ -22,7 +22,7 @@
  * - **決定論**: `Math.random()` も `Date.now()` も使わない
  */
 
-/** 軸 1 本の定義。すべて 0〜1 に正規化して持つ（`tickRate` だけ実寸を別に持つ）。 */
+/** 軸 1 本の定義。すべて 0〜1 に正規化して持つ。 */
 export interface AxisDecl {
   readonly id: keyof UnifiedAxes;
   readonly label: string;
@@ -47,8 +47,6 @@ export interface UnifiedAxes {
    * 「少しコマ送りっぽい連続」になる（切替ではない）。
    */
   strobe: number;
-  /** 光学クロックの速さ（12〜48 の実寸を 0〜1 で持つ）。 */
-  tickRate: number;
   /** 0 = 即時 ⇄ 1 = ゆっくり立ち上がる。 */
   attack: number;
   /** 0 = 一瞬で消える ⇄ 1 = 長い尾を引く。 */
@@ -75,8 +73,6 @@ export interface UnifiedAxes {
   // ---- 空間 ----
   /** 0 = 平面（全部同じ奥行き）⇄ 1 = Near/Far に散る。 */
   depthSpread: number;
-  /** 0 = 正面 ⇄ 1 = 3D の傾き。 */
-  tilt: number;
 
   // ---- 色 ----
   /** 0 = 要素ごとに seed の色 ⇄ 1 = 全体が 1 つの色相。 */
@@ -170,8 +166,6 @@ export interface UnifiedAxes {
    * 軸 0 では滲みの寄与も掛け合わせも 0 なので、現状と厳密に一致する。
    */
   coreBloom: number;
-  /** 破片の量。 */
-  fragments: number;
   /**
    * **破片の性格。** 0 = 角のある破片 ⇄ 1 = 引っ掻き傷のような羽毛・筋。
    * `Blur`（光学のにじみ）とは別軸にしてある — 鋭い筋と滲んだ破片を
@@ -185,16 +179,13 @@ export interface UnifiedAxes {
   /** 0 = 短い光条 ⇄ 1 = 画面の外まで貫通する極細線。 */
   beamLength: number;
   /**
-   * **十字ごと回す。** 0 = 現状の向き ⇄ 1 = π（180°）回転。
-   * バーストの原点を中心にする層（核・骨格・閃光・扇）の面内回転へ一律に足す。
-   * 十字の形は変えず、**画の向きだけ**を連続に振る。
-   */
-  crossRotation: number;
-  /**
    * **十字を十字でなくす。**
    *
    * 0 = 上下左右に固定（十字）⇄ 1 = 1 本ずつ ±π まで自由な向き。
    * 向きは打撃のシードから決まるので決定論。中間では「少しだけ傾いた十字」になる。
+   *
+   * **画全体の向きもこの 1 本が持つ**（旧 `Cross rotation` を吸収）。
+   * 作者が向きを決めるノブは置かない（D17）— どちらへ回るかは打撃のシードが決める。
    */
   crossAngle: number;
   /**
@@ -219,13 +210,11 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'spreadY', label: 'Spread Y', group: '配置', low: '中心', high: 'ばらける' },
   { id: 'anchorPull', label: 'Anchor pull', group: '配置', low: '自由', high: '軸へ吸着' },
   { id: 'strobe', label: 'Strobe', group: '時間', low: '連続', high: 'コマ送り' },
-  { id: 'tickRate', label: 'Tick rate', group: '時間', low: '12fps', high: '48fps' },
   { id: 'attack', label: 'Attack', group: '時間', low: '即時', high: 'ゆっくり' },
   { id: 'decay', label: 'Decay', group: '時間', low: '一瞬', high: '長い尾' },
   { id: 'stagger', label: 'Stagger', group: '時間', low: '全層同時', high: '種別ごとにずれる' },
   { id: 'blur', label: 'Blur', group: '光学', low: 'シャープ', high: 'にじみ' },
   { id: 'depthSpread', label: 'Depth spread', group: '空間', low: '平面', high: '前後に散る' },
-  { id: 'tilt', label: 'Tilt', group: '空間', low: '正面', high: '傾き' },
   { id: 'hueCoherence', label: 'Hue coherence', group: '色', low: '要素ごと', high: '全体 1 色' },
   { id: 'hueStickiness', label: 'Hue stickiness', group: '色', low: '滑らか', high: '離散・保持' },
   { id: 'hueDepth', label: 'Hue depth', group: '色', low: 'ほぼ単色', high: '4 点 + 往復' },
@@ -239,12 +228,10 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める' },
   { id: 'coreShape', label: 'Core shape', group: '構成', low: '等方の点', high: '横長の平らな面' },
   { id: 'coreBloom', label: 'Core bloom', group: '光学', low: '無し', high: 'Spatial 相当' },
-  { id: 'fragments', label: 'Fragments', group: '構成', low: '無し', high: '多い' },
   { id: 'fragmentCharacter', label: 'Fragment character', group: '構成', low: '破片', high: '羽毛・筋' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
   { id: 'skeleton', label: 'Skeleton', group: '構成', low: '無し', high: 'はっきり' },
   { id: 'beamLength', label: 'Beam length', group: '構成', low: '短い', high: '貫通' },
-  { id: 'crossRotation', label: 'Cross rotation', group: '構成', low: '現状の向き', high: 'π 回転' },
   { id: 'crossAngle', label: 'Cross angle', group: '構成', low: '上下左右', high: '自由な向き' },
   { id: 'density', label: 'Density', group: '構成', low: '少ない', high: '多い' },
   { id: 'motion', label: 'Motion', group: '動き', low: '静止', high: '漂う' },
@@ -261,13 +248,11 @@ export const DEFAULT_AXES: UnifiedAxes = {
   spreadY: 0.5,
   anchorPull: 0.35,
   strobe: 0.45,
-  tickRate: 0.45,
   attack: 0.3,
   decay: 0.45,
   stagger: 0.4,
   blur: 0.5,
   depthSpread: 0.45,
-  tilt: 0.3,
   hueCoherence: 0.6,
   hueStickiness: 0.5,
   hueDepth: 0.45,
@@ -281,12 +266,10 @@ export const DEFAULT_AXES: UnifiedAxes = {
   coreSize: 0.45,
   coreShape: 0.3,
   coreBloom: 0.3,
-  fragments: 0.5,
   fragmentCharacter: 0.4,
   hazeFloor: 0.45,
   skeleton: 0.4,
   beamLength: 0.55,
-  crossRotation: 0,
   crossAngle: 0.25,
   density: 0.55,
   motion: 0.35,
@@ -306,14 +289,12 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     spreadY: 0.85,
     anchorPull: 0.1,
     strobe: 0,
-    tickRate: 0.45,
     attack: 0.35,
     decay: 0.55,
     stagger: 0.85,
     // にじみは強くしすぎない。0.9 を超えると層の縁が消えて 1 枚の靄になる。
     blur: 0.6,
     depthSpread: 0.9,
-    tilt: 0.75,
     hueCoherence: 0.35,
     hueStickiness: 0.2,
     hueDepth: 0.72,
@@ -327,13 +308,11 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     coreSize: 0.6,
     coreShape: 0.55,
     coreBloom: 0.4,
-    fragments: 0.6,
     fragmentCharacter: 0.85,
     hazeFloor: 0.3,
     // 十字は空間の見え方では脇役。長い光条が画面を貫くと図形が主役になる。
     skeleton: 0.12,
     beamLength: 0.6,
-    crossRotation: 0,
     crossAngle: 0.55,
     density: 0.85,
     motion: 0.5,
@@ -346,13 +325,11 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     spreadY: 0.8,
     anchorPull: 0.15,
     strobe: 0,
-    tickRate: 0.45,
     attack: 0.25,
     decay: 0.9,
     stagger: 0.8,
     blur: 0.66,
     depthSpread: 0.5,
-    tilt: 0.35,
     hueCoherence: 0.45,
     hueStickiness: 0.3,
     hueDepth: 0.7,
@@ -366,12 +343,10 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     coreSize: 0.5,
     coreShape: 0.45,
     coreBloom: 0.45,
-    fragments: 0.6,
     fragmentCharacter: 0.7,
     hazeFloor: 0.4,
     skeleton: 0.15,
     beamLength: 0.45,
-    crossRotation: 0,
     crossAngle: 0.35,
     density: 0.8,
     motion: 0.3,
@@ -384,13 +359,11 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     spreadY: 0.08,
     anchorPull: 0.85,
     strobe: 1,
-    tickRate: 0.5,
     attack: 0,
     decay: 0.15,
     stagger: 0.06,
     blur: 0.2,
     depthSpread: 0.2,
-    tilt: 0.05,
     hueCoherence: 1,
     hueStickiness: 1,
     hueDepth: 0.15,
@@ -404,12 +377,10 @@ export const AXIS_PRESETS: Readonly<Record<string, Partial<UnifiedAxes>>> = {
     coreSize: 0.35,
     coreShape: 0.12,
     coreBloom: 0.18,
-    fragments: 0.55,
     fragmentCharacter: 0.15,
     hazeFloor: 0.4,
     skeleton: 1,
     beamLength: 1,
-    crossRotation: 0,
     crossAngle: 0.08,
     density: 0.5,
     motion: 0.05,
@@ -431,5 +402,11 @@ export const normalizeAxes = (raw: Partial<UnifiedAxes> | null | undefined): Uni
   return out;
 };
 
-/** ティック速度の実寸（fps）。軸 0〜1 を 12〜48 へ写す。 */
-export const tickRateOf = (axes: UnifiedAxes): number => 12 + clamp01(axes.tickRate) * 36;
+/**
+ * **光学クロックの速さ（fps）。**
+ *
+ * 旧 `Tick rate` 軸を `Strobe` が吸収したもの。**明滅が無いあいだ（`strobe = 0`）は
+ * ティックがどこにも効かない**（`strobePhaseGain` は即 1 を返し、ラッチ量も 0）ので、
+ * 独立した軸として持つ意味が無かった。コマ送りが深くなるほど時計も速くなる。
+ */
+export const tickRateOf = (axes: UnifiedAxes): number => 12 + clamp01(axes.strobe) * 36;
