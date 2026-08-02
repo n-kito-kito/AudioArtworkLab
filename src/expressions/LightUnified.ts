@@ -1022,6 +1022,8 @@ export class LightUnified implements LabExpression {
          */
         uEdgeContrast: { value: 0 },
         uCoreFocus: { value: 0 },
+        // 破片の型抜きの強さ。0 で手続きの形、1 で素材の輝度が外形になる。
+        uFragmentCarve: { value: 0 },
       },
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -1109,6 +1111,7 @@ export class LightUnified implements LabExpression {
         uniform float uMaskSoftness;
         uniform float uEdgeContrast;
         uniform float uCoreFocus;
+        uniform float uFragmentCarve;
         varying vec2 vUv;
         varying vec4 vTone;
         varying vec4 vShape;
@@ -1235,7 +1238,17 @@ export class LightUnified implements LabExpression {
             }
             float shard = softEdge(d, vShape.x * 0.1);
             float character = clamp(vAxis.w, 0.0, 1.0);
-            if (character <= 0.0) return shard;
+            /**
+             * **型抜きをやめる側（Fragment carve）。**
+             * 上の 4 族も羽毛も「こちらが決めた形」で、素材はそれで削られている。
+             * 1 側ではその形を**緩いビネットだけ**へ溶かし、外形を素材へ明け渡す
+             *（素材の掛け算は main 側で全量へ切り替わる）。ビネットは板の四角さを
+             * 隠すだけで形は作らないので、素材の膜と同じものを使う。
+             * 0 では mix(x, y, 0.0) = x なので手続きの形が厳密にそのまま残る。
+             */
+            float carve = clamp(uFragmentCarve, 0.0, 1.0);
+            float open = 1.0 - smoothstep(SHEET_VIGNETTE, 1.0, length(p));
+            if (character <= 0.0) return mix(shard, open, carve);
             /**
              * **引っ掻き傷（羽毛・筋）。**
              * 芯は細く長く、伸びる向きに沿って羽毛のような濃淡が走る。
@@ -1253,7 +1266,7 @@ export class LightUnified implements LabExpression {
             float barbs = barbFloor + (1.0 - barbFloor) * abs(sin(f.x * 7.0 + f.y * 3.0 + vShape.y));
             float taper = 1.0 - smoothstep(0.0, 1.5, abs(f.y) * (0.35 + abs(f.x)));
             float filament = spine * along * barbs * max(taper, 0.0);
-            return mix(shard, filament, character);
+            return mix(mix(shard, filament, character), open, carve);
           }
 
           // ---- 靄 ----
@@ -1494,6 +1507,21 @@ export class LightUnified implements LabExpression {
           float isCore = 1.0 - step(0.5, vTone.z);
           // 0 でぴったり 1（＝素材を 1 画素も読まない手続きの形だけ）。
           float material = mix(1.0, clamp(luminance, 0.0, 2.2), grain * (1.0 - isCore));
+          /**
+           * **破片の型抜きをやめる（Fragment carve）。**
+           * 手続きの形はビネットへ溶けている（baseMask）ので、外形を持てるのは
+           * 素材だけになる。素材の効き（Texture grain）ごと 1 へ振り切るのは、
+           * 途中の grain では「削る量」が足りず外形が素材から生まれないため。
+           * アトラスが無いときは 1 のまま（＝ ビネットだけの淡い光）にして、
+           * 素材待ちのあいだに破片が消えないようにする。
+           * 破片以外の種別には掛からず、軸 0 では mix(x, y, 0.0) = x で恒等。
+           */
+          float isFragment = step(3.5, vTone.z) * (1.0 - step(4.5, vTone.z));
+          material = mix(
+            material,
+            mix(1.0, clamp(luminance, 0.0, 2.2), uHasAtlas),
+            clamp(uFragmentCarve, 0.0, 1.0) * isFragment
+          );
 
           // 色。層ごとの色相はリグが決めてある（要素ごと ⇄ 全体 1 色の混合済み）。
           float gradient = gradientAt(q, vTone.w);
@@ -1687,6 +1715,8 @@ export class LightUnified implements LabExpression {
       // **縁の締まり。** どちらも 0 で式が恒等へ戻るので、渡すだけで安全。
       material.uniforms.uEdgeContrast!.value = clamp(look.edgeContrast, 0, 1);
       material.uniforms.uCoreFocus!.value = clamp(look.coreFocus, 0, 1);
+      // **破片の型抜き。** 0 で式が恒等へ戻るので、渡すだけで安全。
+      material.uniforms.uFragmentCarve!.value = clamp(look.fragmentCarve, 0, 1);
     }
     // **内部ブルームと露出。** どちらも軸そのものが混合係数なので、0 で素通しへ戻る。
     // `Core` マスターの配下なので、結線を通した実効値を使う。

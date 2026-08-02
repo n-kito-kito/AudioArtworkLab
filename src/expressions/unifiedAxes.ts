@@ -225,6 +225,21 @@ export interface UnifiedAxes {
    * それぞれ独立に出せるようにするため。
    */
   fragmentCharacter: number;
+  /**
+   * **破片の型抜きの強さ。**
+   *
+   * 0 = 現状のまま（**厳密に 1 画素も変わらない**）⇄ 1 = 型抜きをやめる。
+   *
+   * 破片はいま「手続きで描いた形（三角・スリヴァー・板片・欠け片）で素材を
+   * 型抜きしたもの」で、外形は**こちらが決めた形**が持っている。1 側ではその形を
+   * 緩いビネットへ溶かし、代わりに**素材の輝度そのものを外形にする**
+   *（Spatial Study のマクロ膜と同じ考え方 — 素材が 0 の場所は厳密に 0）。
+   *
+   * `Fragment character`（角 ⇄ 羽毛）は**どちらも手続きの形**の中の選択で、
+   * こちらはその手続きの形を使うかどうかを持つ。両方を独立に置いてあるので
+   * 「羽毛の形で型抜きした破片」も「素材の筋がそのまま出る破片」も出せる。
+   */
+  fragmentCarve: number;
   /** 靄の床（画面をまとめる最下段の明るさ）。 */
   hazeFloor: number;
   /**
@@ -348,6 +363,7 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   // 上段に置く（＝結線対象）。0 が「現状のまま」で、可動域は片側へ伸びる。
   { id: 'materialLight', label: 'Material light', group: '構成', low: '無し', high: '主役' },
   { id: 'isolation', label: 'Isolation', group: '構成', low: '一枚の床', high: '独立した板' },
+  { id: 'fragmentCarve', label: 'Fragment carve', group: '構成', low: '型抜き', high: '素材が形' },
   { id: 'bandUnison', label: 'Band unison', group: '構成', low: '最強の 1 帯域', high: '3 帯域が同時' },
   { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める', detail: true },
   { id: 'coreShape', label: 'Core shape', group: '構成', low: '等方の点', high: '横長の平らな面', detail: true },
@@ -400,6 +416,8 @@ export const DEFAULT_AXES: UnifiedAxes = {
   coreShape: 0.3,
   coreBloom: 0.3,
   fragmentCharacter: 0.4,
+  // **0 が「現状のまま」。** 破片の外形をいまの手続きの形のままにする側。
+  fragmentCarve: 0,
   hazeFloor: 0.45,
   skeleton: 0.4,
   beamLength: 0.55,
