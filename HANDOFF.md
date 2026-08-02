@@ -85,7 +85,7 @@ Light Element Lab（V1）で、コードは温存してある。
 共通する光の素材から構成できる 1 つの光の楽器。**
 
 ただし、異なる光の寿命・更新方法までスライダーだけで補間しない。
-Presetは **Spatial / Reactive / Lab2 / Drift のLight Recipe**を選び、各Recipeが
+Presetは **Spatial / Reactive / Lab2 / Drift のStyle Preset**を選び、各Styleが
 Event / Refresh / Persistent Controllerと必要な描画構造を持つ。
 位置・滲み・色・密度など、意味が共通する値はスライダーとして共有する。
 Preset切り替え時はクロスフェードし、操作は離散でも映像は滑らかに移行させる。
@@ -253,10 +253,10 @@ Spatial はその中間（手続きの transient + 素材の macro 膜の 2 段�
 | **手続きで筋を描かない** | 筋は素材を細長い板に貼った副産物として出す（§3 の発見） |
 | **明るさの扱い** | 天井・ハロ・ブルーム・トーンマップを安易に足さない。加算合成と素材の輝度で成立させる |
 | **発光Controller** | Event（Spatial / Reactive）・Refresh（Lab2）・Persistent（常在浮遊）を分ける。状態管理まで1本のモードスライダーで補間しない |
-| **Light Recipe** | Spatial / Reactive / Lab2 / Driftは、Controllerだけでなく素材の組み立て方も選ぶ。全Recipeを同じ固定パーツ構造へ押し込まない |
+| **Style Preset** | Spatial / Reactive / Lab2 / Driftは、料理の系統のような大元の方向性。Controllerだけでなく基盤の組み立て方も選ぶが、完成工程を固定するレシピではない |
 | **Spatialの構造** | 独立Coreを必須にしない。Material Light Layerの変形・重なりから中心白熱が創発する状態を残す |
 | **共通スライダー** | 位置・広がり・滲み・色・明るさ・密度・サイズ・奥行き・寿命・速度など、Controller間で意味が保たれる値を共有する |
-| **Preset切り替え** | Controllerや動きのレシピはボタンで選び、映像は短いクロスフェードで移行する |
+| **Preset切り替え** | 大元のStyleをボタンで選び、映像は短いクロスフェードで移行する。選択後も別系統の調理法・味付けを混ぜられる |
 
 参照すべき PRD の決定（**メインリポジトリ側にあり、この worktree には反映されていない**）:
 **D28**（Simple Rules, Complex Behaviors）/ **D29**（分解して検証）/ **D30**（イベント時に特徴を確定）/
@@ -304,7 +304,7 @@ Spatial はその中間（手続きの transient + 素材の macro 膜の 2 段�
 ### 2. SpatialのMaterial Light Layer構造を確認する
 
 - 独立Coreを消した状態で、素材レイヤーの変形・重なりだけから白熱が成立するか確認する
-- Haze / Membraneを全Recipe必須の固定パーツにしない
+- Haze / Membraneを全Style Preset必須の固定パーツにしない
 - 新しい見た目を足す変更ではなく、間違った構造へ進まないための確認とする
 
 ### 3. Fragment / ParticleをDrift用の静止部品として足す
@@ -324,7 +324,7 @@ Spatial はその中間（手続きの transient + 素材の macro 膜の 2 段�
 - Fragmentは常在し、強さだけが呼吸する
 - 停止・無音が続けば緩やかに黒へ戻す
 
-### 6. Spatial / DriftのLight Recipe切り替えを追加する
+### 6. Spatial / DriftのStyle Preset切り替えを追加する
 
 - まずボタンで安全に切り替え、両方の単独状態を確認する
 - クロスフェードは切り替えが安定した後の別変更とする

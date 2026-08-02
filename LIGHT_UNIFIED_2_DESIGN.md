@@ -18,7 +18,17 @@ Light Unified 2 は、共通する光の素材を使いながら、次の見え�
 
 ただし、これらを1本のモードスライダーで無理に補間しない。
 共通化するのは素材・連続パラメーター・発光強度の入力モデルである。
-光の組み立て方はLight Recipe、存在方法はControllerとして分ける。
+大元の表現方向はStyle Preset、存在方法はControllerとして分ける。
+
+用語の考え方は次のとおり。
+
+- Expression（Light / Cymatics）: それぞれ別の料理
+- Style Preset（Spatial / Reactive / Lab2 / Drift）: イタリアン・フレンチ・和食のような大元の方向性
+- Controller / Modifier: 煮る・焼く・流す・捩るなどの調理法
+- 共通スライダー / Effect: 味付け・火加減・仕上げ
+
+Style Presetは完成工程を固定するレシピではない。方向性を決めた後も、別系統の調理法や味付けを混ぜられる。
+それでも基盤となるStyle Presetの性格は維持する。
 
 ---
 
@@ -28,7 +38,7 @@ Light Unified 2 は、共通する光の素材を使いながら、次の見え�
 共有する素材と表現語彙
   Material Light Layer / Fragment / Ray
                     ↓
-Light Recipe（Presetボタンで選択）
+Style Preset（ボタンで選択）
   Spatial / Reactive / Lab2 / Drift
                     ↓
 発光Controller
@@ -43,21 +53,21 @@ Modifier・Effect
 Light Unified 2 Composition
 ```
 
-Core / Membrane / Haze は、全Recipeに必須の固定パーツではない。
+Core / Membrane / Haze は、全Style Presetに必須の固定パーツではない。
 同じMaterial Light Layerを、大きさ・切り取り・配置・寿命・重ね方によって異なる役割に使う場合がある。
 Fragment / Rayのように形状自体が違うものだけを独立Elementとして扱う。
 
-### Light Recipeの責務
+### Style Presetの責務
 
-| Recipe | 主な組み立て | Controller |
-|---|---|---|
-| Spatial | Material Light Layerを変形・重畳し、重なりから白熱を創発させる。独立Coreは必須ではない | Event |
-| Reactive | 素材由来のcore / sheet / hazeと、必要最小限の白い芯を組み合わせる | Event |
-| Lab2 | curtain / beam / veilなどの常設する手続き層を組み合わせる | Refresh |
-| Drift | 常在する中心光とPoint / Fragment Fieldを空間内で浮遊させる | Persistent |
+| Style Preset | 大元の方向性 | 主な組み立て | Controller |
+|---|---|---|---|
+| Spatial | 空間的・素材重畳 | Material Light Layerを変形・重畳し、重なりから白熱を創発させる。独立Coreは必須ではない | Event |
+| Reactive | 瞬発的・音因果 | 素材由来のcore / sheet / hazeと、必要最小限の白い芯を組み合わせる | Event |
+| Lab2 | 光学層・高速更新 | curtain / beam / veilなどの常設する手続き層を組み合わせる | Refresh |
+| Drift | 宇宙的・常在浮遊 | 常在する中心光とPoint / Fragment Fieldを空間内で浮遊させる | Persistent |
 
-PresetはControllerだけでなく、この組み立てとControllerの組を選ぶ。
-異なるRecipeを無理に同じ描画構造へ押し込まない。
+Style PresetはControllerだけでなく、基盤となる組み立て方も選ぶ。
+異なるStyle Presetを無理に同じ描画構造へ押し込まない。
 
 ### Controllerの責務
 
@@ -91,9 +101,9 @@ Controllerが異なっても、明るさの入力モデルは共通にできる�
 
 ### ボタン／Presetにするもの
 
-- Spatial / Reactive / Lab2 / Drift のLight Recipe
+- Spatial / Reactive / Lab2 / Drift のStyle Preset
 
-ボタンは映像を瞬時に差し替えるためではない。切り替え時は旧Recipeと新Recipeを短時間だけ
+ボタンは映像を瞬時に差し替えるためではない。切り替え時は旧Styleと新Styleを短時間だけ
 併存させ、明るさの総量を制限しながらクロスフェードする。
 
 ### スライダーにするもの
@@ -119,7 +129,7 @@ Controllerが異なっても、明るさの入力モデルは共通にできる�
 |---|---|---|
 | Material Light Layer | 画像素材を形として描く共有プリミティブ | Spatialのmacro、Reactiveのsheet / haze / anchor |
 | Light Element | 固有の形状を持つ素材 | Fragment、Ray、手続きCore |
-| Light Recipe | 素材・Element・Controllerの構成 | Spatial、Reactive、Lab2、Drift |
+| Style Preset | 表現の大元の方向性と基盤構成 | Spatial、Reactive、Lab2、Drift |
 | Controller | 存在時間と更新方法 | Event、Refresh、Persistent |
 | Modifier | 形や位置の変化 | Float、Orbit、Flow、Twist |
 | Effect | 最終的な質感 | Glow、Prism、Trail、Blur、Grain |
@@ -135,7 +145,7 @@ Cymaticsと組み合わせる場合は、単純な重ね合わせだけでなく
 
 ## 5. 安全な実装手順
 
-各素材・Element・Recipeは必ず次の順番で進める。
+各素材・Element・Style Presetは必ず次の順番で進める。
 
 1. 音なしの静止状態で、単体の形を確認する
 2. 手動値で安全範囲の最小・中央・最大を確認する
@@ -144,10 +154,10 @@ Cymaticsと組み合わせる場合は、単純な重ね合わせだけでなく
 5. 実音のピーク、無音、別画角を確認する
 6. スクリーンショットまたは短い動画をユーザーへ提示し、承認後に次へ進む
 
-一度に複数のLight Element、Recipe、Controller、Modifierを追加しない。
+一度に複数のLight Element、Style Preset、Controller、Modifierを追加しない。
 Controllerの抽象化は、EventとPersistentの両方が単独で成立してから行う。
 
-パーツ分解は見た目と責務を理解するためのStudyであり、全Recipeを同じパーツ構成に固定するためではない。
+パーツ分解は見た目と責務を理解するためのStudyであり、全Style Presetを同じパーツ構成に固定するためではない。
 特にSpatialは、独立Coreを使わずMaterial Light Layerの重なりだけで白熱が成立する状態を必ず残す。
 
 ---
@@ -160,7 +170,7 @@ Controllerの抽象化は、EventとPersistentの両方が単独で成立して�
 - `Audio volume`: 形・位置・色を固定し、Volumeで強度だけを追従させる
 - `Off`: Hazeを除外する
 
-これは正しい段階的検証である。ただし製品のController選択でも、全Recipe共通の必須パーツでもなく、
+これは正しい段階的検証である。ただし製品のController選択でも、全Style Preset共通の必須パーツでもなく、
 D29の要素分離確認用UIである。
 現時点でHazeへ漂流、色変化、Onset、Fragment、Bloomを追加してはいけない。
 
@@ -182,7 +192,7 @@ D29の要素分離確認用UIである。
 3. Fragment / ParticleをDrift用の**静止部品だけ**として追加する
 4. Fragmentへ**低速のFloat / Orbitだけ**を追加し、音にはまだ接続しない
 5. VolumeまたはSustainを強度へ1本だけ接続し、Persistent Controllerの最小形を確認する
-6. Spatial / DriftのLight RecipeをPresetボタンで切り替える
+6. Spatial / DriftのStyle Presetをボタンで切り替える
 7. 切り替えが安定してからクロスフェードを追加する
 8. その後にReactive / Refresh / Ray / Twist / Cymatics連携へ進む
 
