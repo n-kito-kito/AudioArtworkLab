@@ -28,10 +28,10 @@ import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
  *
  * ## コア（第 2 歩）
  *
- * 中心の白熱を 1 個だけ置く。**白へ届いてよい唯一の層**で、明るさの階層の基準になる。
- * 形の作り方そのものが軸（`Core form`）で、**0 = 手続きの楕円 ⇄ 1 = 素材が形**を連続に混ぜる
- * — 調査どおり Spatial / Reactive は「素材が形」、Lab2 は「手続きの楕円」に分かれていたため。
- * 位置は画面中央に固定する（移動は音へ繋いだ後）。
+ * 中心の白熱を 1 個だけ置く。位置は画面中央に固定する（移動は音へ繋いだ後）。
+ * `Core form` は形の混合ではなく**手続きの芯の寄与量**で、
+ * **0 = 芯が満額（Lab2）⇄ 中間 = 素材の上に芯が加算（Reactive）⇄ 1 = 芯なし（Spatial）**。
+ * 詳しくは `buildCore()` の注釈。使う素材は `Core seed` から決定論で引く。
  *
  * `Anchor` 軸は**膜とコアの位置関係**で、0 = 膜が画面内に散る ⇄ 1 = 膜がコアを起点に集まる。
  *
@@ -123,9 +123,12 @@ const UNIFIED2 = {
     materialGain: 3.3,
     /** 素材側だけに要る円窓。手続き側は自前で 0 へ落ちるが、掛けても形は変わらない。 */
     edgeFadeStart: 0.6,
-    /** 素材のどこを切り出すか（決定論の固定値。コアは 1 個なのでハッシュを引くだけ）。 */
+    /** 素材の切り取り半幅。膜と違って軸に出さない（コアの軸は寄与量と大きさだけ）。 */
     cropHalf: 0.3,
-    seed: 41.3,
+    /** ハッシュの味付け。**発光ごとの素材選び**は `Core seed` からこの塩を通して引く。 */
+    seedSalt: 41.3,
+    /** `Core seed` を整数の発光番号へ量子化する段数。隣の値で別の素材へ移る。 */
+    seedSteps: 997,
   },
 
   defaults: {
@@ -137,6 +140,7 @@ const UNIFIED2 = {
     anchor: 0.35,
     coreSize: 0.4,
     coreForm: 0.5,
+    coreSeed: 0.2,
     intensity: 1,
   },
 } as const;
@@ -150,6 +154,7 @@ type Unified2ParamKey =
   | 'anchor'
   | 'coreSize'
   | 'coreForm'
+  | 'coreSeed'
   | 'intensity';
 
 const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: number }> = {
@@ -161,6 +166,7 @@ const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: n
   anchor: { min: 0, max: 1, step: 0.01 },
   coreSize: { min: 0, max: 1, step: 0.01 },
   coreForm: { min: 0, max: 1, step: 0.01 },
+  coreSeed: { min: 0, max: 1, step: 0.01 },
   intensity: { min: 0, max: 2, step: 0.01 },
 };
 
@@ -253,6 +259,7 @@ export class LightUnified2 implements LabExpression {
 
     this.buildMesh();
     this.buildCore();
+    this.writeCore();
     this.writeMembranes();
 
     this.scene = new THREE.Scene();
@@ -276,9 +283,8 @@ export class LightUnified2 implements LabExpression {
       if (this.coreMaterial) {
         this.coreMaterial.uniforms.uAtlas!.value = atlas.texture;
         (this.coreMaterial.uniforms.uGrid!.value as THREE.Vector2).set(atlas.columns, atlas.rows);
-        this.coreMaterial.uniforms.uTile!.value =
-          Math.floor(hash01(UNIFIED2.core.seed) * atlas.tiles.length) % atlas.tiles.length;
       }
+      this.writeCore();
       this.writeMembranes();
     });
   }
@@ -408,12 +414,24 @@ export class LightUnified2 implements LabExpression {
   }
 
   /**
-   * **コア（1 個）。中心の白熱で、白へ届いてよい唯一の層。**
+   * **コア（1 個）。中心の白熱。**
    *
-   * 形の作り方そのものが `Core form` 軸で、
-   * **手続きの楕円 `pow(1 - r², falloff)`** と **素材の輝度**を連続に混ぜる。
-   * どちらの側も分岐はなく、途中の値では「素材の濃淡が乗った楕円」になる。
-   * 色は白のみ（膜のような色相を持たない）。
+   * ---
+   * ## `Core form` は「混合」ではなく「**手続きの芯の寄与量**」
+   *
+   * 3 表現を見直すと、Spatial に独立したコア部品は無く、中心にあったのは
+   * **素材が形の膜が強く光っていたもの**（Prismatic Anchor）だった。
+   * Lab2 は**手続きの楕円 + 素材を加算**、Reactive は**素材が形 + 白い芯を加算**。
+   * つまり 3 表現は「**手続きの芯がどれだけ乗るか**」の 1 本の軸に並ぶ。
+   *
+   *     mask = 素材の輝度 + 手続きの楕円 × (1 − Core form)
+   *
+   * - `Core form = 0`: 芯が満額で乗る（楕円が主役 ＝ Lab2）
+   * - 中間: 素材が形の上に芯が加算で乗る（＝ Reactive）
+   * - `Core form = 1`: **芯の寄与が厳密に 0**。素材だけが光る（＝ Spatial）
+   *
+   * 素材側は軸のどこでも常に居る（Lab2 も「楕円 + 素材」だったため）。
+   * 変わるのは芯の量だけで、分岐は無く連続。色は白のみ。
    */
   private buildCore(): void {
     // 板の中を −1..1 で持つ。膜と同じ座標系にして、式の読み比べができるようにする。
@@ -424,10 +442,10 @@ export class LightUnified2 implements LabExpression {
         uAtlas: { value: this.placeholder },
         uGrid: { value: new THREE.Vector2(1, 1) },
         uTile: { value: 0 },
-        // 形の混合 / 楕円の落ち方 / 素材側の補正利得 / 円窓の始まり。
+        // 手続きの芯の寄与量 / 楕円の落ち方 / 素材側の補正利得 / 円窓の始まり。
         uCore: {
           value: new THREE.Vector4(
-            UNIFIED2.defaults.coreForm,
+            1 - UNIFIED2.defaults.coreForm,
             core.falloff,
             core.materialGain,
             core.edgeFadeStart,
@@ -437,6 +455,10 @@ export class LightUnified2 implements LabExpression {
         uCoreCrop: {
           value: new THREE.Vector4(core.floor, core.floorWidth, core.cropHalf, UNIFIED2.cellInset),
         },
+        // 発光ごとの素材の見え方: 切り取りの中心 UV と面内回転の cos / sin。
+        uCoreCell: { value: new THREE.Vector4(0.5, 0.5, 1, 0) },
+        /** 同・UV の反転。 */
+        uCoreFlip: { value: new THREE.Vector2(1, 1) },
         uIntensity: { value: UNIFIED2.defaults.intensity },
       },
       transparent: true,
@@ -458,6 +480,8 @@ export class LightUnified2 implements LabExpression {
         uniform float uTile;
         uniform vec4 uCore;
         uniform vec4 uCoreCrop;
+        uniform vec4 uCoreCell;
+        uniform vec2 uCoreFlip;
         uniform float uIntensity;
         varying vec2 vLocal;
 
@@ -465,12 +489,19 @@ export class LightUnified2 implements LabExpression {
           vec2 p = vLocal;
           float radius2 = dot(p, p);
 
-          // ① 手続きの楕円。r = 1 で厳密に 0 なので、板の四角はこの側では出ない。
-          float ellipse = pow(clamp(1.0 - radius2, 0.0, 1.0), uCore.y);
+          // ① 手続きの芯（楕円）。r = 1 で厳密に 0 なので、板の四角はこの側では出ない。
+          //    寄与量 uCore.x は Core form 1 で厳密に 0 になり、芯は完全に消える。
+          float ellipse = pow(clamp(1.0 - radius2, 0.0, 1.0), uCore.y) * max(uCore.x, 0.0);
 
           // ② 素材が形。膜とまったく同じ読み方（敷居も 0 を 0 のまま通す）。
+          //    切り取りの中心・回転・反転は発光ごとの seed から来る。
+          vec2 q = vec2(
+            p.x * uCoreCell.z - p.y * uCoreCell.w,
+            p.x * uCoreCell.w + p.y * uCoreCell.z
+          );
+          q *= uCoreFlip;
           vec2 cell = clamp(
-            vec2(0.5) + p * uCoreCrop.z,
+            uCoreCell.xy + q * uCoreCrop.z,
             uCoreCrop.w,
             1.0 - uCoreCrop.w
           );
@@ -479,16 +510,15 @@ export class LightUnified2 implements LabExpression {
           vec3 source = texture2D(uAtlas, (vec2(column, row) + cell) / uGrid).rgb;
           float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
           luminance *= smoothstep(uCoreCrop.x, uCoreCrop.x + uCoreCrop.y, luminance);
-          // 素材側だけは高さを手続き側へ揃える（Core form を「消える軸」にしないため）。
           float material = luminance * uCore.z;
 
-          // ③ 形の混合。**分岐は無い。** 途中は素材の濃淡が乗った楕円になる。
-          float mask = mix(ellipse, material, clamp(uCore.x, 0.0, 1.0));
+          // ③ **加算。** 素材は軸のどこでも居て、変わるのは芯の量だけ（分岐は無い）。
+          float mask = material + ellipse;
 
           // ④ 素材側に要る円窓。板の四角い輪郭を消すための掛け算で、輝度は足さない。
           float window = 1.0 - smoothstep(uCore.w, 1.0, length(p));
 
-          // 白のみ。**白へ届いてよいのはこの層だけ。**
+          // 白のみ（膜のような色相を持たない）。
           vec3 color = vec3(1.0) * mask * window * uIntensity;
           gl_FragColor = vec4(max(color, 0.0), 1.0);
         }
@@ -502,6 +532,41 @@ export class LightUnified2 implements LabExpression {
     this.coreMesh.frustumCulled = false;
     // 加算なので順序は絵に影響しないが、膜の後に描いておく。
     this.coreMesh.renderOrder = 1;
+  }
+
+  /**
+   * **発光ごとのコアの素材を決める。**
+   *
+   * アトラス 10 枚のどれを使うか・素材のどこを切り出すか・面内回転・反転を、
+   * `Core seed` を量子化した**発光番号**のハッシュから引く（膜と同じ流儀）。
+   * `Math.random()` は使わないので、同じ seed なら毎回同じ素材・同じ切り口になる。
+   *
+   * 発光が複数になったら、この番号がインスタンス番号へ置き換わるだけで式は変わらない。
+   */
+  private writeCore(): void {
+    const material = this.coreMaterial;
+    if (!material) return;
+    const core = UNIFIED2.core;
+    const tileCount = Math.max(this.atlas?.tiles.length ?? 1, 1);
+    // 連続なスライダーを整数の発光番号へ落とす。隣の値でも別の素材へ移る。
+    const emission = Math.round(clamp(this.params.coreSeed, 0, 1) * core.seedSteps);
+
+    material.uniforms.uTile!.value =
+      Math.floor(hash01(emission, core.seedSalt) * tileCount) % tileCount;
+
+    // 切り取りの中心。半幅を差し引いた範囲に収めて、マスの外へは出さない。
+    const room = Math.max(0.5 - core.cropHalf, 0);
+    const spin = hash01(emission, core.seedSalt + 2.7) * Math.PI * 2;
+    (material.uniforms.uCoreCell!.value as THREE.Vector4).set(
+      0.5 + (hash01(emission, core.seedSalt + 1.3) * 2 - 1) * room,
+      0.5 + (hash01(emission, core.seedSalt + 1.9) * 2 - 1) * room,
+      Math.cos(spin),
+      Math.sin(spin),
+    );
+    (material.uniforms.uCoreFlip!.value as THREE.Vector2).set(
+      hash01(emission, core.seedSalt + 3.1) < 0.5 ? -1 : 1,
+      hash01(emission, core.seedSalt + 3.7) < 0.5 ? -1 : 1,
+    );
   }
 
   /** その奥行きでの可視半高（ワールド単位）。カメラは原点で −Z を見る。 */
@@ -589,7 +654,8 @@ export class LightUnified2 implements LabExpression {
 
     const core = this.coreMaterial;
     if (core) {
-      (core.uniforms.uCore!.value as THREE.Vector4).x = clamp(this.params.coreForm, 0, 1);
+      // 軸 1 で厳密に 0 ＝ 手続きの芯が完全に消える。
+      (core.uniforms.uCore!.value as THREE.Vector4).x = 1 - clamp(this.params.coreForm, 0, 1);
       core.uniforms.uIntensity!.value = intensity;
     }
     if (this.coreMesh) {
@@ -744,8 +810,9 @@ export class LightUnified2 implements LabExpression {
       row('carve', 'Carve (緩いビネット＝素材が形 ⇄ 硬い円窓＝外形で切る)'),
       row('anchor', 'Anchor (画面内に散る ⇄ コアを起点に集まる)'),
       row('membranes', 'Membranes (枚数)'),
-      coreRow('coreForm', 'Core form (手続きの楕円 ⇄ 素材が形)'),
+      coreRow('coreForm', 'Core form (手続きの芯が満額 ⇄ 芯なし＝素材だけが光る)'),
       coreRow('coreSize', 'Core size (小 ⇄ 大)'),
+      coreRow('coreSeed', 'Core seed (発光ごとの素材・切り口)'),
       coreRow('intensity', 'Intensity (全体の強度)'),
     ];
   }
@@ -760,6 +827,7 @@ export class LightUnified2 implements LabExpression {
     if (typed === 'membranes' || typed === 'scale' || typed === 'crop' || typed === 'anchor') {
       this.writeMembranes();
     }
+    if (typed === 'coreSeed') this.writeCore();
   }
 
   dispose(): void {
