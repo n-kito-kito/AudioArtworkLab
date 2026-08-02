@@ -32,6 +32,7 @@ import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
  * `Core form` は形の混合ではなく**手続きの芯の寄与量**で、
  * **0 = 芯が満額（Lab2）⇄ 中間 = 素材の上に芯が加算（Reactive）⇄ 1 = 芯なし（Spatial）**。
  * 詳しくは `buildCore()` の注釈。使う素材は `Core seed` から決定論で引く。
+ * **コアの有無は `Core size`（0 で板が潰れて消える）が決め、`Core form` は質だけを担う。**
  *
  * `Anchor` 軸は**膜とコアの位置関係**で、0 = 膜が画面内に散る ⇄ 1 = 膜がコアを起点に集まる。
  *
@@ -102,8 +103,15 @@ const UNIFIED2 = {
   core: {
     /** コアを置く奥行き。膜の帯のちょうど真ん中。 */
     depth: 8.3,
-    /** コアの半径（その奥行きでの可視半高に対する割合）。 */
-    sizeSmall: 0.06,
+    /**
+     * コアの半径（その奥行きでの可視半高に対する割合）。
+     *
+     * **下端は 0。コアの有無は明るさではなく大きさで切り替える。**
+     * `Core size = 0` で板そのものが潰れて 1 画素も描かれない。消え方は
+     * 面積が連続に縮むことだけで起きるので、途中で飛ぶ段はどこにも無い
+     * （輝度を落として消す項は持たない）。
+     */
+    sizeSmall: 0,
     sizeLarge: 0.42,
     /**
      * 手続きの楕円の落ち方。`pow(1 - r^2, falloff)`。
@@ -431,7 +439,18 @@ export class LightUnified2 implements LabExpression {
    * - `Core form = 1`: **芯の寄与が厳密に 0**。素材だけが光る（＝ Spatial）
    *
    * 素材側は軸のどこでも常に居る（Lab2 も「楕円 + 素材」だったため）。
-   * 変わるのは芯の量だけで、分岐は無く連続。色は白のみ。
+   * 変わるのは芯の質だけで、分岐は無く連続。
+   *
+   * ## 有無と質は別のつまみ
+   *
+   * **コアを消したいときは `Core size` を 0 にする。** 板のスケールが 0 になって
+   * 1 画素も描かれない（`syncUniforms`）。`Core form` は**質の軸**であって、
+   * 明るさでコアを消す役割は持たない。
+   *
+   * ## 色
+   *
+   * 色は白のみ。**色を作っている場所はこのシェーダーの最後の 1 行だけ**なので、
+   * 音へ繋いで色を動かす段になったら、そこを差し替えるだけで済む。
    */
   private buildCore(): void {
     // 板の中を −1..1 で持つ。膜と同じ座標系にして、式の読み比べができるようにする。
@@ -518,7 +537,8 @@ export class LightUnified2 implements LabExpression {
           // ④ 素材側に要る円窓。板の四角い輪郭を消すための掛け算で、輝度は足さない。
           float window = 1.0 - smoothstep(uCore.w, 1.0, length(p));
 
-          // 白のみ（膜のような色相を持たない）。
+          // **色を作っているのはこの 1 行だけ。** 今は白のみ
+          //（コアの有無は Core size ＝ 板のスケールが決めるので、ここでは消さない）。
           vec3 color = vec3(1.0) * mask * window * uIntensity;
           gl_FragColor = vec4(max(color, 0.0), 1.0);
         }
@@ -654,11 +674,14 @@ export class LightUnified2 implements LabExpression {
 
     const core = this.coreMaterial;
     if (core) {
-      // 軸 1 で厳密に 0 ＝ 手続きの芯が完全に消える。
+      // 質の軸。軸 1 で手続きの芯が抜け、素材の形だけが残る。
+      // **コアの有無はここでは決めない**（下のスケールが決める）。
       (core.uniforms.uCore!.value as THREE.Vector4).x = 1 - clamp(this.params.coreForm, 0, 1);
       core.uniforms.uIntensity!.value = intensity;
     }
     if (this.coreMesh) {
+      // **コアの有無は大きさで切り替える。** `Core size = 0` で半径 0 ＝ 板が潰れ、
+      // ラスタライズされる画素が 1 つも無くなる。面積が連続に縮むだけなので段は無い。
       const radius =
         this.halfHeightAt(UNIFIED2.core.depth) *
         mix(UNIFIED2.core.sizeSmall, UNIFIED2.core.sizeLarge, clamp(this.params.coreSize, 0, 1));
@@ -810,8 +833,8 @@ export class LightUnified2 implements LabExpression {
       row('carve', 'Carve (緩いビネット＝素材が形 ⇄ 硬い円窓＝外形で切る)'),
       row('anchor', 'Anchor (画面内に散る ⇄ コアを起点に集まる)'),
       row('membranes', 'Membranes (枚数)'),
-      coreRow('coreForm', 'Core form (手続きの芯が満額 ⇄ 芯なし＝素材だけが光る)'),
-      coreRow('coreSize', 'Core size (小 ⇄ 大)'),
+      coreRow('coreForm', 'Core form (手続きの芯 ⇄ 素材が形)'),
+      coreRow('coreSize', 'Core size (0 = コアを消す ⇄ 大)'),
       coreRow('coreSeed', 'Core seed (発光ごとの素材・切り口)'),
       coreRow('intensity', 'Intensity (全体の強度)'),
     ];
