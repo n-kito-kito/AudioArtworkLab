@@ -4,6 +4,7 @@ import type { ExpressionParam, LabExpression } from '../expressions/Expression';
 import { LightCoreStudy } from '../expressions/LightCoreStudy';
 import { LightElementLab2 } from '../expressions/LightElementLab2';
 import { LightUnified } from '../expressions/LightUnified';
+import { LightUnified2 } from '../expressions/LightUnified2';
 import { LightSpatialStudy } from '../expressions/LightSpatialStudy';
 
 /**
@@ -159,9 +160,19 @@ export class AudioInspector {
     const element2 = composition instanceof LightElementLab2;
     // 統合表現も同じ扱い。20 本の軸と結線はここ（開発パネル）に出す。
     const unified = composition instanceof LightUnified;
-    if (!(composition instanceof LightCoreStudy) && !spatial && !element2 && !unified) return;
+    // Light Unified 2 も音へ繋がない静止画の検証。膜の軸だけをこの節に置く。
+    const unified2 = composition instanceof LightUnified2;
+    if (
+      !(composition instanceof LightCoreStudy) &&
+      !spatial &&
+      !element2 &&
+      !unified &&
+      !unified2
+    ) {
+      return;
+    }
 
-    if (!spatial && !element2 && !unified) {
+    if (!spatial && !element2 && !unified && !unified2) {
       // 新方式のフラックスは、上に並んだ engine の onset とすぐ見比べられる位置に置く。
       const fluxTitle = document.createElement('h3');
       fluxTitle.className = 'control-subheading';
@@ -177,7 +188,9 @@ export class AudioInspector {
 
     const title = document.createElement('h3');
     title.className = 'control-subheading';
-    title.textContent = unified
+    title.textContent = unified2
+      ? 'Light Unified 2 (dev)'
+      : unified
       ? 'Light Unified (dev)'
       : element2
         ? 'Light Element Lab 2 (dev)'
@@ -252,7 +265,7 @@ export class AudioInspector {
       if (parameter.bind) host.append(this.sourceTail(parameter.bind, composition));
     }
     // 音を読まない表現には Core の読み出しも音源ボタンも意味がないので出さない。
-    if (element2) return;
+    if (element2 || unified2) return;
     this.coreReadout.textContent = 'last core —';
     this.coreBlock.append(this.coreReadout, this.buildDemoButton());
   }

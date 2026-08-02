@@ -11,6 +11,7 @@ import type { OpticalGroup } from './lightOpticsMapping';
 import { LightReactiveLab, type ReactiveMode } from './LightReactiveLab';
 import { LightSpatialStudy } from './LightSpatialStudy';
 import { LightUnified } from './LightUnified';
+import { LightUnified2 } from './LightUnified2';
 import { LightTraces } from './LightTraces';
 import { ModularPatternField } from './ModularPatternField';
 import { ReactiveGeometry } from './ReactiveGeometry';
@@ -50,6 +51,7 @@ export type ExpressionId =
   | 'light-reactive-variation-v1'
   | 'light-reactive-composite-v1'
   | 'light-unified-v1'
+  | 'light-unified-2-v1'
   | 'reactive-geometry-v1';
 
 export interface ExpressionVersion {
@@ -121,6 +123,13 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
     id: 'light-unified',
     label: 'Light Unified',
     versions: [{ id: 'light-unified-v1', label: 'V1' }],
+  },
+  // 白紙から作り直す 2 台目。**「素材が形を作る」を最初の原理に据える**（第 1 歩は膜だけ）。
+  // 音へは繋がず、静止画で質感の幅だけを見る開発用の表現。既存の Unified は無改変で残す。
+  {
+    id: 'light-unified-2',
+    label: 'Light Unified 2',
+    versions: [{ id: 'light-unified-2-v1', label: 'V1' }],
   },
   {
     id: 'light-traces',
@@ -274,6 +283,7 @@ export function createExpression(
   const reactiveMode = LIGHT_REACTIVE_MODES[id];
   if (reactiveMode) return new LightReactiveLab(id, reactiveMode, effects, theme);
   if (id === 'light-unified-v1') return new LightUnified(id, effects, theme);
+  if (id === 'light-unified-2-v1') return new LightUnified2(id, effects, theme);
   if (id === 'reactive-geometry-v1') return new ReactiveGeometry(effects, theme);
   applyTuning(id);
   const field = id === 'cymatics-v2' ? new CymaticsV2() : new Cymatics();
