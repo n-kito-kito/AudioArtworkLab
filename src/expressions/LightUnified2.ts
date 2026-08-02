@@ -26,10 +26,19 @@ import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
  *
  * だけ。ビネットは板の四角い輪郭を消すためのもので、輝度を**足すことはない**。
  *
+ * ## コア（第 2 歩）
+ *
+ * 中心の白熱を 1 個だけ置く。**白へ届いてよい唯一の層**で、明るさの階層の基準になる。
+ * 形の作り方そのものが軸（`Core form`）で、**0 = 手続きの楕円 ⇄ 1 = 素材が形**を連続に混ぜる
+ * — 調査どおり Spatial / Reactive は「素材が形」、Lab2 は「手続きの楕円」に分かれていたため。
+ * 位置は画面中央に固定する（移動は音へ繋いだ後）。
+ *
+ * `Anchor` 軸は**膜とコアの位置関係**で、0 = 膜が画面内に散る ⇄ 1 = 膜がコアを起点に集まる。
+ *
  * ## この段階でやらないこと
  *
  * - **音へ繋がない。** 静止画で質感だけを見る開発用の表現（PRD D33 の Study/Lab の例外）。
- * - 核・靄・破片・貫通線を作らない。**膜だけ**。
+ * - 靄・破片・貫通線を作らない。**膜とコアだけ**。
  * - 既存の `LightUnified` を継承・改造しない。共有するのは素材アトラスだけ。
  *
  * ## 決定論
@@ -83,6 +92,41 @@ const UNIFIED2 = {
   positionSpread: 0.55,
   /** 色の濃さ。色そのものは軸に出さない（この段階では膜の質感だけを見る）。 */
   saturation: 0.55,
+  /**
+   * **Anchor 1 で膜の中心をコアへどこまで寄せるか。**
+   * 0 にすると全部が完全に重なって 1 枚に見えるので、わずかに残す。
+   */
+  anchorResidue: 0.08,
+
+  // ---- コア（第 2 歩で足した層）----
+  core: {
+    /** コアを置く奥行き。膜の帯のちょうど真ん中。 */
+    depth: 8.3,
+    /** コアの半径（その奥行きでの可視半高に対する割合）。 */
+    sizeSmall: 0.06,
+    sizeLarge: 0.42,
+    /**
+     * 手続きの楕円の落ち方。`pow(1 - r^2, falloff)`。
+     * 大きいほど芯が締まる。r = 1 で厳密に 0 なので板の四角は出ない。
+     */
+    falloff: 2.6,
+    /** 素材側の黒浮きの敷居と幅。膜と同じで、**0 は 0 のまま**通る。 */
+    floor: 0.02,
+    floorWidth: 0.04,
+    /**
+     * **素材側の高さを手続き側と揃えるための補正利得。**
+     *
+     * 手続きの楕円は中心で 1.0（＝白）へ届くが、素材の輝度は実測で 0.017〜0.3 しかない。
+     * これが無いと `Core form` は「形が変わる軸」ではなく「消える軸」になってしまう。
+     * **膜には掛けない**（膜は今までどおり素材の輝度をそのまま出す）。
+     */
+    materialGain: 3.3,
+    /** 素材側だけに要る円窓。手続き側は自前で 0 へ落ちるが、掛けても形は変わらない。 */
+    edgeFadeStart: 0.6,
+    /** 素材のどこを切り出すか（決定論の固定値。コアは 1 個なのでハッシュを引くだけ）。 */
+    cropHalf: 0.3,
+    seed: 41.3,
+  },
 
   defaults: {
     membranes: 4,
@@ -90,11 +134,23 @@ const UNIFIED2 = {
     crop: 0.35,
     softness: 0.5,
     carve: 0.35,
+    anchor: 0.35,
+    coreSize: 0.4,
+    coreForm: 0.5,
     intensity: 1,
   },
 } as const;
 
-type Unified2ParamKey = 'membranes' | 'scale' | 'crop' | 'softness' | 'carve' | 'intensity';
+type Unified2ParamKey =
+  | 'membranes'
+  | 'scale'
+  | 'crop'
+  | 'softness'
+  | 'carve'
+  | 'anchor'
+  | 'coreSize'
+  | 'coreForm'
+  | 'intensity';
 
 const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: number }> = {
   membranes: { min: 3, max: UNIFIED2.maximumMembranes, step: 1 },
@@ -102,6 +158,9 @@ const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: n
   crop: { min: 0, max: 1, step: 0.01 },
   softness: { min: 0, max: 1, step: 0.01 },
   carve: { min: 0, max: 1, step: 0.01 },
+  anchor: { min: 0, max: 1, step: 0.01 },
+  coreSize: { min: 0, max: 1, step: 0.01 },
+  coreForm: { min: 0, max: 1, step: 0.01 },
   intensity: { min: 0, max: 2, step: 0.01 },
 };
 
@@ -143,6 +202,10 @@ export class LightUnified2 implements LabExpression {
   private geometry: THREE.InstancedBufferGeometry | null = null;
   private material: THREE.ShaderMaterial | null = null;
   private mesh: THREE.Mesh | null = null;
+  // コアは 1 個しか無いのでインスタンス化しない。素の平面 1 枚で Draw Call も 1。
+  private coreGeometry: THREE.PlaneGeometry | null = null;
+  private coreMaterial: THREE.ShaderMaterial | null = null;
+  private coreMesh: THREE.Mesh | null = null;
   private placeholder: THREE.DataTexture | null = null;
   private atlas: PrismAtlas | null = null;
   private pipeline: EffectPipeline | null = null;
@@ -189,11 +252,13 @@ export class LightUnified2 implements LabExpression {
     this.placeholder.needsUpdate = true;
 
     this.buildMesh();
+    this.buildCore();
     this.writeMembranes();
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
     if (this.mesh) this.scene.add(this.mesh);
+    if (this.coreMesh) this.scene.add(this.coreMesh);
 
     this.pipeline = new EffectPipeline(context.renderer, this.scene, this.camera, this.effects);
 
@@ -207,6 +272,12 @@ export class LightUnified2 implements LabExpression {
       if (this.material) {
         this.material.uniforms.uAtlas!.value = atlas.texture;
         (this.material.uniforms.uGrid!.value as THREE.Vector2).set(atlas.columns, atlas.rows);
+      }
+      if (this.coreMaterial) {
+        this.coreMaterial.uniforms.uAtlas!.value = atlas.texture;
+        (this.coreMaterial.uniforms.uGrid!.value as THREE.Vector2).set(atlas.columns, atlas.rows);
+        this.coreMaterial.uniforms.uTile!.value =
+          Math.floor(hash01(UNIFIED2.core.seed) * atlas.tiles.length) % atlas.tiles.length;
       }
       this.writeMembranes();
     });
@@ -336,6 +407,103 @@ export class LightUnified2 implements LabExpression {
     this.mesh.frustumCulled = false;
   }
 
+  /**
+   * **コア（1 個）。中心の白熱で、白へ届いてよい唯一の層。**
+   *
+   * 形の作り方そのものが `Core form` 軸で、
+   * **手続きの楕円 `pow(1 - r², falloff)`** と **素材の輝度**を連続に混ぜる。
+   * どちらの側も分岐はなく、途中の値では「素材の濃淡が乗った楕円」になる。
+   * 色は白のみ（膜のような色相を持たない）。
+   */
+  private buildCore(): void {
+    // 板の中を −1..1 で持つ。膜と同じ座標系にして、式の読み比べができるようにする。
+    const geometry = new THREE.PlaneGeometry(2, 2);
+    const core = UNIFIED2.core;
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uAtlas: { value: this.placeholder },
+        uGrid: { value: new THREE.Vector2(1, 1) },
+        uTile: { value: 0 },
+        // 形の混合 / 楕円の落ち方 / 素材側の補正利得 / 円窓の始まり。
+        uCore: {
+          value: new THREE.Vector4(
+            UNIFIED2.defaults.coreForm,
+            core.falloff,
+            core.materialGain,
+            core.edgeFadeStart,
+          ),
+        },
+        // 素材側の黒浮きの敷居・幅 / 切り取り半幅 / マスの内側の余白。
+        uCoreCrop: {
+          value: new THREE.Vector4(core.floor, core.floorWidth, core.cropHalf, UNIFIED2.cellInset),
+        },
+        uIntensity: { value: UNIFIED2.defaults.intensity },
+      },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+      vertexShader: /* glsl */ `
+        varying vec2 vLocal;
+        void main() {
+          vLocal = position.xy;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D uAtlas;
+        uniform vec2 uGrid;
+        uniform float uTile;
+        uniform vec4 uCore;
+        uniform vec4 uCoreCrop;
+        uniform float uIntensity;
+        varying vec2 vLocal;
+
+        void main() {
+          vec2 p = vLocal;
+          float radius2 = dot(p, p);
+
+          // ① 手続きの楕円。r = 1 で厳密に 0 なので、板の四角はこの側では出ない。
+          float ellipse = pow(clamp(1.0 - radius2, 0.0, 1.0), uCore.y);
+
+          // ② 素材が形。膜とまったく同じ読み方（敷居も 0 を 0 のまま通す）。
+          vec2 cell = clamp(
+            vec2(0.5) + p * uCoreCrop.z,
+            uCoreCrop.w,
+            1.0 - uCoreCrop.w
+          );
+          float column = mod(uTile, uGrid.x);
+          float row = floor(uTile / uGrid.x);
+          vec3 source = texture2D(uAtlas, (vec2(column, row) + cell) / uGrid).rgb;
+          float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
+          luminance *= smoothstep(uCoreCrop.x, uCoreCrop.x + uCoreCrop.y, luminance);
+          // 素材側だけは高さを手続き側へ揃える（Core form を「消える軸」にしないため）。
+          float material = luminance * uCore.z;
+
+          // ③ 形の混合。**分岐は無い。** 途中は素材の濃淡が乗った楕円になる。
+          float mask = mix(ellipse, material, clamp(uCore.x, 0.0, 1.0));
+
+          // ④ 素材側に要る円窓。板の四角い輪郭を消すための掛け算で、輝度は足さない。
+          float window = 1.0 - smoothstep(uCore.w, 1.0, length(p));
+
+          // 白のみ。**白へ届いてよいのはこの層だけ。**
+          vec3 color = vec3(1.0) * mask * window * uIntensity;
+          gl_FragColor = vec4(max(color, 0.0), 1.0);
+        }
+      `,
+    });
+
+    this.coreGeometry = geometry;
+    this.coreMaterial = material;
+    this.coreMesh = new THREE.Mesh(geometry, material);
+    this.coreMesh.position.set(0, 0, -core.depth);
+    this.coreMesh.frustumCulled = false;
+    // 加算なので順序は絵に影響しないが、膜の後に描いておく。
+    this.coreMesh.renderOrder = 1;
+  }
+
   /** その奥行きでの可視半高（ワールド単位）。カメラは原点で −Z を見る。 */
   private halfHeightAt(depth: number): number {
     const half = Math.tan((UNIFIED2.fieldOfView * Math.PI) / 360) * depth;
@@ -352,6 +520,9 @@ export class LightUnified2 implements LabExpression {
     const tileCount = Math.max(this.atlas?.tiles.length ?? 1, 1);
     const cropHalf = mix(UNIFIED2.cropNarrow, UNIFIED2.cropWide, clamp(this.params.crop, 0, 1));
     const scale = mix(UNIFIED2.scaleSmall, UNIFIED2.scaleLarge, clamp(this.params.scale, 0, 1));
+    // **Anchor。** コア（画面中央）を起点に膜の中心を引き寄せる連続な係数。
+    // 1 でも完全には重ねない（重ねると 6 枚が 1 枚に見えてしまう）。
+    const anchorPull = mix(1, UNIFIED2.anchorResidue, clamp(this.params.anchor, 0, 1));
 
     for (let index = 0; index < count; index++) {
       // 枚数を変えても既存の膜が総入れ替えにならないよう、種は番号だけから作る。
@@ -360,9 +531,9 @@ export class LightUnified2 implements LabExpression {
       const halfWidth = halfHeight * Math.max(this.aspectRatio, 0.01);
 
       this.offsets[index * 3 + 0] =
-        (hash01(index, 1.7) * 2 - 1) * halfWidth * UNIFIED2.positionSpread;
+        (hash01(index, 1.7) * 2 - 1) * halfWidth * UNIFIED2.positionSpread * anchorPull;
       this.offsets[index * 3 + 1] =
-        (hash01(index, 3.1) * 2 - 1) * halfHeight * UNIFIED2.positionSpread;
+        (hash01(index, 3.1) * 2 - 1) * halfHeight * UNIFIED2.positionSpread * anchorPull;
       this.offsets[index * 3 + 2] = -depth;
 
       // 板の縦横比。**細長い板が素材の線を異方的に引き伸ばす**（筋はこの副産物）。
@@ -402,17 +573,31 @@ export class LightUnified2 implements LabExpression {
 
   /** 軸のうち、フラグメント側の数式へ直に効くもの。毎フレーム流し込む。 */
   private syncUniforms(): void {
+    const intensity = Math.max(this.params.intensity, 0);
     const material = this.material;
-    if (!material) return;
-    const softness = clamp(this.params.softness, 0, 1);
-    const carve = clamp(this.params.carve, 0, 1);
-    (material.uniforms.uShape!.value as THREE.Vector4).set(
-      mix(UNIFIED2.windowLoose, UNIFIED2.windowTight, carve),
-      mix(UNIFIED2.floorSharp, UNIFIED2.floorFoggy, softness),
-      mix(UNIFIED2.floorWidthSharp, UNIFIED2.floorWidthFoggy, softness),
-      mix(UNIFIED2.gammaSharp, UNIFIED2.gammaFoggy, softness),
-    );
-    material.uniforms.uIntensity!.value = Math.max(this.params.intensity, 0);
+    if (material) {
+      const softness = clamp(this.params.softness, 0, 1);
+      const carve = clamp(this.params.carve, 0, 1);
+      (material.uniforms.uShape!.value as THREE.Vector4).set(
+        mix(UNIFIED2.windowLoose, UNIFIED2.windowTight, carve),
+        mix(UNIFIED2.floorSharp, UNIFIED2.floorFoggy, softness),
+        mix(UNIFIED2.floorWidthSharp, UNIFIED2.floorWidthFoggy, softness),
+        mix(UNIFIED2.gammaSharp, UNIFIED2.gammaFoggy, softness),
+      );
+      material.uniforms.uIntensity!.value = intensity;
+    }
+
+    const core = this.coreMaterial;
+    if (core) {
+      (core.uniforms.uCore!.value as THREE.Vector4).x = clamp(this.params.coreForm, 0, 1);
+      core.uniforms.uIntensity!.value = intensity;
+    }
+    if (this.coreMesh) {
+      const radius =
+        this.halfHeightAt(UNIFIED2.core.depth) *
+        mix(UNIFIED2.core.sizeSmall, UNIFIED2.core.sizeLarge, clamp(this.params.coreSize, 0, 1));
+      this.coreMesh.scale.set(radius, radius, 1);
+    }
   }
 
   update(elapsed: number): void {
@@ -548,13 +733,20 @@ export class LightUnified2 implements LabExpression {
       ...PARAM_RANGES[key],
       value: this.params[key],
     });
+    const coreRow = (key: Unified2ParamKey, label: string): ExpressionParam => ({
+      ...(row(key, label) as ExpressionParam),
+      group: 'コア（白熱）',
+    });
     return [
       row('crop', 'Crop (狭い＝素材の線が筋になる ⇄ 広い＝細かい濃淡)'),
       row('scale', 'Scale (小さい ⇄ 画面より大きい)'),
       row('softness', 'Softness (鋭い＝明部だけ残る ⇄ 霧状＝暗部まで一様)'),
       row('carve', 'Carve (緩いビネット＝素材が形 ⇄ 硬い円窓＝外形で切る)'),
+      row('anchor', 'Anchor (画面内に散る ⇄ コアを起点に集まる)'),
       row('membranes', 'Membranes (枚数)'),
-      row('intensity', 'Intensity (強度)'),
+      coreRow('coreForm', 'Core form (手続きの楕円 ⇄ 素材が形)'),
+      coreRow('coreSize', 'Core size (小 ⇄ 大)'),
+      coreRow('intensity', 'Intensity (全体の強度)'),
     ];
   }
 
@@ -564,8 +756,10 @@ export class LightUnified2 implements LabExpression {
     const typed = key as Unified2ParamKey;
     const range = PARAM_RANGES[typed];
     this.params[typed] = clamp(value, range.min, range.max);
-    // 配置に効く軸だけ並べ直す。曲げ・ビネット・強度は uniform なので毎フレーム届く。
-    if (typed === 'membranes' || typed === 'scale' || typed === 'crop') this.writeMembranes();
+    // 配置に効く軸だけ並べ直す。曲げ・ビネット・コア・強度は uniform なので毎フレーム届く。
+    if (typed === 'membranes' || typed === 'scale' || typed === 'crop' || typed === 'anchor') {
+      this.writeMembranes();
+    }
   }
 
   dispose(): void {
@@ -573,12 +767,18 @@ export class LightUnified2 implements LabExpression {
     this.pipeline?.dispose();
     this.geometry?.dispose();
     this.material?.dispose();
+    this.coreGeometry?.dispose();
+    this.coreMaterial?.dispose();
     this.placeholder?.dispose();
     this.atlas?.texture.dispose();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
+    if (this.coreMesh && this.scene) this.scene.remove(this.coreMesh);
     this.pipeline = null;
     this.geometry = null;
     this.material = null;
+    this.coreGeometry = null;
+    this.coreMaterial = null;
+    this.coreMesh = null;
     this.placeholder = null;
     this.atlas = null;
     this.mesh = null;
