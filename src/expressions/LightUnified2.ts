@@ -210,6 +210,19 @@ const UNIFIED2 = {
     releaseSeconds: 0.5,
   },
 
+  /** Drift候補を単体確認する静止Fragment。音・時間・既存要素から独立。 */
+  fragmentStudy: {
+    maximumCount: 24,
+    count: 18,
+    depthNear: 6.8,
+    depthFar: 10.2,
+    safeArea: 0.76,
+    pointSize: 0.035,
+    shardWidth: 0.028,
+    shardHeight: 0.16,
+    intensity: 0.68,
+  },
+
   defaults: {
     membranes: 4,
     scale: 0.5,
@@ -324,6 +337,10 @@ export class LightUnified2 implements LabExpression {
   /** Study 中だけ無音で形を確認する。音接続時には off に戻す。 */
   private hazePreview: 'off' | 'static' | 'audio' = 'audio';
   private hazeLevel = 0;
+  private fragmentGeometry: THREE.InstancedBufferGeometry | null = null;
+  private fragmentMaterial: THREE.ShaderMaterial | null = null;
+  private fragmentMesh: THREE.Mesh | null = null;
+  private fragmentPreview: 'off' | 'static' = 'off';
   private placeholder: THREE.DataTexture | null = null;
   private atlas: PrismAtlas | null = null;
   private pipeline: EffectPipeline | null = null;
@@ -402,12 +419,14 @@ export class LightUnified2 implements LabExpression {
     this.buildMembraneMesh();
     this.buildCoreMesh();
     this.buildHazeStudyMesh();
+    this.buildFragmentStudyMesh();
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
     if (this.mesh) this.scene.add(this.mesh);
     if (this.coreMesh) this.scene.add(this.coreMesh);
     if (this.hazeMesh) this.scene.add(this.hazeMesh);
+    if (this.fragmentMesh) this.scene.add(this.fragmentMesh);
 
     this.pipeline = new EffectPipeline(context.renderer, this.scene, this.camera, this.effects);
 
@@ -508,6 +527,108 @@ export class LightUnified2 implements LabExpression {
     this.hazeMesh = new THREE.Mesh(geometry, material);
     this.hazeMesh.visible = this.hazePreview !== 'off';
     this.hazeMesh.frustumCulled = false;
+  }
+
+  /** Fragment / Particleの第1段。決定論的な静止配置だけを確認する。 */
+  private buildFragmentStudyMesh(): void {
+    const study = UNIFIED2.fragmentStudy;
+    const plane = new THREE.PlaneGeometry(2, 2);
+    const geometry = new THREE.InstancedBufferGeometry();
+    geometry.index = plane.index;
+    geometry.setAttribute('position', plane.getAttribute('position'));
+    geometry.setAttribute('uv', plane.getAttribute('uv'));
+    plane.dispose();
+
+    const offsets = new Float32Array(study.maximumCount * 3);
+    const sizes = new Float32Array(study.maximumCount * 3);
+    const rotations = new Float32Array(study.maximumCount * 2);
+    const colors = new Float32Array(study.maximumCount * 3);
+    const add = (name: string, data: Float32Array, size: number): void => {
+      geometry.setAttribute(name, new THREE.InstancedBufferAttribute(data, size));
+    };
+    add('aOffset', offsets, 3);
+    add('aSize', sizes, 3);
+    add('aRotation', rotations, 2);
+    add('aColor', colors, 3);
+
+    const color = new THREE.Color();
+    for (let index = 0; index < study.count; index++) {
+      const depth = mix(study.depthNear, study.depthFar, hash01(index, 70.1));
+      const halfHeight = this.halfHeightAt(depth) * study.safeArea;
+      // 対応画角で最も狭い9:16を基準にし、切替後も画面外へ出さない。
+      const halfWidth = halfHeight * (9 / 16);
+      const point = hash01(index, 71.3) < 0.38;
+      const scale = mix(0.72, 1.28, hash01(index, 72.7));
+      const angle = hash01(index, 73.9) * Math.PI;
+      const offsetIndex = index * 3;
+      const sizeIndex = index * 3;
+      const rotationIndex = index * 2;
+      const colorIndex = index * 3;
+      offsets[offsetIndex] = (hash01(index, 74.3) * 2 - 1) * halfWidth;
+      offsets[offsetIndex + 1] = (hash01(index, 75.1) * 2 - 1) * halfHeight;
+      offsets[offsetIndex + 2] = -depth;
+      sizes[sizeIndex] = (point ? study.pointSize : study.shardWidth) * scale;
+      sizes[sizeIndex + 1] = (point ? study.pointSize : study.shardHeight) * scale;
+      sizes[sizeIndex + 2] = point ? 0 : 1;
+      rotations[rotationIndex] = Math.cos(angle);
+      rotations[rotationIndex + 1] = Math.sin(angle);
+      color.setHSL(hash01(index, 76.7), 0.48, 0.72);
+      colors[colorIndex] = color.r;
+      colors[colorIndex + 1] = color.g;
+      colors[colorIndex + 2] = color.b;
+    }
+    geometry.instanceCount = study.count;
+
+    const material = new THREE.ShaderMaterial({
+      uniforms: { uIntensity: { value: study.intensity } },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+      vertexShader: /* glsl */ `
+        attribute vec3 aOffset;
+        attribute vec3 aSize;
+        attribute vec2 aRotation;
+        attribute vec3 aColor;
+        varying vec2 vLocal;
+        varying float vShape;
+        varying vec3 vColor;
+        void main() {
+          vLocal = position.xy;
+          vShape = aSize.z;
+          vColor = aColor;
+          vec2 local = position.xy * aSize.xy;
+          local = vec2(
+            local.x * aRotation.x - local.y * aRotation.y,
+            local.x * aRotation.y + local.y * aRotation.x
+          );
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(aOffset + vec3(local, 0.0), 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform float uIntensity;
+        varying vec2 vLocal;
+        varying float vShape;
+        varying vec3 vColor;
+        void main() {
+          float pointMask = 1.0 - smoothstep(0.52, 1.0, length(vLocal));
+          float shardDistance = abs(vLocal.x) + abs(vLocal.y) * 0.42;
+          float shardMask = 1.0 - smoothstep(0.72, 1.0, shardDistance);
+          float mask = mix(pointMask, shardMask, vShape);
+          if (mask <= 0.0) discard;
+          gl_FragColor = vec4(vColor * mask * uIntensity, 1.0);
+        }
+      `,
+    });
+
+    this.fragmentGeometry = geometry;
+    this.fragmentMaterial = material;
+    this.fragmentMesh = new THREE.Mesh(geometry, material);
+    this.fragmentMesh.visible = this.fragmentPreview === 'static';
+    this.fragmentMesh.frustumCulled = false;
+    this.fragmentMesh.renderOrder = 2;
   }
 
   // ---------------------------------------------------------------- 描画
@@ -1226,6 +1347,17 @@ export class LightUnified2 implements LabExpression {
         ],
         value: this.hazePreview,
       },
+      {
+        key: 'fragmentPreview',
+        label: 'Fragment / Particle (静止確認)',
+        group: study,
+        type: 'select',
+        options: [
+          { value: 'off', label: 'Off' },
+          { value: 'static', label: 'Static' },
+        ],
+        value: this.fragmentPreview,
+      },
       row('crop', 'Crop (狭い＝素材の線が筋になる ⇄ 広い＝細かい濃淡)', membrane),
       row('scale', 'Scale (小さい ⇄ 画面より大きい)', membrane),
       row('softness', 'Softness (鋭い＝明部だけ残る ⇄ 霧状＝暗部まで一様)', membrane),
@@ -1247,6 +1379,11 @@ export class LightUnified2 implements LabExpression {
       if (this.hazeMesh) this.hazeMesh.visible = value !== 'off';
       return;
     }
+    if (key === 'fragmentPreview' && (value === 'off' || value === 'static')) {
+      this.fragmentPreview = value;
+      if (this.fragmentMesh) this.fragmentMesh.visible = value === 'static';
+      return;
+    }
     if (typeof value !== 'number') return;
     if (!(key in PARAM_RANGES)) return;
     const typed = key as Unified2ParamKey;
@@ -1264,11 +1401,14 @@ export class LightUnified2 implements LabExpression {
     this.coreMaterial?.dispose();
     this.hazeGeometry?.dispose();
     this.hazeMaterial?.dispose();
+    this.fragmentGeometry?.dispose();
+    this.fragmentMaterial?.dispose();
     this.placeholder?.dispose();
     this.atlas?.texture.dispose();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
     if (this.coreMesh && this.scene) this.scene.remove(this.coreMesh);
     if (this.hazeMesh && this.scene) this.scene.remove(this.hazeMesh);
+    if (this.fragmentMesh && this.scene) this.scene.remove(this.fragmentMesh);
     this.cores.length = 0;
     this.membranes.length = 0;
     this.pipeline = null;
@@ -1280,6 +1420,9 @@ export class LightUnified2 implements LabExpression {
     this.hazeGeometry = null;
     this.hazeMaterial = null;
     this.hazeMesh = null;
+    this.fragmentGeometry = null;
+    this.fragmentMaterial = null;
+    this.fragmentMesh = null;
     this.placeholder = null;
     this.atlas = null;
     this.mesh = null;
