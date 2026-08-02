@@ -2,16 +2,17 @@ import * as THREE from 'three';
 import type { CompositionContext, DesignLayerCanvases } from '../compositions/Composition';
 import type { Effect } from '../effects/Effect';
 import { EffectPipeline } from '../effects/EffectPipeline';
+import { BandLightEventDetector, type BandLightEvent } from '../engine/bandLightEvents';
 import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
 import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
 
 /**
- * **Light Unified 2 — 第 1 歩「素材が形の膜」だけ。**
+ * **Light Unified 2 — 素材が形を作る光。**
  *
  * ---
- * ## 出発点
+ * ## 出発点（第 1 歩）
  *
  * 3 表現（Spatial / Reactive / Element Lab 2）に出ていた「引っ掻き傷のような筋」は、
  * **筋を描く式から出ていない**。`prismAtlas` の 10 枚を細長い板に貼ったとき、
@@ -19,7 +20,7 @@ import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
  * だからこの表現は「**素材が形を作る**」を最初の原理に据える。
  *
  * **手続きで筋・羽毛・ハロ・ガウスを描くコードは 1 行も持たない。**
- * 輝度の源は素材ただ 1 つで、**素材が 0 の画素は厳密に 0**（`pow(0, g) = 0`）。
+ * 膜の輝度の源は素材ただ 1 つで、**素材が 0 の画素は厳密に 0**（`pow(0, g) = 0`）。
  * 掛けているのは
  *
  *     色 × 素材輝度 × 緩いビネット × 強度
@@ -28,36 +29,56 @@ import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
  *
  * ## コア（第 2 歩）
  *
- * 中心の白熱を 1 個だけ置く。位置は画面中央に固定する（移動は音へ繋いだ後）。
  * `Core form` は形の混合ではなく**手続きの芯の寄与量**で、
  * **0 = 芯が満額（Lab2）⇄ 中間 = 素材の上に芯が加算（Reactive）⇄ 1 = 芯なし（Spatial）**。
- * 詳しくは `buildCore()` の注釈。使う素材は `Core seed` から決定論で引く。
+ * 詳しくは `buildCoreMesh()` の注釈。
  * **コアの有無は `Core size`（0 で板が潰れて消える）が決め、`Core form` は質だけを担う。**
  *
- * `Anchor` 軸は**膜とコアの位置関係**で、0 = 膜が画面内に散る ⇄ 1 = 膜がコアを起点に集まる。
+ * ## 音（第 3 歩）
+ *
+ * 既存の `BandLightEventDetector` を**そのまま**使う（新しい解析は作らない）。
+ * 打撃 1 個につき
+ *
+ * - **コアが 1 個生まれる**（短い寿命）。位置はイベント番号のハッシュから決まり、
+ *   これがそのイベントの**起点**になる。素材も発光ごとに変わる。
+ * - **膜が `Membranes` 枚生まれる**（長い寿命）。位置は `Anchor` 軸で
+ *   **0 = 画面内に散る ⇄ 1 = 起点から生まれる**を連続に行き来する。
+ *
+ * 色は**コアと膜が 1 つの色相状態を共有**する（音色 = centroid と帯域バランスから作る）。
+ * 色を作っている場所は `resolveTint()` の 1 箇所だけで、両方のシェーダーは
+ * その結果 `uTint` を受け取るだけ。
+ *
+ * **無音 = 黒（PRD D5）。** イベントが無ければ生きている光が 0 個になり、
+ * どちらのメッシュも `instanceCount = 0` になるので 1 画素も描かれない。
  *
  * ## この段階でやらないこと
  *
- * - **音へ繋がない。** 静止画で質感だけを見る開発用の表現（PRD D33 の Study/Lab の例外）。
  * - 靄・破片・貫通線を作らない。**膜とコアだけ**。
- * - 既存の `LightUnified` を継承・改造しない。共有するのは素材アトラスだけ。
+ * - ストロボ・色相の離散化・ヒステリシスは持たない。
+ * - 既存の `LightUnified` を継承・改造しない。共有するのは素材アトラスと検出器だけ。
  *
  * ## 決定論
  *
- * 配置・素材番号・切り取り位置・向き・色相はすべて枚数と番号のハッシュから決まる。
- * `Math.random()` も `Date.now()` も使わない。同じつまみなら毎回同じ絵になる。
+ * 位置・素材番号・切り取り・向き・大きさのばらつきは、すべて**イベント番号**の
+ * ハッシュから決まる。`Math.random()` も `Date.now()` も使わない。
  */
 
 /** 質感の定数。つまみは連続な混合係数だけを持ち、端の値はここに置く。 */
 const UNIFIED2 = {
-  /** 同時に置ける膜の上限（つまみの最大と揃える）。 */
-  maximumMembranes: 6,
+  /** 1 イベントで生む膜の枚数の上限（つまみの最大と揃える）。 */
+  maximumMembranesPerEvent: 6,
+  /** 同時に生かす膜の総数の上限。溢れたら古いものから捨てる。 */
+  maximumLiveMembranes: 30,
+  /** 同時に生かすコアの上限。 */
+  maximumLiveCores: 10,
   nearPlane: 0.1,
   farPlane: 80,
   fieldOfView: 45,
   /** 膜を置く奥行きの帯（カメラは原点で −Z を見る）。 */
   depthNear: 7,
   depthFar: 9.6,
+  /** 1 フレームで進める時間の上限（秒）。タブ復帰時の巨大な delta を切る。 */
+  maximumDelta: 0.05,
   atlas: {
     manifestUrl: `${import.meta.env.BASE_URL}assets/light-traces/manifest.json`,
     cellPixels: 512,
@@ -89,17 +110,50 @@ const UNIFIED2 = {
   /** 板の縦横比の幅。**細長い板が素材の線を異方的に引き伸ばす**（筋の正体）。 */
   elongationMinimum: 0.45,
   elongationMaximum: 2.2,
-  /** 画面内での散らばり（可視半径に対する割合）。 */
+  /** 画面内での散らばり（可視半径に対する割合）。膜の散る側とコアの起点で共有。 */
   positionSpread: 0.55,
-  /** 色の濃さ。色そのものは軸に出さない（この段階では膜の質感だけを見る）。 */
-  saturation: 0.55,
   /**
-   * **Anchor 1 で膜の中心をコアへどこまで寄せるか。**
-   * 0 にすると全部が完全に重なって 1 枚に見えるので、わずかに残す。
+   * **Anchor 1 でも残す散らばり。**
+   * 0 にすると 1 イベントの膜が完全に重なって 1 枚に見えるので、わずかに残す。
    */
   anchorResidue: 0.08,
 
-  // ---- コア（第 2 歩で足した層）----
+  /** 時間特性。**1 組だけ**（ストロボは持たない）。 */
+  envelope: {
+    /** コアは瞬間的に立ち上がってすぐ落ちる。 */
+    coreAttackSeconds: 0.012,
+    coreDecaySeconds: 0.22,
+    /** 膜はコアより遅く開き、長く残る。 */
+    membraneAttackSeconds: 0.05,
+    membraneDecaySeconds: 0.95,
+    /** これを下回った光は捨てる。無音で厳密に 0 個へ落とすための敷居。 */
+    cullLevel: 0.004,
+  },
+
+  /** 検出の固定値。つまみに出すのは感度 1 本だけ（PRD D17）。 */
+  detection: {
+    fluxGain: 2.5,
+    cooldownSeconds: 0.06,
+    relativeStrengthFloor: 1,
+    thresholdScale: 1,
+  },
+
+  /** 色。**作る場所は `resolveTint()` の 1 箇所だけ。** */
+  color: {
+    /** centroid（音色の明るさ）が色相を回す量。 */
+    centroidSpan: 0.6,
+    /** 帯域バランス（treble − bass）が色相を回す量。 */
+    tiltSpan: 0.25,
+    /** 色相の出発点。 */
+    hueOrigin: 0.55,
+    /**
+     * 色相の追従の時定数（秒）。**離散化でもヒステリシスでもない**素の 1 次遅れで、
+     * フレームごとの centroid のばらつきで色がちらつくのを抑えるだけ。
+     */
+    hueTimeConstant: 0.25,
+  },
+
+  // ---- コア ----
   core: {
     /** コアを置く奥行き。膜の帯のちょうど真ん中。 */
     depth: 8.3,
@@ -113,6 +167,8 @@ const UNIFIED2 = {
      */
     sizeSmall: 0,
     sizeLarge: 0.42,
+    /** コアごとの大きさのばらつき。 */
+    sizeJitter: 0.3,
     /**
      * 手続きの楕円の落ち方。`pow(1 - r^2, falloff)`。
      * 大きいほど芯が締まる。r = 1 で厳密に 0 なので板の四角は出ない。
@@ -131,12 +187,10 @@ const UNIFIED2 = {
     materialGain: 3.3,
     /** 素材側だけに要る円窓。手続き側は自前で 0 へ落ちるが、掛けても形は変わらない。 */
     edgeFadeStart: 0.6,
-    /** 素材の切り取り半幅。膜と違って軸に出さない（コアの軸は寄与量と大きさだけ）。 */
+    /** 素材の切り取り半幅。膜と違って軸に出さない。 */
     cropHalf: 0.3,
-    /** ハッシュの味付け。**発光ごとの素材選び**は `Core seed` からこの塩を通して引く。 */
+    /** ハッシュの味付け。**発光ごとの素材選び**はイベント番号からこの塩を通して引く。 */
     seedSalt: 41.3,
-    /** `Core seed` を整数の発光番号へ量子化する段数。隣の値で別の素材へ移る。 */
-    seedSteps: 997,
   },
 
   defaults: {
@@ -148,7 +202,8 @@ const UNIFIED2 = {
     anchor: 0.35,
     coreSize: 0.4,
     coreForm: 0.5,
-    coreSeed: 0.2,
+    saturation: 0.55,
+    sensitivity: 0.5,
     intensity: 1,
   },
 } as const;
@@ -162,11 +217,12 @@ type Unified2ParamKey =
   | 'anchor'
   | 'coreSize'
   | 'coreForm'
-  | 'coreSeed'
+  | 'saturation'
+  | 'sensitivity'
   | 'intensity';
 
 const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: number }> = {
-  membranes: { min: 3, max: UNIFIED2.maximumMembranes, step: 1 },
+  membranes: { min: 3, max: UNIFIED2.maximumMembranesPerEvent, step: 1 },
   scale: { min: 0, max: 1, step: 0.01 },
   crop: { min: 0, max: 1, step: 0.01 },
   softness: { min: 0, max: 1, step: 0.01 },
@@ -174,12 +230,15 @@ const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: n
   anchor: { min: 0, max: 1, step: 0.01 },
   coreSize: { min: 0, max: 1, step: 0.01 },
   coreForm: { min: 0, max: 1, step: 0.01 },
-  coreSeed: { min: 0, max: 1, step: 0.01 },
+  saturation: { min: 0, max: 1, step: 0.01 },
+  sensitivity: { min: 0, max: 1, step: 0.01 },
   intensity: { min: 0, max: 2, step: 0.01 },
 };
 
 const clamp = (value: number, low: number, high: number): number =>
   value < low ? low : value > high ? high : value;
+
+const clamp01 = (value: number): number => clamp(value, 0, 1);
 
 const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
 
@@ -195,6 +254,29 @@ const hash01 = (...values: number[]): number => {
   }
   return ((hash >>> 0) % 1000003) / 1000003;
 };
+
+/**
+ * 立ち上がり × 減衰。**分岐は無い**（`clamp` と `exp` だけ）。
+ * 立ち上がりきる前に減衰も始まっているが、attack が decay よりずっと短いので
+ * 頂点はほぼ 1 に届く。時間特性はこの 1 組だけで、ストロボは持たない。
+ */
+const envelopeLevel = (age: number, attack: number, decay: number): number =>
+  clamp01(age / Math.max(attack, 1e-4)) * Math.exp(-Math.max(age, 0) / Math.max(decay, 1e-4));
+
+/** 生きている光 1 個ぶん。見え方の解釈はここでは持たず、種と起点だけを持つ。 */
+interface LiveLight {
+  /** 生まれた時刻（秒）。 */
+  readonly bornAt: number;
+  /** イベント通し番号。**すべてのばらつきの種**。 */
+  readonly seed: number;
+  /** 局所正規化された打撃の強さ（0..1）。 */
+  readonly strength: number;
+  /** 起点（コアの位置）。膜はここから生まれる。 */
+  readonly originX: number;
+  readonly originY: number;
+  /** 膜だけが持つ、1 イベントの中の通し番号。コアは 0。 */
+  readonly slot: number;
+}
 
 export class LightUnified2 implements LabExpression {
   readonly animated = true;
@@ -216,8 +298,7 @@ export class LightUnified2 implements LabExpression {
   private geometry: THREE.InstancedBufferGeometry | null = null;
   private material: THREE.ShaderMaterial | null = null;
   private mesh: THREE.Mesh | null = null;
-  // コアは 1 個しか無いのでインスタンス化しない。素の平面 1 枚で Draw Call も 1。
-  private coreGeometry: THREE.PlaneGeometry | null = null;
+  private coreGeometry: THREE.InstancedBufferGeometry | null = null;
   private coreMaterial: THREE.ShaderMaterial | null = null;
   private coreMesh: THREE.Mesh | null = null;
   private placeholder: THREE.DataTexture | null = null;
@@ -225,17 +306,39 @@ export class LightUnified2 implements LabExpression {
   private pipeline: EffectPipeline | null = null;
   private disposed = false;
 
-  // インスタンス属性。膜は最大 6 枚なので確保も書き換えも安い。
-  private readonly offsets = new Float32Array(UNIFIED2.maximumMembranes * 3);
+  // ---- 音 ----
+  /** **既存の検出器をそのまま使う。** 新しい解析は 1 つも作らない。 */
+  private readonly detector = new BandLightEventDetector();
+  private previousElapsed = -1;
+  /** コアと膜が共有する色相状態（0..1）。1 次遅れで音色を追う。 */
+  private hue: number = UNIFIED2.color.hueOrigin;
+  private readonly tint = new THREE.Color(1, 1, 1);
+
+  private readonly cores: LiveLight[] = [];
+  private readonly membranes: LiveLight[] = [];
+
+  // ---- 膜のインスタンス属性 ----
+  private readonly offsets = new Float32Array(UNIFIED2.maximumLiveMembranes * 3);
   /** 半幅 / 半高 / 素材番号。 */
-  private readonly sizes = new Float32Array(UNIFIED2.maximumMembranes * 3);
+  private readonly sizes = new Float32Array(UNIFIED2.maximumLiveMembranes * 3);
   /** 切り取りの中心 UV と半幅。 */
-  private readonly crops = new Float32Array(UNIFIED2.maximumMembranes * 4);
+  private readonly crops = new Float32Array(UNIFIED2.maximumLiveMembranes * 4);
   /** 面内回転の cos / sin と UV の反転。 */
-  private readonly orients = new Float32Array(UNIFIED2.maximumMembranes * 4);
-  /** 色相 / 彩度 / 1 枚あたりの重み / 予備。 */
-  private readonly tones = new Float32Array(UNIFIED2.maximumMembranes * 4);
+  private readonly orients = new Float32Array(UNIFIED2.maximumLiveMembranes * 4);
+  /** 振幅（エンベロープ × 打撃の強さ）。 */
+  private readonly levels = new Float32Array(UNIFIED2.maximumLiveMembranes);
   private readonly attributes: Record<string, THREE.InstancedBufferAttribute> = {};
+
+  // ---- コアのインスタンス属性 ----
+  private readonly coreOffsets = new Float32Array(UNIFIED2.maximumLiveCores * 3);
+  /** 半径 / 素材番号（コアは正方形）。 */
+  private readonly coreSizes = new Float32Array(UNIFIED2.maximumLiveCores * 2);
+  /** 切り取りの中心 UV と面内回転の cos / sin。 */
+  private readonly coreCells = new Float32Array(UNIFIED2.maximumLiveCores * 4);
+  /** UV の反転。 */
+  private readonly coreFlips = new Float32Array(UNIFIED2.maximumLiveCores * 2);
+  private readonly coreLevels = new Float32Array(UNIFIED2.maximumLiveCores);
+  private readonly coreAttributes: Record<string, THREE.InstancedBufferAttribute> = {};
 
   constructor(id: ExpressionId, effects: Effect[] = [], theme?: Theme) {
     this.id = id;
@@ -265,10 +368,15 @@ export class LightUnified2 implements LabExpression {
     this.placeholder.colorSpace = THREE.SRGBColorSpace;
     this.placeholder.needsUpdate = true;
 
-    this.buildMesh();
-    this.buildCore();
-    this.writeCore();
-    this.writeMembranes();
+    // 表現を開き直したら前の曲の余韻は持ち越さない。
+    this.detector.reset();
+    this.previousElapsed = -1;
+    this.hue = UNIFIED2.color.hueOrigin;
+    this.cores.length = 0;
+    this.membranes.length = 0;
+
+    this.buildMembraneMesh();
+    this.buildCoreMesh();
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
@@ -277,6 +385,7 @@ export class LightUnified2 implements LabExpression {
 
     this.pipeline = new EffectPipeline(context.renderer, this.scene, this.camera, this.effects);
 
+    // 素材は非同期。届くまで 1 画素も出ないだけで、表現は壊れない。
     void loadPrismAtlas(UNIFIED2.atlas).then((atlas) => {
       if (!atlas) return;
       if (this.disposed) {
@@ -284,22 +393,17 @@ export class LightUnified2 implements LabExpression {
         return;
       }
       this.atlas = atlas;
-      if (this.material) {
-        this.material.uniforms.uAtlas!.value = atlas.texture;
-        (this.material.uniforms.uGrid!.value as THREE.Vector2).set(atlas.columns, atlas.rows);
+      for (const material of [this.material, this.coreMaterial]) {
+        if (!material) continue;
+        material.uniforms.uAtlas!.value = atlas.texture;
+        (material.uniforms.uGrid!.value as THREE.Vector2).set(atlas.columns, atlas.rows);
       }
-      if (this.coreMaterial) {
-        this.coreMaterial.uniforms.uAtlas!.value = atlas.texture;
-        (this.coreMaterial.uniforms.uGrid!.value as THREE.Vector2).set(atlas.columns, atlas.rows);
-      }
-      this.writeCore();
-      this.writeMembranes();
     });
   }
 
   // ---------------------------------------------------------------- 描画
 
-  private buildMesh(): void {
+  private buildMembraneMesh(): void {
     const plane = new THREE.PlaneGeometry(1, 1);
     const geometry = new THREE.InstancedBufferGeometry();
     geometry.index = plane.index;
@@ -317,7 +421,7 @@ export class LightUnified2 implements LabExpression {
     add('aSize', this.sizes, 3);
     add('aCrop', this.crops, 4);
     add('aOrient', this.orients, 4);
-    add('aTone', this.tones, 4);
+    add('aLevel', this.levels, 1);
     geometry.instanceCount = 0;
 
     const material = new THREE.ShaderMaterial({
@@ -333,6 +437,8 @@ export class LightUnified2 implements LabExpression {
             UNIFIED2.gammaSharp,
           ),
         },
+        // **コアと共有する色。** 作っているのは `resolveTint()` の 1 箇所だけ。
+        uTint: { value: this.tint },
         uIntensity: { value: UNIFIED2.defaults.intensity },
         uInset: { value: UNIFIED2.cellInset },
       },
@@ -346,12 +452,12 @@ export class LightUnified2 implements LabExpression {
         attribute vec3 aSize;
         attribute vec4 aCrop;
         attribute vec4 aOrient;
-        attribute vec4 aTone;
+        attribute float aLevel;
         varying vec2 vLocal;
         varying float vTile;
         varying vec4 vCrop;
         varying vec4 vOrient;
-        varying vec4 vTone;
+        varying float vLevel;
 
         void main() {
           // 板の中を −1..1 で持つ。ビネットも UV も全部この座標で作る。
@@ -359,7 +465,7 @@ export class LightUnified2 implements LabExpression {
           vTile = aSize.z;
           vCrop = aCrop;
           vOrient = aOrient;
-          vTone = aTone;
+          vLevel = aLevel;
           // カメラ正面固定の平面。奥行きの前後関係はこの段階では作らない。
           vec3 world = aOffset + vec3(vLocal.x * aSize.x, vLocal.y * aSize.y, 0.0);
           gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
@@ -370,19 +476,14 @@ export class LightUnified2 implements LabExpression {
         uniform sampler2D uAtlas;
         uniform vec2 uGrid;
         uniform vec4 uShape;
+        uniform vec3 uTint;
         uniform float uIntensity;
         uniform float uInset;
         varying vec2 vLocal;
         varying float vTile;
         varying vec4 vCrop;
         varying vec4 vOrient;
-        varying vec4 vTone;
-
-        vec3 spectralRgb(float hue, float saturation) {
-          vec3 p = fract(vec3(hue) + vec3(0.0, 0.6666667, 0.3333333)) * 6.0;
-          vec3 v = clamp(min(p, 4.0 - p), 0.0, 1.0);
-          return 1.0 - clamp(saturation, 0.0, 1.0) * (1.0 - v);
-        }
+        varying float vLevel;
 
         void main() {
           vec2 p = vLocal;
@@ -406,9 +507,8 @@ export class LightUnified2 implements LabExpression {
           luminance *= smoothstep(uShape.y, uShape.y + uShape.z, luminance);
           luminance = pow(max(luminance, 0.0), uShape.w);
 
-          // ⑤ 色 × 素材輝度 × ビネット × 強度。これ以外は掛けない。
-          vec3 tint = spectralRgb(vTone.x, vTone.y);
-          vec3 color = tint * luminance * window * max(vTone.z, 0.0) * uIntensity;
+          // ⑤ 色 × 素材輝度 × ビネット × 振幅 × 強度。これ以外は掛けない。
+          vec3 color = uTint * luminance * window * max(vLevel, 0.0) * uIntensity;
           gl_FragColor = vec4(max(color, 0.0), 1.0);
         }
       `,
@@ -422,7 +522,7 @@ export class LightUnified2 implements LabExpression {
   }
 
   /**
-   * **コア（1 個）。中心の白熱。**
+   * **コア。打撃ごとに 1 個生まれる中心の白熱。**
    *
    * ---
    * ## `Core form` は「混合」ではなく「**手続きの芯の寄与量**」
@@ -438,29 +538,40 @@ export class LightUnified2 implements LabExpression {
    * - 中間: 素材が形の上に芯が加算で乗る（＝ Reactive）
    * - `Core form = 1`: **芯の寄与が厳密に 0**。素材だけが光る（＝ Spatial）
    *
-   * 素材側は軸のどこでも常に居る（Lab2 も「楕円 + 素材」だったため）。
-   * 変わるのは芯の質だけで、分岐は無く連続。
+   * 素材側は軸のどこでも常に居る。変わるのは芯の質だけで、分岐は無く連続。
    *
    * ## 有無と質は別のつまみ
    *
    * **コアを消したいときは `Core size` を 0 にする。** 板のスケールが 0 になって
-   * 1 画素も描かれない（`syncUniforms`）。`Core form` は**質の軸**であって、
-   * 明るさでコアを消す役割は持たない。
-   *
-   * ## 色
-   *
-   * 色は白のみ。**色を作っている場所はこのシェーダーの最後の 1 行だけ**なので、
-   * 音へ繋いで色を動かす段になったら、そこを差し替えるだけで済む。
+   * 1 画素も描かれない。`Core form` は質の軸であって、明るさで消す役割は持たない。
    */
-  private buildCore(): void {
+  private buildCoreMesh(): void {
     // 板の中を −1..1 で持つ。膜と同じ座標系にして、式の読み比べができるようにする。
-    const geometry = new THREE.PlaneGeometry(2, 2);
+    const plane = new THREE.PlaneGeometry(2, 2);
+    const geometry = new THREE.InstancedBufferGeometry();
+    geometry.index = plane.index;
+    geometry.setAttribute('position', plane.getAttribute('position'));
+    geometry.setAttribute('uv', plane.getAttribute('uv'));
+    plane.dispose();
+
+    const add = (name: string, data: Float32Array, size: number): void => {
+      const attribute = new THREE.InstancedBufferAttribute(data, size);
+      attribute.setUsage(THREE.DynamicDrawUsage);
+      geometry.setAttribute(name, attribute);
+      this.coreAttributes[name] = attribute;
+    };
+    add('aOffset', this.coreOffsets, 3);
+    add('aSize', this.coreSizes, 2);
+    add('aCell', this.coreCells, 4);
+    add('aFlip', this.coreFlips, 2);
+    add('aLevel', this.coreLevels, 1);
+    geometry.instanceCount = 0;
+
     const core = UNIFIED2.core;
     const material = new THREE.ShaderMaterial({
       uniforms: {
         uAtlas: { value: this.placeholder },
         uGrid: { value: new THREE.Vector2(1, 1) },
-        uTile: { value: 0 },
         // 手続きの芯の寄与量 / 楕円の落ち方 / 素材側の補正利得 / 円窓の始まり。
         uCore: {
           value: new THREE.Vector4(
@@ -474,10 +585,8 @@ export class LightUnified2 implements LabExpression {
         uCoreCrop: {
           value: new THREE.Vector4(core.floor, core.floorWidth, core.cropHalf, UNIFIED2.cellInset),
         },
-        // 発光ごとの素材の見え方: 切り取りの中心 UV と面内回転の cos / sin。
-        uCoreCell: { value: new THREE.Vector4(0.5, 0.5, 1, 0) },
-        /** 同・UV の反転。 */
-        uCoreFlip: { value: new THREE.Vector2(1, 1) },
+        // **膜と共有する色。** 同じ `THREE.Color` の実体を両方が指す。
+        uTint: { value: this.tint },
         uIntensity: { value: UNIFIED2.defaults.intensity },
       },
       transparent: true,
@@ -486,23 +595,40 @@ export class LightUnified2 implements LabExpression {
       depthTest: false,
       toneMapped: false,
       vertexShader: /* glsl */ `
+        attribute vec3 aOffset;
+        attribute vec2 aSize;
+        attribute vec4 aCell;
+        attribute vec2 aFlip;
+        attribute float aLevel;
         varying vec2 vLocal;
+        varying float vTile;
+        varying vec4 vCell;
+        varying vec2 vFlip;
+        varying float vLevel;
+
         void main() {
           vLocal = position.xy;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          vTile = aSize.y;
+          vCell = aCell;
+          vFlip = aFlip;
+          vLevel = aLevel;
+          vec3 world = aOffset + vec3(vLocal * aSize.x, 0.0);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
         }
       `,
       fragmentShader: /* glsl */ `
         precision highp float;
         uniform sampler2D uAtlas;
         uniform vec2 uGrid;
-        uniform float uTile;
         uniform vec4 uCore;
         uniform vec4 uCoreCrop;
-        uniform vec4 uCoreCell;
-        uniform vec2 uCoreFlip;
+        uniform vec3 uTint;
         uniform float uIntensity;
         varying vec2 vLocal;
+        varying float vTile;
+        varying vec4 vCell;
+        varying vec2 vFlip;
+        varying float vLevel;
 
         void main() {
           vec2 p = vLocal;
@@ -513,19 +639,19 @@ export class LightUnified2 implements LabExpression {
           float ellipse = pow(clamp(1.0 - radius2, 0.0, 1.0), uCore.y) * max(uCore.x, 0.0);
 
           // ② 素材が形。膜とまったく同じ読み方（敷居も 0 を 0 のまま通す）。
-          //    切り取りの中心・回転・反転は発光ごとの seed から来る。
+          //    切り取りの中心・回転・反転は発光ごとの種から来る。
           vec2 q = vec2(
-            p.x * uCoreCell.z - p.y * uCoreCell.w,
-            p.x * uCoreCell.w + p.y * uCoreCell.z
+            p.x * vCell.z - p.y * vCell.w,
+            p.x * vCell.w + p.y * vCell.z
           );
-          q *= uCoreFlip;
+          q *= vFlip;
           vec2 cell = clamp(
-            uCoreCell.xy + q * uCoreCrop.z,
+            vCell.xy + q * uCoreCrop.z,
             uCoreCrop.w,
             1.0 - uCoreCrop.w
           );
-          float column = mod(uTile, uGrid.x);
-          float row = floor(uTile / uGrid.x);
+          float column = mod(vTile, uGrid.x);
+          float row = floor(vTile / uGrid.x);
           vec3 source = texture2D(uAtlas, (vec2(column, row) + cell) / uGrid).rgb;
           float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
           luminance *= smoothstep(uCoreCrop.x, uCoreCrop.x + uCoreCrop.y, luminance);
@@ -537,9 +663,8 @@ export class LightUnified2 implements LabExpression {
           // ④ 素材側に要る円窓。板の四角い輪郭を消すための掛け算で、輝度は足さない。
           float window = 1.0 - smoothstep(uCore.w, 1.0, length(p));
 
-          // **色を作っているのはこの 1 行だけ。** 今は白のみ
-          //（コアの有無は Core size ＝ 板のスケールが決めるので、ここでは消さない）。
-          vec3 color = vec3(1.0) * mask * window * uIntensity;
+          // **色は膜と共有**（uTint）。コアの有無は Core size ＝ 板のスケールが決める。
+          vec3 color = uTint * mask * window * max(vLevel, 0.0) * uIntensity;
           gl_FragColor = vec4(max(color, 0.0), 1.0);
         }
       `,
@@ -548,46 +673,12 @@ export class LightUnified2 implements LabExpression {
     this.coreGeometry = geometry;
     this.coreMaterial = material;
     this.coreMesh = new THREE.Mesh(geometry, material);
-    this.coreMesh.position.set(0, 0, -core.depth);
     this.coreMesh.frustumCulled = false;
     // 加算なので順序は絵に影響しないが、膜の後に描いておく。
     this.coreMesh.renderOrder = 1;
   }
 
-  /**
-   * **発光ごとのコアの素材を決める。**
-   *
-   * アトラス 10 枚のどれを使うか・素材のどこを切り出すか・面内回転・反転を、
-   * `Core seed` を量子化した**発光番号**のハッシュから引く（膜と同じ流儀）。
-   * `Math.random()` は使わないので、同じ seed なら毎回同じ素材・同じ切り口になる。
-   *
-   * 発光が複数になったら、この番号がインスタンス番号へ置き換わるだけで式は変わらない。
-   */
-  private writeCore(): void {
-    const material = this.coreMaterial;
-    if (!material) return;
-    const core = UNIFIED2.core;
-    const tileCount = Math.max(this.atlas?.tiles.length ?? 1, 1);
-    // 連続なスライダーを整数の発光番号へ落とす。隣の値でも別の素材へ移る。
-    const emission = Math.round(clamp(this.params.coreSeed, 0, 1) * core.seedSteps);
-
-    material.uniforms.uTile!.value =
-      Math.floor(hash01(emission, core.seedSalt) * tileCount) % tileCount;
-
-    // 切り取りの中心。半幅を差し引いた範囲に収めて、マスの外へは出さない。
-    const room = Math.max(0.5 - core.cropHalf, 0);
-    const spin = hash01(emission, core.seedSalt + 2.7) * Math.PI * 2;
-    (material.uniforms.uCoreCell!.value as THREE.Vector4).set(
-      0.5 + (hash01(emission, core.seedSalt + 1.3) * 2 - 1) * room,
-      0.5 + (hash01(emission, core.seedSalt + 1.9) * 2 - 1) * room,
-      Math.cos(spin),
-      Math.sin(spin),
-    );
-    (material.uniforms.uCoreFlip!.value as THREE.Vector2).set(
-      hash01(emission, core.seedSalt + 3.1) < 0.5 ? -1 : 1,
-      hash01(emission, core.seedSalt + 3.7) < 0.5 ? -1 : 1,
-    );
-  }
+  // ---------------------------------------------------------------- 音 → 光
 
   /** その奥行きでの可視半高（ワールド単位）。カメラは原点で −Z を見る。 */
   private halfHeightAt(depth: number): number {
@@ -596,64 +687,220 @@ export class LightUnified2 implements LabExpression {
   }
 
   /**
-   * 膜を並べ直す。位置・素材・切り取り・向き・色相はすべてハッシュから決まるので、
-   * つまみが同じなら何度呼んでも同じ絵になる。
+   * **既存の検出器へ 1 フレーム渡す。** 新しい解析はここでも作らない。
+   * 確定したイベント 1 個につき、コア 1 個と膜 `Membranes` 枚を生む。
    */
-  private writeMembranes(): void {
-    if (!this.geometry) return;
-    const count = Math.round(clamp(this.params.membranes, 3, UNIFIED2.maximumMembranes));
-    const tileCount = Math.max(this.atlas?.tiles.length ?? 1, 1);
-    const cropHalf = mix(UNIFIED2.cropNarrow, UNIFIED2.cropWide, clamp(this.params.crop, 0, 1));
-    const scale = mix(UNIFIED2.scaleSmall, UNIFIED2.scaleLarge, clamp(this.params.scale, 0, 1));
-    // **Anchor。** コア（画面中央）を起点に膜の中心を引き寄せる連続な係数。
-    // 1 でも完全には重ねない（重ねると 6 枚が 1 枚に見えてしまう）。
-    const anchorPull = mix(1, UNIFIED2.anchorResidue, clamp(this.params.anchor, 0, 1));
+  private detectEvents(elapsed: number, delta: number): void {
+    const engine = this.context?.audioEngine;
+    const audio = engine?.getParameters() ?? {};
+    const spectrum = engine?.getSpectrum?.() ?? null;
+    const events = this.detector.update(
+      spectrum,
+      {
+        volume: clamp01(audio.volume ?? 0),
+        bass: clamp01(audio.bass ?? 0),
+        mid: clamp01(audio.mid ?? 0),
+        treble: clamp01(audio.treble ?? 0),
+        spectralCentroid: clamp01(audio.centroid ?? 0),
+        spectralFlatness: clamp01(audio.flatness ?? 0),
+        audioSeed: clamp01(audio.seed ?? 0),
+      },
+      elapsed,
+      delta,
+      {
+        fluxGain: UNIFIED2.detection.fluxGain,
+        onsetSensitivity: clamp01(this.params.sensitivity),
+        cooldownSeconds: UNIFIED2.detection.cooldownSeconds,
+        relativeStrengthFloor: UNIFIED2.detection.relativeStrengthFloor,
+        thresholdScale: UNIFIED2.detection.thresholdScale,
+        adaptiveThreshold: true,
+        adaptiveStrength: true,
+      },
+    );
+    for (const event of events) this.spawn(event, elapsed);
+  }
 
-    for (let index = 0; index < count; index++) {
-      // 枚数を変えても既存の膜が総入れ替えにならないよう、種は番号だけから作る。
-      const depth = mix(UNIFIED2.depthNear, UNIFIED2.depthFar, hash01(index, 11.3));
-      const halfHeight = this.halfHeightAt(depth);
-      const halfWidth = halfHeight * Math.max(this.aspectRatio, 0.01);
+  /**
+   * イベント 1 個から光を生む。**位置はイベント番号のハッシュだけで決まる**ので、
+   * 同じ音源なら毎回同じ場所に出る（`Math.random()` は使わない）。
+   */
+  private spawn(event: BandLightEvent, elapsed: number): void {
+    const seed = event.eventIndex;
+    const strength = clamp01(event.strength);
+    // 起点。コアの奥行きの平面で決め、膜はこれを自分の奥行きへ投影して使う。
+    const halfHeight = this.halfHeightAt(UNIFIED2.core.depth);
+    const halfWidth = halfHeight * Math.max(this.aspectRatio, 0.01);
+    const originX = (hash01(seed, 1.7) * 2 - 1) * halfWidth * UNIFIED2.positionSpread;
+    const originY = (hash01(seed, 3.1) * 2 - 1) * halfHeight * UNIFIED2.positionSpread;
 
-      this.offsets[index * 3 + 0] =
-        (hash01(index, 1.7) * 2 - 1) * halfWidth * UNIFIED2.positionSpread * anchorPull;
-      this.offsets[index * 3 + 1] =
-        (hash01(index, 3.1) * 2 - 1) * halfHeight * UNIFIED2.positionSpread * anchorPull;
-      this.offsets[index * 3 + 2] = -depth;
+    const core: LiveLight = { bornAt: elapsed, seed, strength, originX, originY, slot: 0 };
+    if (this.cores.length >= UNIFIED2.maximumLiveCores) this.cores.shift();
+    this.cores.push(core);
 
-      // 板の縦横比。**細長い板が素材の線を異方的に引き伸ばす**（筋はこの副産物）。
-      const elongation = mix(
-        UNIFIED2.elongationMinimum,
-        UNIFIED2.elongationMaximum,
-        hash01(index, 5.9),
-      );
-      const jitter = 1 + (hash01(index, 7.3) * 2 - 1) * UNIFIED2.sizeJitter;
-      const radius = halfHeight * scale * jitter;
-      this.sizes[index * 3 + 0] = radius * Math.sqrt(elongation);
-      this.sizes[index * 3 + 1] = radius / Math.sqrt(elongation);
-      this.sizes[index * 3 + 2] = Math.floor(hash01(index, 13.7) * tileCount) % tileCount;
+    const count = Math.round(clamp(this.params.membranes, 3, UNIFIED2.maximumMembranesPerEvent));
+    for (let slot = 0; slot < count; slot++) {
+      if (this.membranes.length >= UNIFIED2.maximumLiveMembranes) this.membranes.shift();
+      this.membranes.push({ bornAt: elapsed, seed, strength, originX, originY, slot });
+    }
+  }
 
-      // 切り取りの中心。半幅を差し引いた範囲に収めて、マスの外へは出さない。
-      const room = Math.max(0.5 - cropHalf, 0);
-      this.crops[index * 4 + 0] = 0.5 + (hash01(index, 17.1) * 2 - 1) * room;
-      this.crops[index * 4 + 1] = 0.5 + (hash01(index, 19.3) * 2 - 1) * room;
-      this.crops[index * 4 + 2] = cropHalf;
-      this.crops[index * 4 + 3] = cropHalf;
+  /** 寿命の切れた光を捨てる。**無音なら 0 個まで落ちる**（＝ 黒）。 */
+  private cull(elapsed: number): void {
+    const envelope = UNIFIED2.envelope;
+    const alive = (list: LiveLight[], attack: number, decay: number): void => {
+      let write = 0;
+      for (let read = 0; read < list.length; read++) {
+        const light = list[read]!;
+        if (envelopeLevel(elapsed - light.bornAt, attack, decay) < envelope.cullLevel) continue;
+        list[write] = light;
+        write += 1;
+      }
+      list.length = write;
+    };
+    alive(this.cores, envelope.coreAttackSeconds, envelope.coreDecaySeconds);
+    alive(this.membranes, envelope.membraneAttackSeconds, envelope.membraneDecaySeconds);
+  }
 
-      const spin = hash01(index, 23.9) * Math.PI * 2;
-      this.orients[index * 4 + 0] = Math.cos(spin);
-      this.orients[index * 4 + 1] = Math.sin(spin);
-      this.orients[index * 4 + 2] = hash01(index, 29.5) < 0.5 ? -1 : 1;
-      this.orients[index * 4 + 3] = hash01(index, 31.1) < 0.5 ? -1 : 1;
+  /**
+   * **色は 1 箇所でしか作らない。**
+   *
+   * 音色（centroid）と帯域バランス（treble − bass）から色相を作り、1 次遅れで追う。
+   * 彩度は軸そのもの（0 = 白 ⇄ 1 = 濃い）。結果はコアと膜が同じ実体を共有する。
+   */
+  private resolveTint(delta: number): void {
+    const audio = this.context?.audioEngine.getParameters() ?? {};
+    const centroid = clamp01(audio.centroid ?? 0);
+    const tilt = clamp01((clamp01(audio.treble ?? 0) - clamp01(audio.bass ?? 0)) * 0.5 + 0.5);
+    const color = UNIFIED2.color;
+    const target =
+      (color.hueOrigin + centroid * color.centroidSpan + tilt * color.tiltSpan) % 1;
+    // 環になっているので近い方向へ回す。0.99 → 0.01 で長い方を回らない。
+    let difference = target - this.hue;
+    if (difference > 0.5) difference -= 1;
+    if (difference < -0.5) difference += 1;
+    const follow = 1 - Math.exp(-Math.max(delta, 0) / color.hueTimeConstant);
+    this.hue = (this.hue + difference * follow + 1) % 1;
 
-      this.tones[index * 4 + 0] = hash01(index, 37.7);
-      this.tones[index * 4 + 1] = UNIFIED2.saturation;
-      this.tones[index * 4 + 2] = 1;
-      this.tones[index * 4 + 3] = 0;
+    // 分光。`spectralRgb` と同じ形をそのまま TypeScript で書いたもの。
+    const saturation = clamp01(this.params.saturation);
+    const channel = (offset: number): number => {
+      const phase = ((this.hue + offset) % 1) * 6;
+      const value = clamp01(Math.min(phase, 4 - phase));
+      return 1 - saturation * (1 - value);
+    };
+    this.tint.setRGB(channel(0), channel(0.6666667), channel(0.3333333));
+  }
+
+  /**
+   * 生きている光をインスタンス属性へ書き出す。
+   * 見え方のばらつきはすべて `seed`（イベント番号）と `slot` のハッシュから引くので、
+   * 同じ音源・同じつまみなら毎回同じ絵になる。
+   */
+  private writeLights(elapsed: number): void {
+    const envelope = UNIFIED2.envelope;
+
+    // ---- 膜 ----
+    if (this.geometry) {
+      const cropHalf = mix(UNIFIED2.cropNarrow, UNIFIED2.cropWide, clamp01(this.params.crop));
+      const scale = mix(UNIFIED2.scaleSmall, UNIFIED2.scaleLarge, clamp01(this.params.scale));
+      // **Anchor。** 0 = 画面内に散る ⇄ 1 = 起点（コア）から生まれる。
+      // 1 でも散らばりをわずかに残す（残さないと 1 枚に見える）。
+      const toOrigin = clamp01(this.params.anchor) * (1 - UNIFIED2.anchorResidue);
+      const count = this.atlas ? this.membranes.length : 0;
+      const tileCount = Math.max(this.atlas?.tiles.length ?? 1, 1);
+
+      for (let index = 0; index < count; index++) {
+        const light = this.membranes[index]!;
+        const key = light.seed * 16 + light.slot;
+        const depth = mix(UNIFIED2.depthNear, UNIFIED2.depthFar, hash01(key, 11.3));
+        const halfHeight = this.halfHeightAt(depth);
+        const halfWidth = halfHeight * Math.max(this.aspectRatio, 0.01);
+
+        // 散る側の位置と、起点をこの奥行きへ投影した位置。連続に混ぜる。
+        const scatterX = (hash01(key, 1.7) * 2 - 1) * halfWidth * UNIFIED2.positionSpread;
+        const scatterY = (hash01(key, 3.1) * 2 - 1) * halfHeight * UNIFIED2.positionSpread;
+        const projection = depth / UNIFIED2.core.depth;
+        this.offsets[index * 3 + 0] = mix(scatterX, light.originX * projection, toOrigin);
+        this.offsets[index * 3 + 1] = mix(scatterY, light.originY * projection, toOrigin);
+        this.offsets[index * 3 + 2] = -depth;
+
+        // 板の縦横比。**細長い板が素材の線を異方的に引き伸ばす**（筋はこの副産物）。
+        const elongation = mix(
+          UNIFIED2.elongationMinimum,
+          UNIFIED2.elongationMaximum,
+          hash01(key, 5.9),
+        );
+        const jitter = 1 + (hash01(key, 7.3) * 2 - 1) * UNIFIED2.sizeJitter;
+        const radius = halfHeight * scale * jitter;
+        this.sizes[index * 3 + 0] = radius * Math.sqrt(elongation);
+        this.sizes[index * 3 + 1] = radius / Math.sqrt(elongation);
+        this.sizes[index * 3 + 2] = Math.floor(hash01(key, 13.7) * tileCount) % tileCount;
+
+        // 切り取りの中心。半幅を差し引いた範囲に収めて、マスの外へは出さない。
+        const room = Math.max(0.5 - cropHalf, 0);
+        this.crops[index * 4 + 0] = 0.5 + (hash01(key, 17.1) * 2 - 1) * room;
+        this.crops[index * 4 + 1] = 0.5 + (hash01(key, 19.3) * 2 - 1) * room;
+        this.crops[index * 4 + 2] = cropHalf;
+        this.crops[index * 4 + 3] = cropHalf;
+
+        const spin = hash01(key, 23.9) * Math.PI * 2;
+        this.orients[index * 4 + 0] = Math.cos(spin);
+        this.orients[index * 4 + 1] = Math.sin(spin);
+        this.orients[index * 4 + 2] = hash01(key, 29.5) < 0.5 ? -1 : 1;
+        this.orients[index * 4 + 3] = hash01(key, 31.1) < 0.5 ? -1 : 1;
+
+        this.levels[index] =
+          envelopeLevel(
+            elapsed - light.bornAt,
+            envelope.membraneAttackSeconds,
+            envelope.membraneDecaySeconds,
+          ) * light.strength;
+      }
+      this.geometry.instanceCount = count;
+      for (const attribute of Object.values(this.attributes)) attribute.needsUpdate = true;
     }
 
-    this.geometry.instanceCount = this.atlas ? count : 0;
-    for (const attribute of Object.values(this.attributes)) attribute.needsUpdate = true;
+    // ---- コア ----
+    if (this.coreGeometry) {
+      const core = UNIFIED2.core;
+      const baseRadius =
+        this.halfHeightAt(core.depth) *
+        mix(core.sizeSmall, core.sizeLarge, clamp01(this.params.coreSize));
+      const count = this.atlas ? this.cores.length : 0;
+      const tileCount = Math.max(this.atlas?.tiles.length ?? 1, 1);
+      const room = Math.max(0.5 - core.cropHalf, 0);
+
+      for (let index = 0; index < count; index++) {
+        const light = this.cores[index]!;
+        const seed = light.seed;
+        this.coreOffsets[index * 3 + 0] = light.originX;
+        this.coreOffsets[index * 3 + 1] = light.originY;
+        this.coreOffsets[index * 3 + 2] = -core.depth;
+
+        // **Core size = 0 なら半径 0 ＝ 板が潰れて 1 画素も描かれない。**
+        const jitter = 1 + (hash01(seed, core.seedSalt + 5.3) * 2 - 1) * core.sizeJitter;
+        this.coreSizes[index * 2 + 0] = baseRadius * jitter;
+        this.coreSizes[index * 2 + 1] =
+          Math.floor(hash01(seed, core.seedSalt) * tileCount) % tileCount;
+
+        const spin = hash01(seed, core.seedSalt + 2.7) * Math.PI * 2;
+        this.coreCells[index * 4 + 0] = 0.5 + (hash01(seed, core.seedSalt + 1.3) * 2 - 1) * room;
+        this.coreCells[index * 4 + 1] = 0.5 + (hash01(seed, core.seedSalt + 1.9) * 2 - 1) * room;
+        this.coreCells[index * 4 + 2] = Math.cos(spin);
+        this.coreCells[index * 4 + 3] = Math.sin(spin);
+        this.coreFlips[index * 2 + 0] = hash01(seed, core.seedSalt + 3.1) < 0.5 ? -1 : 1;
+        this.coreFlips[index * 2 + 1] = hash01(seed, core.seedSalt + 3.7) < 0.5 ? -1 : 1;
+
+        this.coreLevels[index] =
+          envelopeLevel(
+            elapsed - light.bornAt,
+            envelope.coreAttackSeconds,
+            envelope.coreDecaySeconds,
+          ) * light.strength;
+      }
+      this.coreGeometry.instanceCount = count;
+      for (const attribute of Object.values(this.coreAttributes)) attribute.needsUpdate = true;
+    }
   }
 
   /** 軸のうち、フラグメント側の数式へ直に効くもの。毎フレーム流し込む。 */
@@ -661,8 +908,8 @@ export class LightUnified2 implements LabExpression {
     const intensity = Math.max(this.params.intensity, 0);
     const material = this.material;
     if (material) {
-      const softness = clamp(this.params.softness, 0, 1);
-      const carve = clamp(this.params.carve, 0, 1);
+      const softness = clamp01(this.params.softness);
+      const carve = clamp01(this.params.carve);
       (material.uniforms.uShape!.value as THREE.Vector4).set(
         mix(UNIFIED2.windowLoose, UNIFIED2.windowTight, carve),
         mix(UNIFIED2.floorSharp, UNIFIED2.floorFoggy, softness),
@@ -675,23 +922,27 @@ export class LightUnified2 implements LabExpression {
     const core = this.coreMaterial;
     if (core) {
       // 質の軸。軸 1 で手続きの芯が抜け、素材の形だけが残る。
-      // **コアの有無はここでは決めない**（下のスケールが決める）。
-      (core.uniforms.uCore!.value as THREE.Vector4).x = 1 - clamp(this.params.coreForm, 0, 1);
+      // **コアの有無はここでは決めない**（大きさが決める）。
+      (core.uniforms.uCore!.value as THREE.Vector4).x = 1 - clamp01(this.params.coreForm);
       core.uniforms.uIntensity!.value = intensity;
-    }
-    if (this.coreMesh) {
-      // **コアの有無は大きさで切り替える。** `Core size = 0` で半径 0 ＝ 板が潰れ、
-      // ラスタライズされる画素が 1 つも無くなる。面積が連続に縮むだけなので段は無い。
-      const radius =
-        this.halfHeightAt(UNIFIED2.core.depth) *
-        mix(UNIFIED2.core.sizeSmall, UNIFIED2.core.sizeLarge, clamp(this.params.coreSize, 0, 1));
-      this.coreMesh.scale.set(radius, radius, 1);
     }
   }
 
   update(elapsed: number): void {
-    // 静止画。時間で変わるものは 1 つも持たない（音へも繋がない）。
+    const delta =
+      this.previousElapsed < 0
+        ? 0
+        : clamp(elapsed - this.previousElapsed, 0, UNIFIED2.maximumDelta);
+    this.previousElapsed = elapsed;
+
+    // **捨てるのが先。** 生まれた瞬間の光は age = 0 ＝ 振幅 0 なので、
+    // 検出のあとに捨てると生まれたそばから消えてしまう。
+    this.cull(elapsed);
+    this.detectEvents(elapsed, delta);
+    this.resolveTint(delta);
     this.syncUniforms();
+    this.writeLights(elapsed);
+
     const audio = this.context?.audioEngine.getParameters() ?? {};
     this.pipeline?.update(audio, elapsed);
   }
@@ -740,7 +991,7 @@ export class LightUnified2 implements LabExpression {
   }
 
   setTheme(theme: Theme): void {
-    // 黒背景固定。色は膜ごとの色相からだけ作る。
+    // 黒背景固定。色は音から作った色相と彩度の軸だけで決まる。
     this.theme = theme;
   }
 
@@ -758,7 +1009,6 @@ export class LightUnified2 implements LabExpression {
       this.camera.zoom = this.zoom;
       this.camera.updateProjectionMatrix();
     }
-    this.writeMembranes();
   }
 
   getResponse(): { bass: number; mid: number; treble: number } {
@@ -766,7 +1016,7 @@ export class LightUnified2 implements LabExpression {
   }
 
   setResponse(gains: Partial<{ bass: number; mid: number; treble: number }>): void {
-    // 音へ繋いでいないので効かない。保存の往復のために保持だけする。
+    // 帯域ごとの重みはまだ繋いでいない。保存の往復のために保持だけする。
     this.response = {
       bass: gains.bass ?? this.response.bass,
       mid: gains.mid ?? this.response.mid,
@@ -789,7 +1039,6 @@ export class LightUnified2 implements LabExpression {
       this.camera.aspect = ratio;
       this.camera.updateProjectionMatrix();
     }
-    this.writeMembranes();
   }
 
   setDebugView(view: number): void {
@@ -808,35 +1057,44 @@ export class LightUnified2 implements LabExpression {
     void amount;
   }
 
+  /** 開発用の読み出し。**無音で 0 / 0 になる**ことがそのまま D5 の確認になる。 */
+  getPhase(): string {
+    return `cores ${this.cores.length} / membranes ${this.membranes.length} / hue ${this.hue.toFixed(2)}`;
+  }
+
   /**
    * **開発用の軸。**
    *
-   * 「Spatial 的 ⇄ Reactive 的 ⇄ Lab2 的」の質感の差を静止画で作れるだけの本数に絞る。
+   * 「Spatial 的 ⇄ Reactive 的 ⇄ Lab2 的」の質感の差を作れるだけの本数に絞る。
    * すべて連続な混合係数で、`if (axis > 0.5)` のような分岐はどこにも無い。
    */
   getExpressionParams(): ExpressionParam[] {
-    const row = (key: Unified2ParamKey, label: string): ExpressionParam => ({
+    const row = (
+      key: Unified2ParamKey,
+      label: string,
+      group: string,
+    ): ExpressionParam => ({
       key,
       label,
-      group: '膜（素材が形）',
+      group,
       ...PARAM_RANGES[key],
       value: this.params[key],
     });
-    const coreRow = (key: Unified2ParamKey, label: string): ExpressionParam => ({
-      ...(row(key, label) as ExpressionParam),
-      group: 'コア（白熱）',
-    });
+    const membrane = '膜（素材が形）';
+    const core = 'コア（打撃で生まれる）';
+    const common = '色と音';
     return [
-      row('crop', 'Crop (狭い＝素材の線が筋になる ⇄ 広い＝細かい濃淡)'),
-      row('scale', 'Scale (小さい ⇄ 画面より大きい)'),
-      row('softness', 'Softness (鋭い＝明部だけ残る ⇄ 霧状＝暗部まで一様)'),
-      row('carve', 'Carve (緩いビネット＝素材が形 ⇄ 硬い円窓＝外形で切る)'),
-      row('anchor', 'Anchor (画面内に散る ⇄ コアを起点に集まる)'),
-      row('membranes', 'Membranes (枚数)'),
-      coreRow('coreForm', 'Core form (手続きの芯 ⇄ 素材が形)'),
-      coreRow('coreSize', 'Core size (0 = コアを消す ⇄ 大)'),
-      coreRow('coreSeed', 'Core seed (発光ごとの素材・切り口)'),
-      coreRow('intensity', 'Intensity (全体の強度)'),
+      row('crop', 'Crop (狭い＝素材の線が筋になる ⇄ 広い＝細かい濃淡)', membrane),
+      row('scale', 'Scale (小さい ⇄ 画面より大きい)', membrane),
+      row('softness', 'Softness (鋭い＝明部だけ残る ⇄ 霧状＝暗部まで一様)', membrane),
+      row('carve', 'Carve (緩いビネット＝素材が形 ⇄ 硬い円窓＝外形で切る)', membrane),
+      row('anchor', 'Anchor (画面内に散る ⇄ 起点から生まれる)', membrane),
+      row('membranes', 'Membranes (1 打撃で生む枚数)', membrane),
+      row('coreForm', 'Core form (手続きの芯 ⇄ 素材が形)', core),
+      row('coreSize', 'Core size (0 = コアを消す ⇄ 大)', core),
+      row('saturation', 'Saturation (0 = 白 ⇄ 1 = 色が濃い)', common),
+      row('sensitivity', 'Sensitivity (発火の感度)', common),
+      row('intensity', 'Intensity (全体の強度)', common),
     ];
   }
 
@@ -845,12 +1103,8 @@ export class LightUnified2 implements LabExpression {
     if (!(key in PARAM_RANGES)) return;
     const typed = key as Unified2ParamKey;
     const range = PARAM_RANGES[typed];
+    // どの軸も次のフレームの書き出しで効く。生きている光は作り直さない。
     this.params[typed] = clamp(value, range.min, range.max);
-    // 配置に効く軸だけ並べ直す。曲げ・ビネット・コア・強度は uniform なので毎フレーム届く。
-    if (typed === 'membranes' || typed === 'scale' || typed === 'crop' || typed === 'anchor') {
-      this.writeMembranes();
-    }
-    if (typed === 'coreSeed') this.writeCore();
   }
 
   dispose(): void {
@@ -864,6 +1118,8 @@ export class LightUnified2 implements LabExpression {
     this.atlas?.texture.dispose();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
     if (this.coreMesh && this.scene) this.scene.remove(this.coreMesh);
+    this.cores.length = 0;
+    this.membranes.length = 0;
     this.pipeline = null;
     this.geometry = null;
     this.material = null;
