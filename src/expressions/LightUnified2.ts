@@ -221,6 +221,8 @@ const UNIFIED2 = {
     shardWidth: 0.028,
     shardHeight: 0.16,
     intensity: 0.68,
+    attackSeconds: 0.06,
+    releaseSeconds: 0.65,
   },
 
   defaults: {
@@ -340,7 +342,8 @@ export class LightUnified2 implements LabExpression {
   private fragmentGeometry: THREE.InstancedBufferGeometry | null = null;
   private fragmentMaterial: THREE.ShaderMaterial | null = null;
   private fragmentMesh: THREE.Mesh | null = null;
-  private fragmentPreview: 'off' | 'static' = 'off';
+  private fragmentPreview: 'off' | 'static' | 'audio' = 'off';
+  private fragmentLevel = 0;
   private placeholder: THREE.DataTexture | null = null;
   private atlas: PrismAtlas | null = null;
   private pipeline: EffectPipeline | null = null;
@@ -413,6 +416,7 @@ export class LightUnified2 implements LabExpression {
     this.previousElapsed = -1;
     this.hue = UNIFIED2.color.hueOrigin;
     this.hazeLevel = 0;
+    this.fragmentLevel = 0;
     this.cores.length = 0;
     this.membranes.length = 0;
 
@@ -1175,6 +1179,7 @@ export class LightUnified2 implements LabExpression {
 
     const audio = this.context?.audioEngine.getParameters() ?? {};
     this.updateHazeStudy(clamp01(audio.volume ?? 0), delta);
+    this.updateFragmentStudy(clamp01(audio.volume ?? 0), delta);
     this.pipeline?.update(audio, elapsed);
   }
 
@@ -1195,6 +1200,25 @@ export class LightUnified2 implements LabExpression {
     }
     this.hazeMaterial.uniforms.uIntensity!.value =
       UNIFIED2.hazeStudy.intensity * this.hazeLevel * this.params.intensity;
+  }
+
+  /** Fragmentの第2段。形・位置・色を固定し、Volumeを明るさだけへ接続する。 */
+  private updateFragmentStudy(volume: number, delta: number): void {
+    if (!this.fragmentMesh || !this.fragmentMaterial) return;
+    this.fragmentMesh.visible = this.fragmentPreview !== 'off';
+    if (this.fragmentPreview === 'off') return;
+
+    if (this.fragmentPreview === 'static') {
+      this.fragmentLevel = 1;
+    } else {
+      const seconds = volume > this.fragmentLevel
+        ? UNIFIED2.fragmentStudy.attackSeconds
+        : UNIFIED2.fragmentStudy.releaseSeconds;
+      const follow = 1 - Math.exp(-Math.max(delta, 0) / Math.max(seconds, 1e-4));
+      this.fragmentLevel += (volume - this.fragmentLevel) * follow;
+    }
+    this.fragmentMaterial.uniforms.uIntensity!.value =
+      UNIFIED2.fragmentStudy.intensity * this.fragmentLevel * this.params.intensity;
   }
 
   render(): void {
@@ -1355,6 +1379,7 @@ export class LightUnified2 implements LabExpression {
         options: [
           { value: 'off', label: 'Off' },
           { value: 'static', label: 'Static' },
+          { value: 'audio', label: 'Audio volume' },
         ],
         value: this.fragmentPreview,
       },
@@ -1379,9 +1404,13 @@ export class LightUnified2 implements LabExpression {
       if (this.hazeMesh) this.hazeMesh.visible = value !== 'off';
       return;
     }
-    if (key === 'fragmentPreview' && (value === 'off' || value === 'static')) {
+    if (
+      key === 'fragmentPreview' &&
+      (value === 'off' || value === 'static' || value === 'audio')
+    ) {
       this.fragmentPreview = value;
-      if (this.fragmentMesh) this.fragmentMesh.visible = value === 'static';
+      this.fragmentLevel = value === 'static' ? 1 : 0;
+      if (this.fragmentMesh) this.fragmentMesh.visible = value !== 'off';
       return;
     }
     if (typeof value !== 'number') return;
