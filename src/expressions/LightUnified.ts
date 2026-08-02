@@ -64,8 +64,16 @@ const LIMITS = {
    * インスタンスの上限。靄 1 + 膜 4 + 光条 7 + 破片 36 + 扇 1 + 核 1 を超えるので、
    * 切るときは**種別ごとの枠**（`capUnifiedRig`）で切る。単純に先頭から取ると
    * 末尾の扇と核が落ち、白へ届いてよい唯一の層が消える。
+   *
+   * 素材の膜（`Material light`）の枠 8 を足したので 48 → 56。枠の合計 54 は
+   * 上限より小さいままなので、**どの密度でも核と扇は必ず残る**。
+   *
+   * **上限を広げても従来の絵は 1 画素も動かない。** 既存 6 種別の枚数の合計は
+   * どの軸でも枠の合計 46 を超えないので（枠はその種別が出しうる最大枚数）、
+   * 旧上限 48 では `capUnifiedRig` がそもそも 1 枚も落としていなかった。
+   * 軸 0 では素材の膜が 1 枚も作られないので、切る前も後も配列は同じである。
    */
-  maximumLayers: 48,
+  maximumLayers: 56,
   /** 尾を引いている破片も保持するので、生きている枚数より少し多く持つ。 */
   maximumFragmentShapes: 40,
   nearPlane: 0.1,
@@ -222,6 +230,9 @@ const FIELD_KINDS: readonly UnifiedKind[] = [
   'haze',
   'fragment',
   'fan',
+  // 素材の膜は打撃イベント（`drive.membranes`）で生死が決まるので場は読まないが、
+  // 記録は全種別ぶん揃えておく（`fieldLevels` は全種別を持つ約束）。
+  'sheet',
 ];
 
 /** 散らばりのシード。**固定値**（同じ音なら必ず同じ絵になる）。 */
@@ -229,7 +240,7 @@ const UNIFIED_SEED = 7;
 
 /** 無音の駆動。**1 画素も出ない**状態。 */
 const SILENT_DRIVE: UnifiedDrive = {
-  fieldLevels: { core: 0, beam: 0, membrane: 0, haze: 0, fragment: 0, fan: 0 },
+  fieldLevels: { core: 0, beam: 0, membrane: 0, haze: 0, fragment: 0, fan: 0, sheet: 0 },
   corePulse: 0,
   coreShape: -1,
   beamMask: 0,
@@ -308,6 +319,7 @@ export class LightUnified implements LabExpression {
     haze: new EmissionShape(),
     fragment: new EmissionShape(),
     fan: new EmissionShape(),
+    sheet: new EmissionShape(),
   };
   /** 素の駆動を数フレームぶん覚えておく遅延線（遅れて開くため）。 */
   private readonly fieldLine = new DelayLine();
@@ -1138,6 +1150,13 @@ export class LightUnified implements LabExpression {
         const float EDGE_GAIN_AT_ONE = ${UNIFIED.definition.edgeGainAtOne.toFixed(4)};
         const float CORE_FOCUS_GAIN_AT_ONE = ${UNIFIED.definition.coreFocusGainAtOne.toFixed(4)};
 
+        /** **素材の膜**（Spatial のマクロ膜からそのまま移した実寸）。 */
+        const float SHEET_VIGNETTE = ${UNIFIED.sheet.vignetteStart.toFixed(4)};
+        const float SHEET_FLOOR = ${UNIFIED.sheet.blackFloor.toFixed(4)};
+        const float SHEET_FLOOR_WIDTH = ${UNIFIED.sheet.blackFloorWidth.toFixed(4)};
+        const float SHEET_GAMMA = ${UNIFIED.sheet.gamma.toFixed(4)};
+        const float SHEET_INSET = ${UNIFIED.sheet.cellInset.toFixed(4)};
+
         vec3 spectrum(float h) {
           vec3 phase = vec3(0.0, 2.0943951, 4.1887902);
           return clamp(0.5 + 0.5 * cos(TAU * h + phase), 0.0, 1.0);
@@ -1335,9 +1354,79 @@ export class LightUnified implements LabExpression {
           return base + vHalo * exp(-dot(p, p) * spread);
         }
 
+        /**
+         * **アトラスのマスの位置。** 行は下から数える（Canvas 由来で flipY が効く）。
+         */
+        vec2 atlasUvOf(vec2 cell) {
+          float column = mod(vTexture.x, max(uGrid.x, 1.0));
+          float row = max(uGrid.y - 1.0, 0.0) - floor(vTexture.x / max(uGrid.x, 1.0));
+          return (vec2(column, row) + cell) / max(uGrid, vec2(1.0));
+        }
+
+        /**
+         * **素材の膜。** Spatial Study のマクロ膜の式をそのまま移したもの。
+         *
+         * **輝度の源は素材ただ 1 つ**である。手続きの窓も、丸いハロも、
+         * 分光のチャンネル分離も**持たない** — アトラス 10 枚はほとんどが黒なので、
+         * 素材が 0 の場所は厳密に 0 になり、**見えている外形が素材の筋の形**になる。
+         * ビネットは板の四角さを隠すだけで、形は作らない。
+         */
+        vec3 sheetColour(vec2 q) {
+          float window = 1.0 - smoothstep(SHEET_VIGNETTE, 1.0, length(q));
+          if (window <= 0.0) discard;
+
+          // 回転・反転・歪み。位相は誕生時に固定なので、発光中に形はちらつかない。
+          vec2 s = vec2(q.x * vOrient.x - q.y * vOrient.y, q.x * vOrient.y + q.y * vOrient.x);
+          s *= vec2(vOrient.z, vOrient.w);
+          s += vec2(
+            sin(s.y * vShape.y + vShape.z),
+            cos(s.x * vShape.y * 0.87 + vShape.z * 1.31)
+          ) * vShape.x;
+          // 面内のゆっくりした漂い。せん断で膜がたわみ、素材が面の中を滑る。
+          s.y += s.x * vChannel.z;
+          s += vChannel.xy;
+
+          // クロップ。素材のどこを切り出すかが毎回変わる。
+          vec2 cell = clamp(vCrop.xy + s * vCrop.zw, SHEET_INSET, 1.0 - SHEET_INSET);
+          vec3 source = texture2D(uAtlas, atlasUvOf(cell)).rgb;
+          /**
+           * アトラスは sRGB として読み込むので、届く時点では線形。
+           * 敷居も曲げも Spatial が**見た目の明るさ**で決めた値なので、一度戻す。
+           */
+          vec3 tex = pow(max(source, 0.0), vec3(0.4545));
+          float luminance = dot(tex, vec3(0.2126, 0.7152, 0.0722));
+          // 黒浮きを加算の前に落とす。これが無いと薄い膜が画面全体を灰色に持ち上げる。
+          luminance *= smoothstep(SHEET_FLOOR, SHEET_FLOOR + SHEET_FLOOR_WIDTH, luminance);
+          luminance = pow(max(luminance, 0.0), SHEET_GAMMA);
+
+          // 色は音から。素材そのものの色みは割合で混ぜるだけ（明るさは輝度が持つ）。
+          float t = gradientAt(q, vTone.w);
+          vec3 tint = mix(
+            vec3(1.0),
+            spectrum(ramp4(vHues, t)),
+            clamp(ramp4(vSaturations, t), 0.0, 1.0) * uTint / max(uTintBase, 1e-4)
+          );
+          vec3 sourceHue = tex / max(max(tex.r, max(tex.g, tex.b)), 1e-4);
+          vec3 tone = mix(tint, sourceHue, clamp(vTexture.z, 0.0, 1.0));
+
+          vec3 colour = tone * luminance * window * max(vAxis.x, 0.0) * uIntensity * uHasAtlas;
+          // 上だけを潰すソフトニー。**1 枚では白へ行けない**（白は重なりからだけ生まれる）。
+          float peak = max(colour.r, max(colour.g, colour.b));
+          return colour / (1.0 + peak / max(vAxis.y, 1e-4));
+        }
+
         void main() {
           // **板の座標**（−1〜1。縁がどこかを知っているのはこれだけ）。
           vec2 q = vUv * 2.0 - 1.0;
+          /**
+           * **素材の膜だけは別の式。** 他の 6 種別は「手続きで描いた形 × 素材の濃淡」で、
+           * 素材は外形を作れない。ここは輝度の源が素材ただ 1 つなので、下の
+           * 手続きの窓・ハロ・分光のどれも通さずに抜ける。
+           */
+          if (vTone.z > 5.5) {
+            gl_FragColor = vec4(max(sheetColour(q), 0.0), 1.0);
+            return;
+          }
           // **要素の座標**。板を余白ぶん広げてあるので、要素はその内側に収まる。
           vec2 p = q * vPad;
           /**

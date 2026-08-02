@@ -153,6 +153,17 @@ export interface UnifiedAxes {
    */
   textureGrain: number;
   /**
+   * **素材の光。**
+   *
+   * 0 = 出さない（**現状と厳密に一致する** — 層を 1 枚も作らない）⇄
+   * 1 = 主役。**輝度の源が素材ただ 1 つ**の膜が、打撃ごとに生まれて死ぬ。
+   *
+   * `Texture grain` とは別の軸である。あちらは手続きで描いた形の**内側の濃淡**を
+   * 素材に任せる量で、外形は手続きの窓のまま。こちらは手続きの窓を持たない
+   * 種別そのもので、**見えている外形が素材の筋の形**になる。
+   */
+  materialLight: number;
+  /**
    * **板の四角さを削る。**
    *
    * 0 = 手続きで描いた形の縁そのまま ⇄ 1 = 非対称な多角形で外形を削る。
@@ -334,6 +345,8 @@ export const AXIS_DECLS: readonly AxisDecl[] = [
   { id: 'beamLength', label: 'Beam length', group: '構成', low: '短い', high: '貫通' },
   { id: 'density', label: 'Density', group: '構成', low: '無し', high: '多い' },
   { id: 'hazeFloor', label: 'Haze floor', group: '構成', low: '無し', high: '厚い' },
+  // 上段に置く（＝結線対象）。0 が「現状のまま」で、可動域は片側へ伸びる。
+  { id: 'materialLight', label: 'Material light', group: '構成', low: '無し', high: '主役' },
   { id: 'isolation', label: 'Isolation', group: '構成', low: '一枚の床', high: '独立した板' },
   { id: 'bandUnison', label: 'Band unison', group: '構成', low: '最強の 1 帯域', high: '3 帯域が同時' },
   { id: 'coreSize', label: 'Core size', group: '構成', low: '針の先', high: '画面を占める', detail: true },
@@ -380,6 +393,8 @@ export const DEFAULT_AXES: UnifiedAxes = {
   membraneScale: 0.45,
   eventMembrane: 0.4,
   textureGrain: 0.4,
+  // **0 が「現状のまま」。** 新種別なので、既定とプリセットの見え方を動かさない。
+  materialLight: 0,
   silhouette: 0.35,
   coreSize: 0.45,
   coreShape: 0.3,

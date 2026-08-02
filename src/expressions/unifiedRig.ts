@@ -19,7 +19,7 @@ import { strobePhaseGain } from './unifiedTime';
  */
 
 /** 描画側のフラグメント分岐と 1 対 1。 */
-export type UnifiedKind = 'core' | 'beam' | 'membrane' | 'haze' | 'fragment' | 'fan';
+export type UnifiedKind = 'core' | 'beam' | 'membrane' | 'haze' | 'fragment' | 'fan' | 'sheet';
 
 export const UNIFIED_KIND_INDEX: Readonly<Record<UnifiedKind, number>> = {
   core: 0,
@@ -28,6 +28,7 @@ export const UNIFIED_KIND_INDEX: Readonly<Record<UnifiedKind, number>> = {
   haze: 3,
   fragment: 4,
   fan: 5,
+  sheet: 6,
 };
 
 /** 破片の形状族（4 つ）。 */
@@ -267,6 +268,11 @@ export const UNIFIED = {
     haze: 2,
     membrane: 8,
     fragment: 20,
+    /**
+     * **素材の膜の枠。** `Material light` が 0 のあいだは 1 枚も作らないので、
+     * 枠がいくつでも既存の絵は 1 画素も動かない（`used['sheet']` が増えない）。
+     */
+    sheet: 8,
   } as Readonly<Record<UnifiedKind, number>>,
   /**
    * **にじみが最大のときの板の余白**（1.4 なら板は 2.4 倍）。
@@ -333,6 +339,8 @@ export const UNIFIED = {
     haze: 1,
     fragment: 0.9,
     fan: 0.7,
+    // 素材の膜は素材そのものが絵なので、削りも足しもしない（この係数は使わない）。
+    sheet: 1,
   } as Readonly<Record<UnifiedKind, number>>,
   /**
    * **種別ごとに欲しい素材の役割。** manifest の `role` をそのまま書く。
@@ -345,6 +353,8 @@ export const UNIFIED = {
     beam: ['segmented-rays', 'fine-filaments', 'parallel-curtains'],
     fan: ['caustic-fan', 'wide-caustic'],
     core: ['wide-caustic', 'caustic-fan'],
+    // 素材の膜は帯域が素材を選ぶ（`rolesByBand`）。ここは帯域が無いときの控え。
+    sheet: ['layered-sheets', 'parallel-curtains', 'curved-volume', 'wide-caustic'],
   } as Readonly<Record<UnifiedKind, readonly string[]>>,
   /**
    * **種別ごとの多角形マスクの効き。** 核は削らない — 白へ届いてよい唯一の層で、
@@ -357,7 +367,75 @@ export const UNIFIED = {
     haze: 0.75,
     fragment: 0.9,
     fan: 0.85,
+    // 素材の膜は外形も素材が決める。多角形で削ると素材の縁が消える。
+    sheet: 0,
   } as Readonly<Record<UnifiedKind, number>>,
+  /**
+   * **素材の膜（`Material light` 軸）の定数。**
+   *
+   * すべて Spatial Study のマクロ膜（`LightSpatialStudy` / `spatialMapping`）から
+   * そのまま移した値である。**混ぜない・調整しない** — Spatial は
+   * 「輝度の源が素材ただ 1 つ」という式で素材の形をそのまま光にしていたので、
+   * その式ごと持ってくるのが目的。手続きの窓もハロもここには無い。
+   */
+  sheet: {
+    /** 板のワールド半径（Spatial `macroWorldHalfSize`）。 */
+    worldHalf: 3.4,
+    /** 大きさの幅（Spatial `macroSizeAtSilence` 〜 `macroSizeAtFullVolume`）。 */
+    sizeMinimum: 0.55,
+    sizeMaximum: 1.25,
+    /** 縦横比（Spatial `macroAspectMinimum/Maximum`）。 */
+    aspectMinimum: 0.68,
+    aspectMaximum: 1.45,
+    /** 1 枚の明るさ（Spatial `macroIntensityMinimum/Maximum` × `opacity` 1.45）。 */
+    intensityMinimum: 0.42 * 1.45,
+    intensityMaximum: 0.85 * 1.45,
+    /**
+     * **取り付け利得。** Spatial の数値そのものは触らず、**光学系の違いだけ**を
+     * ここ 1 か所で吸収する。Spatial は自前のパイプライン（露出つきのトーンマップ）へ
+     * 描いていたが、統合側は `uIntensity` が 0.6〜3.0 で掛かる素通しの加算なので、
+     * そのまま置くと 1 枚で画面が白く飽和した。
+     * **明るさを決めるのは `Intensity` の 1 本**という約束を保つための係数で、
+     * 天井（`ceiling`）にも同じ係数を掛ける（比を崩さない）。
+     */
+    pipelineGain: 0.28,
+    /** クロップの半径（Spatial `macroCropMinimum/Maximum`）。 */
+    cropMinimum: 0.3,
+    cropMaximum: 0.62,
+    /** クロップを 0..1 の内側へ寄せる余白（Spatial `motionCropMargin`）。 */
+    cropMargin: 0.1,
+    /** 板の四角さを消す緩いビネット（Spatial `edgeFadeStart`）。形は作らない。 */
+    vignetteStart: 0.55,
+    /** 黒浮きの敷居と幅（Spatial `blackFloor` / `blackFloorWidth`）。 */
+    blackFloor: 0.017,
+    blackFloorWidth: 0.042,
+    /** 素材の輝度の曲げ（Spatial `luminanceGamma`）。1 未満で暗部を持ち上げる。 */
+    gamma: 0.7,
+    /** UV をマスの内側へ寄せる余白（Spatial `cellInset`）。 */
+    cellInset: 0.004,
+    /** 1 枚あたりの明るさの天井（Spatial `softCeiling`）。**1 枚では白へ行けない**。 */
+    ceiling: 0.8,
+    /** 座標歪みの量（Spatial `macroWarpAtPureTone` 〜 `macroWarpAtNoise`）。 */
+    warpMinimum: 0.005,
+    warpMaximum: 0.028,
+    /** 同・周波数（Spatial `macroWarpFrequencyMinimum/Maximum`）。 */
+    warpFrequencyMinimum: 1.4,
+    warpFrequencyMaximum: 5.2,
+    /** 面内の滑り（Spatial `motionScrollMinimum/Maximum`）。 */
+    scrollMinimum: 0.014,
+    scrollMaximum: 0.12,
+    /** 面内のせん断（Spatial `motionShearMinimum/Maximum`）。 */
+    shearMinimum: 0,
+    shearMaximum: 0.09,
+    /**
+     * **漂いの往復の速さ**（rad/秒）。Spatial は誕生からの経過秒を掛ける直線の
+     * 滑りだったが、統合側の駆動は誕生時刻を持たない。溜め込むとクロップが
+     * 端で張りついて止まるので、**同じ量を往復させる**（見えは同じ滑りで、
+     * 溜まらない）。
+     */
+    driftRateMinimum: 0.35,
+    driftRateMaximum: 1.1,
+  },
   /** 破片だけは**発火した帯域**が素材の系統を決める（Spatial と同じ流儀）。 */
   rolesByBand: {
     bass: ['wide-haze', 'wide-caustic', 'parallel-curtains', 'layered-sheets'],
@@ -487,6 +565,8 @@ export const UNIFIED = {
     fan: 0.28,
     membrane: 0,
     haze: 0,
+    // 素材の膜は**手続きの窓もハロも持たない**。輝度の源は素材ただ 1 つ。
+    sheet: 0,
   },
   /**
    * **縁の締まり（`Edge contrast` / `Core focus`）の実寸。**
@@ -1726,6 +1806,110 @@ const buildFan = (
 };
 
 /**
+ * **素材の膜（`Material light` 軸）。**
+ *
+ * 他の 6 種別は「手続きで描いた形 × 素材の濃淡」なので、**素材は外形を作れない**
+ * （手続きの窓の内側を削ることしかできない）。ここだけは Spatial のマクロ膜と
+ * 同じ式で、**輝度の源が素材ただ 1 つ**になっている。アトラス 10 枚は
+ * ほとんどが黒なので、見えている外形はそのまま素材の筋の形になる。
+ *
+ * 生死は膜と同じ経路（`drive.membranes` の打撃イベント）に相乗りする。
+ * **新しい検出は足していない** — 同じ誕生を別の見え方で描くだけ。
+ */
+const buildSheets = (
+  drive: UnifiedDrive,
+  axes: UnifiedAxes,
+  viewport: UnifiedViewport,
+): UnifiedLayer[] => {
+  // **軸 0 では 1 枚も作らない。** ここが「現状と厳密に一致する」ことの根拠。
+  const amount = clamp01(axes.materialLight);
+  if (amount <= 0) return [];
+  const s = UNIFIED.sheet;
+  const g = UNIFIED.grain;
+  const out: UnifiedLayer[] = [];
+  for (const born of drive.membranes) {
+    const gain = clamp01(born.gain);
+    if (gain <= 0) continue;
+    const seed = Math.round(born.seed);
+    const slot = born.slot;
+    const h = (salt: number): number => hash01(seed + 8117, slot * 19 + salt);
+    const z = depthOf(axes, mix(0.05, 0.95, h(1)));
+    const e = halfExtent(z, viewport);
+    const place = placeOf(axes, seed + 8117, slot * 3 + 1);
+    const d = drift(axes, seed + 8117, slot, drive.time);
+    const tilt = tiltOf(axes, seed + 8117, slot);
+    // 板のワールド半径。**可視範囲では割らない**（割ると遠近が相殺される）。
+    const aspect = mix(s.aspectMinimum, s.aspectMaximum, h(5));
+    const half = s.worldHalf * mix(s.sizeMinimum, s.sizeMaximum, h(6));
+    const hue = hueOf(axes, drive.hue, seed, slot * 3 + 2);
+    // クロップ。全体が必ず 0..1 に収まるよう寄せる（Spatial と同じ寄せ方）。
+    const halfCrop = mix(s.cropMinimum, s.cropMaximum, h(15));
+    const centre = (value: number): number =>
+      halfCrop +
+      s.cropMargin +
+      value * Math.max(1 - halfCrop * 2 - s.cropMargin * 2, 0);
+    const angle = h(17) * TAU;
+    // **面内の漂い。** 向きは seed 由来、大きさは `Motion` 軸が決める。往復なので溜まらない。
+    const motion = clamp01(axes.motion);
+    const swing = Math.sin(
+      drive.time * mix(s.driftRateMinimum, s.driftRateMaximum, h(19)) + h(21) * TAU,
+    );
+    const heading = h(23) * TAU;
+    const scroll = mix(s.scrollMinimum, s.scrollMaximum, h(25)) * motion * swing;
+    const shear = mix(s.shearMinimum, s.shearMaximum, h(27)) * motion * swing;
+    out.push({
+      kind: 'sheet',
+      position: [(place.nx + d.x) * e.w * 0.85, (place.ny + d.y) * e.h * 0.7, z],
+      half: [half * aspect, half / aspect],
+      spin: h(3) * TAU,
+      tiltX: tilt.x,
+      tiltY: tilt.y,
+      hue,
+      hueSpan: 0.13,
+      ...hueRamp(axes, hue, 0.13, seed + 8117, slot),
+      gradientForm: Math.floor(h(4) * 4),
+      intensity:
+        mix(s.intensityMinimum, s.intensityMaximum, clamp01(born.strength)) *
+        s.pipelineGain *
+        gain *
+        amount *
+        depthDim(z) *
+        blinkOf(axes, drive, 'sheet', slot),
+      // [歪みの量, 歪みの周波数, 歪みの位相, 未使用]
+      shape: [
+        mix(s.warpMinimum, s.warpMaximum, h(7)),
+        mix(s.warpFrequencyMinimum, s.warpFrequencyMaximum, h(9)),
+        h(11) * TAU,
+        0,
+      ],
+      // 縁もハロも持たない。板 = 要素なので余白も要らない。
+      edge: 0,
+      halo: 0,
+      pad: 1,
+      character: 0,
+      material: {
+        // 帯域が素材の系統を決める（破片・Spatial と同じ流儀）。
+        roles: UNIFIED.rolesByBand[born.band] ?? UNIFIED.rolesByKind.sheet,
+        pick: h(13),
+        crop: [centre(h(29)), centre(h(31)), halfCrop, halfCrop],
+        orient: [Math.cos(angle), Math.sin(angle), h(33) < 0.5 ? -1 : 1, h(35) < 0.5 ? -1 : 1],
+        // 素材は常に主役なので、`Texture grain` 軸には従わない（この枝では未使用）。
+        grain: 1,
+        maskPick: 0,
+        maskAmount: 0,
+        sourceTint: mix(g.tintKeepMinimum, g.tintKeepMaximum, h(37)),
+      },
+      whiteAllowed: false,
+      // 天井にも同じ利得を掛ける。**1 枚では白へ行けない**という比を崩さない。
+      ceiling: s.ceiling * s.pipelineGain,
+      // [面内の滑り x, y, せん断, 未使用]
+      channel: [Math.cos(heading) * scroll, Math.sin(heading) * scroll, shear, 0],
+    });
+  }
+  return out;
+};
+
+/**
  * 統合の光学系を組み立てる。**軸はすべて式の中の係数**として効いており、
  * どこにも「この軸が 0.5 を超えたら別の絵」という分岐は無い。
  */
@@ -1734,6 +1918,9 @@ export const buildUnifiedRig = (
   axes: UnifiedAxes,
   viewport: UnifiedViewport,
 ): UnifiedLayer[] => [
+  // **素材の膜が先頭。** 枠の先取り（`capUnifiedRig`）で主役が落ちないようにする。
+  // 軸 0 では空配列なので、並びも枚数も従来と 1 つも変わらない。
+  ...buildSheets(drive, axes, viewport),
   ...buildHaze(drive, axes, viewport),
   ...buildMembranes(drive, axes, viewport),
   ...buildBeams(drive, axes, viewport),
