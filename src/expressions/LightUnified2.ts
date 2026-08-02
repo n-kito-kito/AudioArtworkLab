@@ -193,6 +193,23 @@ const UNIFIED2 = {
     seedSalt: 41.3,
   },
 
+  /** D29 の要素分離確認用。音へ接続する前の静止した靄 1 枚。 */
+  hazeStudy: {
+    depth: 9,
+    y: -0.72,
+    halfWidth: 3.35,
+    halfHeight: 0.82,
+    tile: 3,
+    cropHalf: 0.48,
+    floor: 0.008,
+    floorWidth: 0.045,
+    gamma: 0.62,
+    intensity: 0.72,
+    edgeFadeStart: 0.08,
+    attackSeconds: 0.08,
+    releaseSeconds: 0.5,
+  },
+
   defaults: {
     membranes: 4,
     scale: 0.5,
@@ -301,6 +318,12 @@ export class LightUnified2 implements LabExpression {
   private coreGeometry: THREE.InstancedBufferGeometry | null = null;
   private coreMaterial: THREE.ShaderMaterial | null = null;
   private coreMesh: THREE.Mesh | null = null;
+  private hazeGeometry: THREE.PlaneGeometry | null = null;
+  private hazeMaterial: THREE.ShaderMaterial | null = null;
+  private hazeMesh: THREE.Mesh | null = null;
+  /** Study 中だけ無音で形を確認する。音接続時には off に戻す。 */
+  private hazePreview: 'off' | 'static' | 'audio' = 'audio';
+  private hazeLevel = 0;
   private placeholder: THREE.DataTexture | null = null;
   private atlas: PrismAtlas | null = null;
   private pipeline: EffectPipeline | null = null;
@@ -372,16 +395,19 @@ export class LightUnified2 implements LabExpression {
     this.detector.reset();
     this.previousElapsed = -1;
     this.hue = UNIFIED2.color.hueOrigin;
+    this.hazeLevel = 0;
     this.cores.length = 0;
     this.membranes.length = 0;
 
     this.buildMembraneMesh();
     this.buildCoreMesh();
+    this.buildHazeStudyMesh();
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
     if (this.mesh) this.scene.add(this.mesh);
     if (this.coreMesh) this.scene.add(this.coreMesh);
+    if (this.hazeMesh) this.scene.add(this.hazeMesh);
 
     this.pipeline = new EffectPipeline(context.renderer, this.scene, this.camera, this.effects);
 
@@ -393,12 +419,95 @@ export class LightUnified2 implements LabExpression {
         return;
       }
       this.atlas = atlas;
-      for (const material of [this.material, this.coreMaterial]) {
+      for (const material of [this.material, this.coreMaterial, this.hazeMaterial]) {
         if (!material) continue;
         material.uniforms.uAtlas!.value = atlas.texture;
         (material.uniforms.uGrid!.value as THREE.Vector2).set(atlas.columns, atlas.rows);
       }
     });
+  }
+
+  /**
+   * 第 1 段の確認用の「靄」。音・時間・イベントを一切参照しない静止画として描く。
+   * 輝度源は膜と同じ prismAtlas だけで、ガウス光や bloom は足さない。
+   */
+  private buildHazeStudyMesh(): void {
+    const haze = UNIFIED2.hazeStudy;
+    const geometry = new THREE.PlaneGeometry(2, 2);
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uAtlas: { value: this.placeholder },
+        uGrid: { value: new THREE.Vector2(1, 1) },
+        uTile: { value: haze.tile },
+        uCropHalf: { value: haze.cropHalf },
+        uShape: {
+          value: new THREE.Vector4(
+            haze.floor,
+            haze.floorWidth,
+            haze.gamma,
+            haze.edgeFadeStart,
+          ),
+        },
+        uIntensity: { value: haze.intensity },
+        uInset: { value: UNIFIED2.cellInset },
+      },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+      vertexShader: /* glsl */ `
+        varying vec2 vLocal;
+
+        void main() {
+          vLocal = position.xy;
+          vec3 world = vec3(
+            position.x * ${haze.halfWidth.toFixed(4)},
+            ${haze.y.toFixed(4)} + position.y * ${haze.halfHeight.toFixed(4)},
+            -${haze.depth.toFixed(4)}
+          );
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D uAtlas;
+        uniform vec2 uGrid;
+        uniform float uTile;
+        uniform float uCropHalf;
+        uniform vec4 uShape;
+        uniform float uIntensity;
+        uniform float uInset;
+        varying vec2 vLocal;
+
+        void main() {
+          // 板の境界だけを消す。光そのものを手続きで足す処理ではない。
+          vec2 edgeDistance = 1.0 - abs(vLocal);
+          float window = smoothstep(0.0, 1.0 - uShape.w, edgeDistance.x)
+            * smoothstep(0.0, 1.0 - uShape.w, edgeDistance.y);
+          if (window <= 0.0) discard;
+
+          vec2 cell = clamp(vec2(0.5) + vLocal * uCropHalf, uInset, 1.0 - uInset);
+          float column = mod(uTile, uGrid.x);
+          float row = floor(uTile / uGrid.x);
+          vec2 atlasUv = (vec2(column, row) + cell) / uGrid;
+          vec3 source = texture2D(uAtlas, atlasUv).rgb;
+          float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
+          luminance *= smoothstep(uShape.x, uShape.x + uShape.y, luminance);
+          luminance = pow(max(luminance, 0.0), uShape.z);
+
+          // 静止確認では白寄りの微かな紫だけ。色・強度の音接続は次段に残す。
+          vec3 tint = vec3(0.86, 0.82, 1.0);
+          gl_FragColor = vec4(tint * luminance * window * uIntensity, 1.0);
+        }
+      `,
+    });
+
+    this.hazeGeometry = geometry;
+    this.hazeMaterial = material;
+    this.hazeMesh = new THREE.Mesh(geometry, material);
+    this.hazeMesh.visible = this.hazePreview !== 'off';
+    this.hazeMesh.frustumCulled = false;
   }
 
   // ---------------------------------------------------------------- 描画
@@ -944,7 +1053,27 @@ export class LightUnified2 implements LabExpression {
     this.writeLights(elapsed);
 
     const audio = this.context?.audioEngine.getParameters() ?? {};
+    this.updateHazeStudy(clamp01(audio.volume ?? 0), delta);
     this.pipeline?.update(audio, elapsed);
+  }
+
+  /** 靄の第 2 段。連続した音量だけを明るさへ繋ぎ、形・位置・色はまだ動かさない。 */
+  private updateHazeStudy(volume: number, delta: number): void {
+    if (!this.hazeMesh || !this.hazeMaterial) return;
+    this.hazeMesh.visible = this.hazePreview !== 'off';
+    if (this.hazePreview === 'off') return;
+
+    if (this.hazePreview === 'static') {
+      this.hazeLevel = 1;
+    } else {
+      const seconds = volume > this.hazeLevel
+        ? UNIFIED2.hazeStudy.attackSeconds
+        : UNIFIED2.hazeStudy.releaseSeconds;
+      const follow = 1 - Math.exp(-Math.max(delta, 0) / Math.max(seconds, 1e-4));
+      this.hazeLevel += (volume - this.hazeLevel) * follow;
+    }
+    this.hazeMaterial.uniforms.uIntensity!.value =
+      UNIFIED2.hazeStudy.intensity * this.hazeLevel * this.params.intensity;
   }
 
   render(): void {
@@ -1083,7 +1212,20 @@ export class LightUnified2 implements LabExpression {
     const membrane = '膜（素材が形）';
     const core = 'コア（打撃で生まれる）';
     const common = '色と音';
+    const study = 'Study preview';
     return [
+      {
+        key: 'hazePreview',
+        label: 'Haze (音なし静止確認)',
+        group: study,
+        type: 'select',
+        options: [
+          { value: 'static', label: 'Static' },
+          { value: 'audio', label: 'Audio volume' },
+          { value: 'off', label: 'Off' },
+        ],
+        value: this.hazePreview,
+      },
       row('crop', 'Crop (狭い＝素材の線が筋になる ⇄ 広い＝細かい濃淡)', membrane),
       row('scale', 'Scale (小さい ⇄ 画面より大きい)', membrane),
       row('softness', 'Softness (鋭い＝明部だけ残る ⇄ 霧状＝暗部まで一様)', membrane),
@@ -1099,6 +1241,12 @@ export class LightUnified2 implements LabExpression {
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    if (key === 'hazePreview' && (value === 'off' || value === 'static' || value === 'audio')) {
+      this.hazePreview = value;
+      this.hazeLevel = value === 'static' ? 1 : 0;
+      if (this.hazeMesh) this.hazeMesh.visible = value !== 'off';
+      return;
+    }
     if (typeof value !== 'number') return;
     if (!(key in PARAM_RANGES)) return;
     const typed = key as Unified2ParamKey;
@@ -1114,10 +1262,13 @@ export class LightUnified2 implements LabExpression {
     this.material?.dispose();
     this.coreGeometry?.dispose();
     this.coreMaterial?.dispose();
+    this.hazeGeometry?.dispose();
+    this.hazeMaterial?.dispose();
     this.placeholder?.dispose();
     this.atlas?.texture.dispose();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
     if (this.coreMesh && this.scene) this.scene.remove(this.coreMesh);
+    if (this.hazeMesh && this.scene) this.scene.remove(this.hazeMesh);
     this.cores.length = 0;
     this.membranes.length = 0;
     this.pipeline = null;
@@ -1126,6 +1277,9 @@ export class LightUnified2 implements LabExpression {
     this.coreGeometry = null;
     this.coreMaterial = null;
     this.coreMesh = null;
+    this.hazeGeometry = null;
+    this.hazeMaterial = null;
+    this.hazeMesh = null;
     this.placeholder = null;
     this.atlas = null;
     this.mesh = null;
