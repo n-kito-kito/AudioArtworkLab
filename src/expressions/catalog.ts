@@ -124,6 +124,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   },
   {
     id: 'light-traces',
+    hidden: true,
     label: 'Light Traces',
     versions: [{ id: 'light-traces-v1', label: 'V1' }],
   },
@@ -131,6 +132,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   // Light Traces 本体とはコードも状態も共有しない。
   {
     id: 'light-core-study',
+    hidden: true,
     label: 'Light Traces — Core Study',
     versions: [{ id: 'light-core-study-v1', label: 'V1' }],
   },
@@ -145,6 +147,7 @@ export const EXPRESSION_FAMILIES: readonly ExpressionFamily[] = [
   // 各 Version は同じ固定条件を使い、最後の Composite だけで再結合する。
   {
     id: 'light-element-lab',
+    hidden: true,
     label: 'Light Element Lab',
     versions: [
       { id: 'light-element-core-v1', label: 'Core' },
