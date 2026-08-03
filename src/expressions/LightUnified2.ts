@@ -230,7 +230,7 @@ const UNIFIED2 = {
     depth: 8.4,
     halfWidth: 2.4,
     halfHeight: 1.35,
-    intensity: 0.92,
+    intensity: 1.08,
   },
 
   /** Lab2 Coreの周囲に置く、素材由来の静止プリズム片。 */
@@ -737,64 +737,43 @@ export class LightUnified2 implements LabExpression {
         uniform float uIntensity;
         varying vec2 vLocal;
 
-        float ellipse(vec2 point, vec2 radius) {
+        float focus(vec2 point, vec2 radius, float falloff) {
           vec2 q = point / radius;
-          return exp(-dot(q, q) * 2.3);
-        }
-
-        vec2 rotatePoint(vec2 point, float angle) {
-          float c = cos(angle);
-          float s = sin(angle);
-          return vec2(point.x * c - point.y * s, point.x * s + point.y * c);
-        }
-
-        float glassShard(vec2 point, vec2 offset, float angle, vec2 radius) {
-          vec2 q = rotatePoint(point - offset, angle) / radius;
-          float diamond = abs(q.x) + abs(q.y) * 0.72;
-          return 1.0 - smoothstep(0.48, 1.0, diamond);
-        }
-
-        float shortStreak(vec2 point, vec2 offset, float angle, float length, float width) {
-          vec2 q = rotatePoint(point - offset, angle);
-          float along = 1.0 - smoothstep(length * 0.55, length, abs(q.x));
-          return exp(-abs(q.y) / width) * along;
+          return exp(-dot(q, q) * falloff);
         }
 
         void main() {
           vec2 p = vLocal;
           float edge = smoothstep(0.0, 0.16, 1.0 - max(abs(p.x), abs(p.y)));
 
-          float whiteCore = ellipse(p, vec2(0.075, 0.092));
-          float whiteSpark = ellipse(p - vec2(0.008, 0.004), vec2(0.027, 0.038));
+          float whiteBody = focus(p, vec2(0.12, 0.214), 2.7);
+          float whiteFocus = focus(p - vec2(0.002, 0.001), vec2(0.055, 0.098), 3.3);
 
-          float greenGlass =
-            glassShard(p, vec2(-0.085, 0.035), -0.42, vec2(0.12, 0.045))
-            + glassShard(p, vec2(0.092, -0.025), 0.56, vec2(0.11, 0.035))
-            + glassShard(p, vec2(-0.015, -0.09), 0.18, vec2(0.07, 0.025));
-          float cyanGlass =
-            glassShard(p, vec2(0.025, 0.075), 1.05, vec2(0.09, 0.028))
-            + glassShard(p, vec2(-0.11, -0.045), -0.86, vec2(0.075, 0.022));
-          float yellowGlass = glassShard(
-            p,
-            vec2(-0.055, 0.092),
-            -0.12,
-            vec2(0.065, 0.014)
+          float greenFringe = focus(
+            p - vec2(-0.056, 0.008),
+            vec2(0.082, 0.138),
+            3.1
           );
-          float localStreaks =
-            shortStreak(p, vec2(0.01, 0.0), 0.66, 0.2, 0.009)
-            + shortStreak(p, vec2(-0.02, 0.015), -0.48, 0.17, 0.007)
-            + shortStreak(p, vec2(0.025, -0.025), 1.2, 0.13, 0.006);
+          float cyanFringe = focus(
+            p - vec2(0.052, -0.007),
+            vec2(0.076, 0.132),
+            3.2
+          );
+          float yellowFringe = focus(
+            p - vec2(0.0, 0.048),
+            vec2(0.064, 0.112),
+            3.4
+          );
 
-          vec3 color = vec3(whiteCore * 0.72 + whiteSpark * 0.48);
-          color += vec3(0.12, 0.82, 0.32) * greenGlass * 0.24;
-          color += vec3(0.08, 0.42, 0.92) * cyanGlass * 0.22;
-          color += vec3(0.82, 0.92, 0.16) * yellowGlass * 0.18;
-          color += vec3(0.28, 0.84, 0.5) * localStreaks * 0.13;
+          vec3 color = vec3(whiteBody * 0.78 + whiteFocus * 0.72);
+          color += vec3(0.12, 0.9, 0.34) * greenFringe * 0.12;
+          color += vec3(0.08, 0.48, 1.0) * cyanFringe * 0.1;
+          color += vec3(0.92, 1.0, 0.18) * yellowFringe * 0.07;
           color *= edge * uIntensity;
 
           float peak = max(color.r, max(color.g, color.b));
           if (peak < 0.002) discard;
-          gl_FragColor = vec4(min(color, vec3(0.94)), 1.0);
+          gl_FragColor = vec4(min(color, vec3(1.0)), 1.0);
         }
       `,
     });
