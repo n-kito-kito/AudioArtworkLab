@@ -236,11 +236,11 @@ const UNIFIED2 = {
   /** Spatial の素材重畳だけを音なしで確認する独立 Study。 */
   spatialMaterialAnchorStudy: {
     maximumCount: 5,
-    count: 4,
-    floor: 0.012,
+    count: 5,
+    floor: 0.01,
     floorWidth: 0.035,
-    gamma: 0.72,
-    intensity: 1.35,
+    gamma: 0.6,
+    intensity: 1.85,
     edgeFadeStart: 0.16,
   },
 
@@ -796,10 +796,11 @@ export class LightUnified2 implements LabExpression {
     add('aLevel', levels, 1);
 
     const layers = [
-      { x: -0.12, y: 0.02, z: -8.2, w: 1.42, h: 0.42, tile: 1, cx: 0.46, cy: 0.52, crop: 0.2, angle: -0.18, color: [0.38, 0.88, 0.58], level: 0.9 },
-      { x: 0.08, y: 0.08, z: -8.45, w: 0.74, h: 1.08, tile: 4, cx: 0.55, cy: 0.47, crop: 0.24, angle: 0.62, color: [0.5, 0.62, 1.0], level: 0.82 },
-      { x: 0.16, y: -0.1, z: -8.7, w: 1.62, h: 0.34, tile: 6, cx: 0.42, cy: 0.56, crop: 0.17, angle: 0.24, color: [0.92, 0.42, 0.7], level: 0.76 },
-      { x: -0.04, y: -0.05, z: -8.28, w: 0.82, h: 0.78, tile: 8, cx: 0.51, cy: 0.44, crop: 0.28, angle: -0.78, color: [0.74, 0.88, 0.54], level: 0.88 },
+      { x: -0.06, y: 0.02, z: -8.2, w: 1.75, h: 0.52, tile: 1, cx: 0.46, cy: 0.52, crop: 0.2, angle: -0.18, color: [0.62, 1.0, 0.76], level: 1.0 },
+      { x: 0.02, y: 0.04, z: -8.45, w: 0.9, h: 1.25, tile: 4, cx: 0.55, cy: 0.47, crop: 0.24, angle: 0.62, color: [0.68, 0.76, 1.0], level: 0.95 },
+      { x: 0.07, y: -0.04, z: -8.7, w: 1.95, h: 0.42, tile: 6, cx: 0.42, cy: 0.56, crop: 0.17, angle: 0.24, color: [1.0, 0.62, 0.88], level: 0.9 },
+      { x: -0.02, y: -0.02, z: -8.28, w: 1.05, h: 0.92, tile: 8, cx: 0.51, cy: 0.44, crop: 0.28, angle: -0.78, color: [0.92, 1.0, 0.74], level: 1.0 },
+      { x: 0.01, y: 0.01, z: -8.36, w: 1.25, h: 0.58, tile: 9, cx: 0.49, cy: 0.5, crop: 0.28, angle: 0.08, color: [0.92, 1.0, 0.92], level: 1.0 },
     ] as const;
 
     layers.forEach((layer, index) => {
