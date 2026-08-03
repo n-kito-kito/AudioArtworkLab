@@ -320,10 +320,18 @@ CoreはCross Rayが無くても単独の光源として成立させる。Cross R
 
 2026-08-03時点で、過去資産のRecovery表示を保持したまま、共通描画構造へ
 Core Presence / Spatial Spread / Persistence / Renewalの4軸を実装済みである。
-Spatial / Reactive / Lab2 / DriftをRenderer切り替えではなく、4軸上の開始地点として置く工程と、
-Spatial / Lab2から回収した共通カラー構造まで実装済みである。現在フェーズはドナー由来の
-素材色・連続分光を確認する段階、次フェーズは共通の光量と素材面積を回収する段階である。
-Audio Mappingは光素材の見た目が成立した後に接続する。
+Spatial / Reactive / Lab2 / DriftをRenderer切り替えではなく、4軸上の開始地点として置く工程、
+Spatial / Lab2から回収した共通カラー構造、共通の光量と素材面積まで実装済みである。
+現在フェーズは光素材の基盤を確定する段階、次フェーズは共通パラメーターへの
+Audio Mapping接続である。旧Spatial固有のBloom / Exposureは素材へ焼き込まず、Effect側で扱う。
+
+### 共通の光量と素材面積
+
+旧Spatialの既定Intensity 2.2、旧Lab2の1.6に対してLight Unified 2が1.0だったため、
+共通既定値を1.45へ引き上げる。Scaleは0.50から0.62、Core Sizeは0.40から0.48へ広げ、
+色を過剰に濃くせず、素材が重なる面積と加算結果によって白熱を強くする。
+Intensityの上限は2から3へ広げるが、新しいスライダーは追加しない。
+Recoveryのドナー描画値とSeamless 4軸の意味は変更しない。
 
 ### 共通のRGB分光
 

@@ -292,18 +292,20 @@ const UNIFIED2 = {
 
   defaults: {
     membranes: 4,
-    scale: 0.5,
+    // Spatial donorの重畳面積を回収しつつ、1枚で画面を覆い切らない中間値。
+    scale: 0.62,
     crop: 0.35,
     softness: 0.5,
     carve: 0.35,
     spatialSpread: 0.68,
     persistence: 0,
     renewal: 0,
-    coreSize: 0.4,
+    coreSize: 0.48,
     corePresence: 0.5,
     saturation: 0.55,
     sensitivity: 0.5,
-    intensity: 1,
+    // Spatial 2.2 / Lab2 1.6の間より少し低く置き、加算の白飛び余地を残す。
+    intensity: 1.45,
   },
 } as const;
 
@@ -335,7 +337,7 @@ const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: n
   corePresence: { min: 0, max: 1, step: 0.01 },
   saturation: { min: 0, max: 1, step: 0.01 },
   sensitivity: { min: 0, max: 1, step: 0.01 },
-  intensity: { min: 0, max: 2, step: 0.01 },
+  intensity: { min: 0, max: 3, step: 0.01 },
 };
 
 const clamp = (value: number, low: number, high: number): number =>
