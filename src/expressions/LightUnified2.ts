@@ -225,6 +225,14 @@ const UNIFIED2 = {
     releaseSeconds: 0.65,
   },
 
+  /** Lab2 の中心光だけを音なしで確認する独立 Study。 */
+  lab2CoreStudy: {
+    depth: 8.4,
+    halfWidth: 2.4,
+    halfHeight: 1.35,
+    intensity: 0.92,
+  },
+
   defaults: {
     membranes: 4,
     scale: 0.5,
@@ -344,6 +352,10 @@ export class LightUnified2 implements LabExpression {
   private fragmentMesh: THREE.Mesh | null = null;
   private fragmentPreview: 'off' | 'static' | 'audio' = 'off';
   private fragmentLevel = 0;
+  private lab2CoreStudyPreview: 'off' | 'static' = 'off';
+  private lab2CoreStudyGeometry: THREE.PlaneGeometry | null = null;
+  private lab2CoreStudyMaterial: THREE.ShaderMaterial | null = null;
+  private lab2CoreStudyMesh: THREE.Mesh | null = null;
   private placeholder: THREE.DataTexture | null = null;
   private atlas: PrismAtlas | null = null;
   private pipeline: EffectPipeline | null = null;
@@ -424,6 +436,7 @@ export class LightUnified2 implements LabExpression {
     this.buildCoreMesh();
     this.buildHazeStudyMesh();
     this.buildFragmentStudyMesh();
+    this.buildLab2CoreStudyMesh();
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
@@ -431,6 +444,7 @@ export class LightUnified2 implements LabExpression {
     if (this.coreMesh) this.scene.add(this.coreMesh);
     if (this.hazeMesh) this.scene.add(this.hazeMesh);
     if (this.fragmentMesh) this.scene.add(this.fragmentMesh);
+    if (this.lab2CoreStudyMesh) this.scene.add(this.lab2CoreStudyMesh);
 
     this.pipeline = new EffectPipeline(context.renderer, this.scene, this.camera, this.effects);
 
@@ -633,6 +647,74 @@ export class LightUnified2 implements LabExpression {
     this.fragmentMesh.visible = this.fragmentPreview === 'static';
     this.fragmentMesh.frustumCulled = false;
     this.fragmentMesh.renderOrder = 2;
+  }
+
+  /** Lab2 の白い中心・細い十字光・微かなプリズム色だけを確認する静止 Study。 */
+  private buildLab2CoreStudyMesh(): void {
+    const study = UNIFIED2.lab2CoreStudy;
+    const geometry = new THREE.PlaneGeometry(2, 2);
+    const material = new THREE.ShaderMaterial({
+      uniforms: { uIntensity: { value: study.intensity } },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+      vertexShader: /* glsl */ `
+        varying vec2 vLocal;
+        void main() {
+          vLocal = position.xy;
+          vec3 world = vec3(
+            position.x * ${study.halfWidth.toFixed(4)},
+            position.y * ${study.halfHeight.toFixed(4)},
+            -${study.depth.toFixed(4)}
+          );
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform float uIntensity;
+        varying vec2 vLocal;
+
+        float ellipse(vec2 point, vec2 radius) {
+          vec2 q = point / radius;
+          return exp(-dot(q, q) * 2.3);
+        }
+
+        void main() {
+          vec2 p = vLocal;
+          float edge = smoothstep(0.0, 0.16, 1.0 - max(abs(p.x), abs(p.y)));
+
+          float whiteCore = ellipse(p, vec2(0.055, 0.078));
+          float horizontal = exp(-abs(p.y) * 150.0) * exp(-abs(p.x) * 3.8);
+          float vertical = exp(-abs(p.x) * 180.0) * exp(-abs(p.y) * 4.8);
+
+          float greenPrism = ellipse(p - vec2(0.035, 0.012), vec2(0.15, 0.075));
+          float bluePrism = ellipse(p + vec2(0.03, 0.018), vec2(0.12, 0.095));
+          float greenRay = exp(-abs(p.y - 0.012) * 105.0) * exp(-abs(p.x) * 4.6);
+          float blueRay = exp(-abs(p.x + 0.012) * 115.0) * exp(-abs(p.y) * 5.4);
+
+          vec3 color = vec3(whiteCore * 0.86);
+          color += vec3(0.72, 0.84, 0.78) * horizontal * 0.34;
+          color += vec3(0.78, 0.84, 0.92) * vertical * 0.28;
+          color += vec3(0.15, 0.72, 0.42) * (greenPrism * 0.18 + greenRay * 0.08);
+          color += vec3(0.10, 0.32, 0.88) * (bluePrism * 0.2 + blueRay * 0.09);
+          color *= edge * uIntensity;
+
+          float peak = max(color.r, max(color.g, color.b));
+          if (peak < 0.002) discard;
+          gl_FragColor = vec4(min(color, vec3(0.94)), 1.0);
+        }
+      `,
+    });
+
+    this.lab2CoreStudyGeometry = geometry;
+    this.lab2CoreStudyMaterial = material;
+    this.lab2CoreStudyMesh = new THREE.Mesh(geometry, material);
+    this.lab2CoreStudyMesh.visible = false;
+    this.lab2CoreStudyMesh.frustumCulled = false;
+    this.lab2CoreStudyMesh.renderOrder = 3;
   }
 
   // ---------------------------------------------------------------- 描画
@@ -1180,7 +1262,20 @@ export class LightUnified2 implements LabExpression {
     const audio = this.context?.audioEngine.getParameters() ?? {};
     this.updateHazeStudy(clamp01(audio.volume ?? 0), delta);
     this.updateFragmentStudy(clamp01(audio.volume ?? 0), delta);
+    this.updateLab2CoreStudy();
     this.pipeline?.update(audio, elapsed);
+  }
+
+  /** Study中は既存レイヤーを描画せず、静止Coreだけを黒背景に表示する。 */
+  private updateLab2CoreStudy(): void {
+    const active = this.lab2CoreStudyPreview === 'static';
+    if (this.lab2CoreStudyMesh) this.lab2CoreStudyMesh.visible = active;
+    if (this.mesh) this.mesh.visible = !active;
+    if (this.coreMesh) this.coreMesh.visible = !active;
+    if (this.hazeMesh) this.hazeMesh.visible = !active && this.hazePreview !== 'off';
+    if (this.fragmentMesh) {
+      this.fragmentMesh.visible = !active && this.fragmentPreview !== 'off';
+    }
   }
 
   /** 靄の第 2 段。連続した音量だけを明るさへ繋ぎ、形・位置・色はまだ動かさない。 */
@@ -1360,6 +1455,17 @@ export class LightUnified2 implements LabExpression {
     const study = 'Study preview';
     return [
       {
+        key: 'lab2CoreStudyPreview',
+        label: 'Lab2 Core Study (静止確認)',
+        group: study,
+        type: 'select',
+        options: [
+          { value: 'off', label: 'Off' },
+          { value: 'static', label: 'Static' },
+        ],
+        value: this.lab2CoreStudyPreview,
+      },
+      {
         key: 'hazePreview',
         label: 'Haze (音なし静止確認)',
         group: study,
@@ -1398,6 +1504,11 @@ export class LightUnified2 implements LabExpression {
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    if (key === 'lab2CoreStudyPreview' && (value === 'off' || value === 'static')) {
+      this.lab2CoreStudyPreview = value;
+      this.updateLab2CoreStudy();
+      return;
+    }
     if (key === 'hazePreview' && (value === 'off' || value === 'static' || value === 'audio')) {
       this.hazePreview = value;
       this.hazeLevel = value === 'static' ? 1 : 0;
@@ -1432,12 +1543,15 @@ export class LightUnified2 implements LabExpression {
     this.hazeMaterial?.dispose();
     this.fragmentGeometry?.dispose();
     this.fragmentMaterial?.dispose();
+    this.lab2CoreStudyGeometry?.dispose();
+    this.lab2CoreStudyMaterial?.dispose();
     this.placeholder?.dispose();
     this.atlas?.texture.dispose();
     if (this.mesh && this.scene) this.scene.remove(this.mesh);
     if (this.coreMesh && this.scene) this.scene.remove(this.coreMesh);
     if (this.hazeMesh && this.scene) this.scene.remove(this.hazeMesh);
     if (this.fragmentMesh && this.scene) this.scene.remove(this.fragmentMesh);
+    if (this.lab2CoreStudyMesh && this.scene) this.scene.remove(this.lab2CoreStudyMesh);
     this.cores.length = 0;
     this.membranes.length = 0;
     this.pipeline = null;
@@ -1451,6 +1565,10 @@ export class LightUnified2 implements LabExpression {
     this.hazeMesh = null;
     this.fragmentGeometry = null;
     this.fragmentMaterial = null;
+    this.fragmentMesh = null;
+    this.lab2CoreStudyGeometry = null;
+    this.lab2CoreStudyMaterial = null;
+    this.lab2CoreStudyMesh = null;
     this.fragmentMesh = null;
     this.placeholder = null;
     this.atlas = null;
