@@ -320,8 +320,17 @@ CoreはCross Rayが無くても単独の光源として成立させる。Cross R
 
 2026-08-03時点で、過去資産のRecovery表示を保持したまま、共通描画構造へ
 Core Presence / Spatial Spread / Persistence / Renewalの4軸を実装済みである。
-現在フェーズでは、Spatial / Reactive / Lab2 / DriftをRenderer切り替えではなく、
-4軸上の開始地点として検証する。次フェーズは、共通パラメーターへのAudio Mapping接続である。
+Spatial / Reactive / Lab2 / DriftをRenderer切り替えではなく、4軸上の開始地点として置く工程と、
+共通のRGB分光構造まで実装済みである。現在フェーズは分光後の見た目を確認する段階、
+次フェーズは共通パラメーターへのAudio Mapping接続である。
+
+### 共通のRGB分光
+
+光全体へ単色Tintを一度だけ掛ける方式を完成形にしない。同じprismAtlas素材をRGBごとに
+僅かに異なる位置から読み、素材の線、縁、屈折部分にだけ色差を生む。RGBが重なる部分と
+独立Coreの焦点は白く保つ。音色から得るTintは分光した各色の割合を偏らせる役割に限定し、
+全面を同じ色へ置き換えない。Saturation 0では読み取り位置の差がなくなり白へ戻り、
+値を上げるほど色差が広がる。専用スライダーは増やさない。
 
 ### 回収・Studyの履歴
 

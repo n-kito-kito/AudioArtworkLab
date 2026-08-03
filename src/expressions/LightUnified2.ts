@@ -49,8 +49,8 @@ import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
  *   **0 = 起点へ集中 ⇄ 1 = 3D空間へ分散・重畳**を連続に行き来する。
  *
  * 色は**コアと膜が 1 つの色相状態を共有**する（音色 = centroid と帯域バランスから作る）。
- * 色を作っている場所は `resolveTint()` の 1 箇所だけで、両方のシェーダーは
- * その結果 `uTint` を受け取るだけ。
+ * `resolveTint()` は全体の色調バランスだけを作り、各シェーダーは同じ素材をRGBごとに
+ * 僅かに異なる位置から読む。これにより、白い焦点を残したまま素材の線・端だけが分光する。
  *
  * **無音 = 黒（PRD D5）。** イベントが無ければ生きている光が 0 個になり、
  * どちらのメッシュも `instanceCount = 0` になるので 1 画素も描かれない。
@@ -170,6 +170,9 @@ const UNIFIED2 = {
      * フレームごとの centroid のばらつきで色がちらつくのを抑えるだけ。
      */
     hueTimeConstant: 0.25,
+    /** 素材セル内でRGBを読む位置の差。色を塗らず、素材の縁でだけ分光を起こす。 */
+    membraneDispersion: 0.018,
+    coreDispersion: 0.012,
   },
 
   // ---- コア ----
@@ -1457,6 +1460,7 @@ export class LightUnified2 implements LabExpression {
         },
         // **コアと共有する色。** 作っているのは `resolveTint()` の 1 箇所だけ。
         uTint: { value: this.tint },
+        uDispersion: { value: UNIFIED2.defaults.saturation },
         uIntensity: { value: UNIFIED2.defaults.intensity },
         uInset: { value: UNIFIED2.cellInset },
       },
@@ -1495,6 +1499,7 @@ export class LightUnified2 implements LabExpression {
         uniform vec2 uGrid;
         uniform vec4 uShape;
         uniform vec3 uTint;
+        uniform float uDispersion;
         uniform float uIntensity;
         uniform float uInset;
         varying vec2 vLocal;
@@ -1517,16 +1522,29 @@ export class LightUnified2 implements LabExpression {
           vec2 cell = clamp(vCrop.xy + q * vCrop.zw, uInset, 1.0 - uInset);
           float column = mod(vTile, uGrid.x);
           float row = floor(vTile / uGrid.x);
-          vec2 atlasUv = (vec2(column, row) + cell) / uGrid;
-          vec3 source = texture2D(uAtlas, atlasUv).rgb;
+          // ④ 分光。同じ素材をRGBごとに僅かに異なる位置から読む。
+          //    面全体を虹色にせず、素材の線や屈折端でだけ色が分かれる。
+          vec2 dispersion = vec2(${UNIFIED2.color.membraneDispersion.toFixed(4)}, -${(UNIFIED2.color.membraneDispersion * 0.58).toFixed(4)})
+            * clamp(uDispersion, 0.0, 1.0);
+          vec2 cellR = clamp(cell + dispersion, uInset, 1.0 - uInset);
+          vec2 cellB = clamp(cell - dispersion, uInset, 1.0 - uInset);
+          vec3 sourceR = texture2D(uAtlas, (vec2(column, row) + cellR) / uGrid).rgb;
+          vec3 sourceG = texture2D(uAtlas, (vec2(column, row) + cell) / uGrid).rgb;
+          vec3 sourceB = texture2D(uAtlas, (vec2(column, row) + cellB) / uGrid).rgb;
+          vec3 spectral = vec3(
+            dot(sourceR, vec3(0.2126, 0.7152, 0.0722)),
+            dot(sourceG, vec3(0.2126, 0.7152, 0.0722)),
+            dot(sourceB, vec3(0.2126, 0.7152, 0.0722))
+          );
+          spectral *= smoothstep(vec3(uShape.y), vec3(uShape.y + uShape.z), spectral);
+          spectral = pow(max(spectral, vec3(0.0)), vec3(uShape.w));
 
-          // ④ 素材輝度。**輝度の源はここだけ。** 敷居も曲げも 0 を 0 のまま通す。
-          float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
-          luminance *= smoothstep(uShape.y, uShape.y + uShape.z, luminance);
-          luminance = pow(max(luminance, 0.0), uShape.w);
-
-          // ⑤ 色 × 素材輝度 × ビネット × 振幅 × 強度。これ以外は掛けない。
-          vec3 color = uTint * luminance * window * max(vLevel, 0.0) * uIntensity;
+          // 重なったRGBは白熱として残し、分離した差分だけに音色の偏りを与える。
+          float whiteOverlap = min(spectral.r, min(spectral.g, spectral.b));
+          vec3 fringe = max(spectral - vec3(whiteOverlap), vec3(0.0));
+          vec3 tintBias = mix(vec3(1.0), max(uTint, vec3(0.18)), 0.42);
+          vec3 color = (vec3(whiteOverlap) + fringe * tintBias)
+            * window * max(vLevel, 0.0) * uIntensity;
           gl_FragColor = vec4(max(color, 0.0), 1.0);
         }
       `,
@@ -1605,6 +1623,7 @@ export class LightUnified2 implements LabExpression {
         },
         // **膜と共有する色。** 同じ `THREE.Color` の実体を両方が指す。
         uTint: { value: this.tint },
+        uDispersion: { value: UNIFIED2.defaults.saturation },
         uIntensity: { value: UNIFIED2.defaults.intensity },
       },
       transparent: true,
@@ -1641,6 +1660,7 @@ export class LightUnified2 implements LabExpression {
         uniform vec4 uCore;
         uniform vec4 uCoreCrop;
         uniform vec3 uTint;
+        uniform float uDispersion;
         uniform float uIntensity;
         varying vec2 vLocal;
         varying float vTile;
@@ -1670,19 +1690,32 @@ export class LightUnified2 implements LabExpression {
           );
           float column = mod(vTile, uGrid.x);
           float row = floor(vTile / uGrid.x);
-          vec3 source = texture2D(uAtlas, (vec2(column, row) + cell) / uGrid).rgb;
-          float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
-          luminance *= smoothstep(uCoreCrop.x, uCoreCrop.x + uCoreCrop.y, luminance);
-          float material = luminance * uCore.z;
+          vec2 dispersion = vec2(${UNIFIED2.color.coreDispersion.toFixed(4)}, -${(UNIFIED2.color.coreDispersion * 0.58).toFixed(4)})
+            * clamp(uDispersion, 0.0, 1.0);
+          vec2 cellR = clamp(cell + dispersion, uCoreCrop.w, 1.0 - uCoreCrop.w);
+          vec2 cellB = clamp(cell - dispersion, uCoreCrop.w, 1.0 - uCoreCrop.w);
+          vec3 sourceR = texture2D(uAtlas, (vec2(column, row) + cellR) / uGrid).rgb;
+          vec3 sourceG = texture2D(uAtlas, (vec2(column, row) + cell) / uGrid).rgb;
+          vec3 sourceB = texture2D(uAtlas, (vec2(column, row) + cellB) / uGrid).rgb;
+          vec3 material = vec3(
+            dot(sourceR, vec3(0.2126, 0.7152, 0.0722)),
+            dot(sourceG, vec3(0.2126, 0.7152, 0.0722)),
+            dot(sourceB, vec3(0.2126, 0.7152, 0.0722))
+          );
+          material *= smoothstep(vec3(uCoreCrop.x), vec3(uCoreCrop.x + uCoreCrop.y), material);
+          material *= uCore.z;
 
-          // ③ **加算。** 素材は軸のどこでも居て、変わるのは芯の量だけ（分岐は無い）。
-          float mask = material + ellipse;
+          // ③ **加算。** 独立コアは常に白。素材のずれた縁だけが複数色になる。
+          float whiteOverlap = min(material.r, min(material.g, material.b));
+          vec3 fringe = max(material - vec3(whiteOverlap), vec3(0.0));
+          vec3 tintBias = mix(vec3(1.0), max(uTint, vec3(0.18)), 0.42);
+          vec3 light = vec3(ellipse + whiteOverlap) + fringe * tintBias;
 
           // ④ 素材側に要る円窓。板の四角い輪郭を消すための掛け算で、輝度は足さない。
           float window = 1.0 - smoothstep(uCore.w, 1.0, length(p));
 
-          // **色は膜と共有**（uTint）。コアの有無は Core size ＝ 板のスケールが決める。
-          vec3 color = uTint * mask * window * max(vLevel, 0.0) * uIntensity;
+          // コアの有無は Core size ＝ 板のスケールが決める。
+          vec3 color = light * window * max(vLevel, 0.0) * uIntensity;
           gl_FragColor = vec4(max(color, 0.0), 1.0);
         }
       `,
@@ -2051,6 +2084,7 @@ export class LightUnified2 implements LabExpression {
         mix(UNIFIED2.gammaSharp, UNIFIED2.gammaFoggy, softness),
       );
       material.uniforms.uIntensity!.value = intensity;
+      material.uniforms.uDispersion!.value = clamp01(this.params.saturation);
     }
 
     const core = this.coreMaterial;
@@ -2059,6 +2093,7 @@ export class LightUnified2 implements LabExpression {
       // **コアの有無はここでは決めない**（大きさが決める）。
       (core.uniforms.uCore!.value as THREE.Vector4).x = clamp01(this.params.corePresence);
       core.uniforms.uIntensity!.value = intensity;
+      core.uniforms.uDispersion!.value = clamp01(this.params.saturation);
     }
   }
 
