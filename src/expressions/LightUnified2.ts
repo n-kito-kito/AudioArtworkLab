@@ -558,6 +558,7 @@ export class LightUnified2 implements LabExpression {
     this.reactiveRecovery.setup(context);
     this.reactiveRecovery.setAspect(this.aspectId, this.aspectRatio);
     this.reactiveRecovery.setZoom(this.zoom);
+    this.syncCommonIntensity();
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
@@ -1924,6 +1925,22 @@ export class LightUnified2 implements LabExpression {
     );
   }
 
+  /**
+   * 共通値1で各ドナー本来の光量を保ち、0..2を同じ相対倍率として渡す。
+   * ドナー固有の露出・Bloom・層ごとの濃度は変更しない。
+   */
+  private syncCommonIntensity(): void {
+    const factor = clamp(
+      this.params.intensity / Math.max(UNIFIED2.defaults.intensity, 1e-4),
+      0,
+      2,
+    );
+    this.lab2AssemblyLevels.globalIntensity = factor;
+    this.syncLab2Assembly();
+    this.spatialRecovery?.setExpressionParam('intensity', 2.2 * factor);
+    this.reactiveRecovery?.setExpressionParam('intensity', 2 * factor);
+  }
+
   /** Recoveryは比較用の一時表示なので、UI上も常に1つだけを選ぶ。 */
   private activeRecoveryPreview(): RecoveryPreview {
     if (this.reactiveRecoveryPreview !== 'off') return 'reactive-audio';
@@ -2156,7 +2173,8 @@ export class LightUnified2 implements LabExpression {
     });
     const membrane = '膜（素材が形）';
     const core = 'コア（打撃で生まれる）';
-    const common = '色と音';
+    const common = 'Common';
+    const unifiedSpecific = 'Light Unified 2 / Color & Trigger';
     const study = 'Study preview';
     const recovery = 'Development / Recovery';
     const params: ExpressionParam[] = [
@@ -2219,15 +2237,6 @@ export class LightUnified2 implements LabExpression {
         max: 2,
         step: 0.01,
         value: this.lab2AssemblyLevels.hazeCurtain,
-      },
-      {
-        key: 'lab2AssemblyGlobalIntensity',
-        label: 'Global Intensity (Assembly)',
-        group: recovery,
-        min: 0,
-        max: 2,
-        step: 0.01,
-        value: this.lab2AssemblyLevels.globalIntensity,
       },
       {
         key: 'lab2AssemblyRed',
@@ -2383,9 +2392,9 @@ export class LightUnified2 implements LabExpression {
       row('membranes', 'Membranes (1 打撃で生む枚数)', membrane),
       row('coreForm', 'Core form (手続きの芯 ⇄ 素材が形)', core),
       row('coreSize', 'Core size (0 = コアを消す ⇄ 大)', core),
-      row('saturation', 'Saturation (0 = 白 ⇄ 1 = 色が濃い)', common),
-      row('sensitivity', 'Sensitivity (発火の感度)', common),
-      row('intensity', 'Intensity (全体の強度)', common),
+      row('intensity', 'Global Intensity', common),
+      row('saturation', 'Saturation (0 = 白 ⇄ 1 = 色が濃い)', unifiedSpecific),
+      row('sensitivity', 'Sensitivity (発火の感度)', unifiedSpecific),
     ];
     return params.filter((param) => param.group !== study);
   }
@@ -2463,13 +2472,17 @@ export class LightUnified2 implements LabExpression {
       return;
     }
     if (typeof value === 'number') {
+      if (key === 'lab2AssemblyGlobalIntensity') {
+        this.params.intensity = clamp(value, PARAM_RANGES.intensity.min, PARAM_RANGES.intensity.max);
+        this.syncCommonIntensity();
+        return;
+      }
       const assemblyLevelKey = {
         lab2AssemblyCoreLevel: 'core',
         lab2AssemblyCrossRayLevel: 'crossRay',
         lab2AssemblyFragmentLevel: 'fragment',
         lab2AssemblyFanSpillLevel: 'fanSpill',
         lab2AssemblyHazeCurtainLevel: 'hazeCurtain',
-        lab2AssemblyGlobalIntensity: 'globalIntensity',
       } as const;
       const target = assemblyLevelKey[key as keyof typeof assemblyLevelKey];
       if (target) {
@@ -2578,6 +2591,7 @@ export class LightUnified2 implements LabExpression {
     const range = PARAM_RANGES[typed];
     // どの軸も次のフレームの書き出しで効く。生きている光は作り直さない。
     this.params[typed] = clamp(value, range.min, range.max);
+    if (typed === 'intensity') this.syncCommonIntensity();
   }
 
   dispose(): void {

@@ -162,6 +162,10 @@ UIはアプリ全体の`DESIGN.md`に定める段階開示へ従う。Light固�
 共通らしい名前を持つだけではCommonへ昇格させない。複数Styleで同じ値を動かし、同じ意味で
 破綻なく利用できることを確認してからCommonにする。
 
+最初の共通候補として`Global Intensity`を接続する。値1では各ドナー本来の光量を維持し、
+0..2をLab2 / Spatial / Reactive / Light Unified 2へ同じ相対倍率として渡す。
+ドナー固有のExposure・Bloom・Element比率は変えない。手動操作で確認した後にのみAudio Mappingへ進む。
+
 ### ボタン／Presetにするもの
 
 - 構造差が検証されたStyle Preset（現時点の候補はSpatial系 / Lab2 / Drift）
