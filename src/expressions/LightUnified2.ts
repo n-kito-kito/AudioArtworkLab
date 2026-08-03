@@ -45,8 +45,8 @@ import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
  *
  * - **コアが 1 個生まれる**（短い寿命）。位置はイベント番号のハッシュから決まり、
  *   これがそのイベントの**起点**になる。素材も発光ごとに変わる。
- * - **膜が `Membranes` 枚生まれる**（長い寿命）。位置は `Anchor` 軸で
- *   **0 = 画面内に散る ⇄ 1 = 起点から生まれる**を連続に行き来する。
+ * - **膜が `Membranes` 枚生まれる**（長い寿命）。位置と奥行きは `Spatial Spread` 軸で
+ *   **0 = 起点へ集中 ⇄ 1 = 3D空間へ分散・重畳**を連続に行き来する。
  *
  * 色は**コアと膜が 1 つの色相状態を共有**する（音色 = centroid と帯域バランスから作る）。
  * 色を作っている場所は `resolveTint()` の 1 箇所だけで、両方のシェーダーは
@@ -116,12 +116,6 @@ const UNIFIED2 = {
   elongationMaximum: 2.2,
   /** 画面内での散らばり（可視半径に対する割合）。膜の散る側とコアの起点で共有。 */
   positionSpread: 0.55,
-  /**
-   * **Anchor 1 でも残す散らばり。**
-   * 0 にすると 1 イベントの膜が完全に重なって 1 枚に見えるので、わずかに残す。
-   */
-  anchorResidue: 0.08,
-
   /** 時間特性。**1 組だけ**（ストロボは持たない）。 */
   envelope: {
     /** コアは瞬間的に立ち上がってすぐ落ちる。 */
@@ -278,7 +272,7 @@ const UNIFIED2 = {
     crop: 0.35,
     softness: 0.5,
     carve: 0.35,
-    anchor: 0.35,
+    spatialSpread: 0.68,
     coreSize: 0.4,
     corePresence: 0.5,
     saturation: 0.55,
@@ -293,7 +287,7 @@ type Unified2ParamKey =
   | 'crop'
   | 'softness'
   | 'carve'
-  | 'anchor'
+  | 'spatialSpread'
   | 'coreSize'
   | 'corePresence'
   | 'saturation'
@@ -306,7 +300,7 @@ const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: n
   crop: { min: 0, max: 1, step: 0.01 },
   softness: { min: 0, max: 1, step: 0.01 },
   carve: { min: 0, max: 1, step: 0.01 },
-  anchor: { min: 0, max: 1, step: 0.01 },
+  spatialSpread: { min: 0, max: 1, step: 0.01 },
   coreSize: { min: 0, max: 1, step: 0.01 },
   corePresence: { min: 0, max: 1, step: 0.01 },
   saturation: { min: 0, max: 1, step: 0.01 },
@@ -1751,16 +1745,17 @@ export class LightUnified2 implements LabExpression {
     if (this.geometry) {
       const cropHalf = mix(UNIFIED2.cropNarrow, UNIFIED2.cropWide, clamp01(this.params.crop));
       const scale = mix(UNIFIED2.scaleSmall, UNIFIED2.scaleLarge, clamp01(this.params.scale));
-      // **Anchor。** 0 = 画面内に散る ⇄ 1 = 起点（コア）から生まれる。
-      // 1 でも散らばりをわずかに残す（残さないと 1 枚に見える）。
-      const toOrigin = clamp01(this.params.anchor) * (1 - UNIFIED2.anchorResidue);
+      // **Spatial Spread。** 0 = 起点へ集中 ⇄ 1 = 3D空間へ分散・重畳。
+      // 位置と奥行きを同じ意味で動かし、Core Presenceなど他の見え方は変えない。
+      const spatialSpread = clamp01(this.params.spatialSpread);
       const count = this.atlas ? this.membranes.length : 0;
       const tileCount = Math.max(this.atlas?.tiles.length ?? 1, 1);
 
       for (let index = 0; index < count; index++) {
         const light = this.membranes[index]!;
         const key = light.seed * 16 + light.slot;
-        const depth = mix(UNIFIED2.depthNear, UNIFIED2.depthFar, hash01(key, 11.3));
+        const scatteredDepth = mix(UNIFIED2.depthNear, UNIFIED2.depthFar, hash01(key, 11.3));
+        const depth = mix(UNIFIED2.core.depth, scatteredDepth, spatialSpread);
         const halfHeight = this.halfHeightAt(depth);
         const halfWidth = halfHeight * Math.max(this.aspectRatio, 0.01);
 
@@ -1768,8 +1763,16 @@ export class LightUnified2 implements LabExpression {
         const scatterX = (hash01(key, 1.7) * 2 - 1) * halfWidth * UNIFIED2.positionSpread;
         const scatterY = (hash01(key, 3.1) * 2 - 1) * halfHeight * UNIFIED2.positionSpread;
         const projection = depth / UNIFIED2.core.depth;
-        this.offsets[index * 3 + 0] = mix(scatterX, light.originX * projection, toOrigin);
-        this.offsets[index * 3 + 1] = mix(scatterY, light.originY * projection, toOrigin);
+        this.offsets[index * 3 + 0] = mix(
+          light.originX * projection,
+          scatterX,
+          spatialSpread,
+        );
+        this.offsets[index * 3 + 1] = mix(
+          light.originY * projection,
+          scatterY,
+          spatialSpread,
+        );
         this.offsets[index * 3 + 2] = -depth;
 
         // 板の縦横比。**細長い板が素材の線を異方的に引き伸ばす**（筋はこの副産物）。
@@ -2389,9 +2392,9 @@ export class LightUnified2 implements LabExpression {
       row('scale', 'Scale (小さい ⇄ 画面より大きい)', membrane),
       row('softness', 'Softness (鋭い＝明部だけ残る ⇄ 霧状＝暗部まで一様)', membrane),
       row('carve', 'Carve (緩いビネット＝素材が形 ⇄ 硬い円窓＝外形で切る)', membrane),
-      row('anchor', 'Anchor (画面内に散る ⇄ 起点から生まれる)', membrane),
       row('membranes', 'Membranes (1 打撃で生む枚数)', membrane),
       row('corePresence', 'Core Presence (素材白熱 ⇄ 独立コア)', seamless),
+      row('spatialSpread', 'Spatial Spread (起点へ集中 ⇄ 3D空間へ分散)', seamless),
       row('coreSize', 'Core Layer Size (0 = 層全体を消す ⇄ 大)', elements),
       row('intensity', 'Global Intensity', common),
       row('saturation', 'Saturation (0 = 白 ⇄ 1 = 色が濃い)', unifiedSpecific),
@@ -2404,6 +2407,11 @@ export class LightUnified2 implements LabExpression {
     // 旧Core formは向きが逆だった。保存済みプリセットだけを新しい意味へ変換する。
     if (key === 'coreForm' && typeof value === 'number') {
       this.params.corePresence = 1 - clamp01(value);
+      return;
+    }
+    // 旧Anchorは向きが逆だった。保存済みプリセットをSpatial Spreadへ移行する。
+    if (key === 'anchor' && typeof value === 'number') {
+      this.params.spatialSpread = 1 - clamp01(value);
       return;
     }
     if (key === 'recoveryPreview' && typeof value === 'string') {

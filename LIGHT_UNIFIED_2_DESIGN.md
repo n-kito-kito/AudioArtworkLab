@@ -45,6 +45,10 @@ Spatial / Reactive / Lab2 / Driftを固定された別Rendererとして選ぶこ
 Recoveryは過去表現そのものを表示する比較基準として維持し、Macro軸の影響を受けない。
 新しいPresetが崩れた場合に、ドナー本来の完成状態へいつでも戻って比較できるようにする。
 
+実装上の`Spatial Spread`は、イベントの起点に重なる状態を0、各Material Light Layerが
+画面内の位置と奥行きを持って分散する状態を1とする。位置と奥行きだけを連続制御し、
+Core Presence、光量、寿命、Bloomは変えない。旧`Anchor`の保存値は向きを反転して移行する。
+
 ### Origin Referenceと派生表現の関係
 
 Light Unified 2の最上位リファレンスは、開発初期に共有されたKLSRの光表現動画群である。
