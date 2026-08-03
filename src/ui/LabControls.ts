@@ -379,6 +379,30 @@ export class LabControls {
    */
   private expressionParamControl(parameter: ExpressionParam): HTMLElement {
     if (parameter.type === 'select') {
+      if (parameter.presentation === 'buttons') {
+        const fieldset = document.createElement('fieldset');
+        fieldset.className = 'segmented-control expression-preset-buttons';
+        const legend = document.createElement('legend');
+        legend.textContent = parameter.label;
+        fieldset.append(legend);
+        for (const option of parameter.options) {
+          const label = document.createElement('label');
+          const input = document.createElement('input');
+          input.type = 'radio';
+          input.name = `expression-param-${parameter.key}`;
+          input.value = option.value;
+          input.checked = option.value === parameter.value;
+          input.setAttribute('aria-label', option.label);
+          input.addEventListener('change', () => {
+            if (input.checked) this.composition.setExpressionParam?.(parameter.key, option.value);
+          });
+          const text = document.createElement('span');
+          text.textContent = option.label;
+          label.append(input, text);
+          fieldset.append(label);
+        }
+        return fieldset;
+      }
       const label = document.createElement('label');
       label.className = 'control-row control-row--inline';
       const text = document.createElement('span');

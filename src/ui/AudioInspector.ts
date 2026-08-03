@@ -248,6 +248,18 @@ export class AudioInspector {
         continue;
       }
       if (parameter.type === 'select') {
+        if (parameter.presentation === 'buttons') {
+          host.append(
+            this.segmented(
+              parameter.key,
+              parameter.label,
+              parameter.options,
+              parameter.value,
+              (next) => composition.setExpressionParam(parameter.key, next),
+            ),
+          );
+          continue;
+        }
         // 適応の on/off のような排他の切り替え。切り分け検証のために出す。
         host.append(
           this.select(parameter.label, parameter.options, parameter.value, (next) =>
@@ -487,6 +499,38 @@ export class AudioInspector {
     select.addEventListener('change', () => onChange(select.value));
     label.append(name, select);
     return label;
+  }
+
+  /** 頻繁に比較する少数の選択肢を、現在値が分かるボタン群として表示する。 */
+  private segmented(
+    key: string,
+    labelText: string,
+    options: readonly { readonly value: string; readonly label: string }[],
+    current: string,
+    onChange: (value: string) => void,
+  ): HTMLElement {
+    const fieldset = document.createElement('fieldset');
+    fieldset.className = 'segmented-control expression-preset-buttons';
+    const legend = document.createElement('legend');
+    legend.textContent = labelText;
+    fieldset.append(legend);
+    for (const option of options) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = `expression-param-${key}`;
+      input.value = option.value;
+      input.checked = option.value === current;
+      input.setAttribute('aria-label', option.label);
+      input.addEventListener('change', () => {
+        if (input.checked) onChange(option.value);
+      });
+      const text = document.createElement('span');
+      text.textContent = option.label;
+      label.append(input, text);
+      fieldset.append(label);
+    }
+    return fieldset;
   }
 
   /** LabControls と同じ見た目のスライダー 1 本。 */

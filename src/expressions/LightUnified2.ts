@@ -1929,7 +1929,7 @@ export class LightUnified2 implements LabExpression {
     if (this.reactiveRecoveryPreview !== 'off') return 'reactive-audio';
     if (this.spatialRecoveryPreview === 'audio') return 'spatial-audio';
     if (this.spatialRecoveryPreview === 'freeze') return 'spatial-freeze';
-    if (this.lab2AssemblyPreview !== 'off') return `lab2-${this.lab2AssemblyPreview}`;
+    if (this.lab2AssemblyPreview !== 'off') return 'lab2-all';
     return 'off';
   }
 
@@ -2162,20 +2162,16 @@ export class LightUnified2 implements LabExpression {
     const params: ExpressionParam[] = [
       {
         key: 'recoveryPreview',
-        label: 'Donor preview (reuse)',
+        label: 'Recovery preset',
         type: 'select',
+        presentation: 'buttons',
         group: recovery,
         options: [
           { value: 'off', label: 'Off' },
-          { value: 'reactive-audio', label: 'Reactive — Audio Composite' },
-          { value: 'spatial-audio', label: 'Spatial — Audio legacy' },
-          { value: 'spatial-freeze', label: 'Spatial — Freeze reference' },
-          { value: 'lab2-core', label: 'Lab2 — Core' },
-          { value: 'lab2-cross-ray', label: 'Lab2 — Cross Ray' },
-          { value: 'lab2-refraction-veil', label: 'Lab2 — Refraction / Veil' },
-          { value: 'lab2-fan-spill', label: 'Lab2 — Fan / Spill' },
-          { value: 'lab2-haze-curtain', label: 'Lab2 — Haze / Curtain' },
-          { value: 'lab2-all', label: 'Lab2 — All layers' },
+          { value: 'reactive-audio', label: 'Reactive' },
+          { value: 'spatial-audio', label: 'Spatial Audio' },
+          { value: 'spatial-freeze', label: 'Spatial Freeze' },
+          { value: 'lab2-all', label: 'Lab2 All' },
         ],
         value: this.activeRecoveryPreview(),
       },
@@ -2419,9 +2415,8 @@ export class LightUnified2 implements LabExpression {
       this.spatialRecovery?.setRecoveryMode(
         this.spatialRecoveryPreview === 'off' ? null : this.spatialRecoveryPreview,
       );
-      this.lab2AssemblyPreview = value.startsWith('lab2-')
-        ? value.slice('lab2-'.length) as Exclude<Lab2AssemblyPreview, 'off'>
-        : 'off';
+      // 過去の部品別値を読み込んだ場合も、現在のUIではAllへ集約する。
+      this.lab2AssemblyPreview = value.startsWith('lab2-') ? 'all' : 'off';
       this.syncLab2Assembly();
       return;
     }

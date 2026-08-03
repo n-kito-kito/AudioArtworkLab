@@ -429,6 +429,15 @@ select:focus-visible {
   background: var(--accent-soft);
 }
 
+.expression-preset-buttons {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+}
+
+.expression-preset-buttons label:last-child:nth-child(even) {
+  grid-column: 1 / -1;
+}
+
 .audio-panel {
   order: 2;
 }

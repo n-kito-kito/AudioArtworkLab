@@ -72,6 +72,8 @@ export interface ExpressionSelectOption {
 /** 排他の選択肢。UI は select を出し、選ばれた value を文字列で返す。 */
 export interface ExpressionSelectParam extends ExpressionParamBase {
   readonly type: 'select';
+  /** 選択肢が少なく、頻繁に切り替える場合はボタン群として表示する。 */
+  readonly presentation?: 'select' | 'buttons';
   readonly options: readonly ExpressionSelectOption[];
   readonly value: string;
 }
