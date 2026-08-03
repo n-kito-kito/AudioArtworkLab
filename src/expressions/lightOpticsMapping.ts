@@ -35,6 +35,7 @@ export type OpticalKind = 'core' | 'beam' | 'veil' | 'fan' | 'haze' | 'curtain' 
 export type OpticalGroup =
   | 'haze'
   | 'curtain'
+  | 'atmosphere'
   | 'skeleton'
   | 'core'
   | 'fragment'
@@ -1043,8 +1044,12 @@ export const buildOpticalRig = (
 ): OpticalLayerTraits[] => {
   const layers: OpticalLayerTraits[] = [];
   // 奥のものから順に積む（加算合成なので順序は見え方を変えないが、意図を残す）。
-  if (group === 'haze' || group === 'all') layers.push(...buildHaze(drive, viewport));
-  if (group === 'curtain' || group === 'all') layers.push(...buildCurtains(drive, viewport));
+  if (group === 'haze' || group === 'atmosphere' || group === 'all') {
+    layers.push(...buildHaze(drive, viewport));
+  }
+  if (group === 'curtain' || group === 'atmosphere' || group === 'all') {
+    layers.push(...buildCurtains(drive, viewport));
+  }
   if (group === 'skeleton' || group === 'all') layers.push(...buildSkeleton(drive, viewport));
   if (group === 'fragment' || group === 'all') layers.push(...buildFragments(drive, viewport));
   if (group === 'fan' || group === 'all') layers.push(...buildFan(drive));

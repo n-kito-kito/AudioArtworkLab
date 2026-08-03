@@ -55,6 +55,7 @@ import { loadPrismAtlas, type PrismAtlas, type PrismTile } from './prismAtlas';
 const GROUP_LABELS: Readonly<Record<OpticalGroup, string>> = {
   haze: 'Haze',
   curtain: 'Curtain',
+  atmosphere: 'Haze / Curtain',
   skeleton: 'Skeleton',
   core: 'Core',
   fragment: 'Fragment',
@@ -170,6 +171,12 @@ export class LightElementLab2 implements LabExpression {
   readonly name: string;
   readonly id: ExpressionId;
   readonly group: OpticalGroup;
+  /** Light Unified 2 の Assembly 確認時だけ、旧リグを別の分解単位で読む。 */
+  private assemblyGroup: OpticalGroup | null = null;
+  /** 旧Lab2の既定値を変えず、Assembly側からだけRGB比率を差し替える。 */
+  private assemblyChannelGain: readonly [number, number, number] | null = null;
+  /** Coreの焦点だけを白へ戻す量。旧Lab2では0のまま。 */
+  private assemblyCoreWhiteMix = 0;
 
   private readonly effects: Effect[];
   private theme: Theme;
@@ -406,6 +413,7 @@ export class LightElementLab2 implements LabExpression {
    * 利得は必ず 1 以下なので、白の予算（コアだけが白へ届く）は動かない。
    */
   private channelTilt(): readonly [number, number, number] {
+    if (this.assemblyChannelGain) return this.assemblyChannelGain;
     const manual = channelBalanceGain(this.params.channelBalance);
     if (this.driveMode !== 'audio' || this.channelDrive <= 0) return manual;
     const driven = this.audioDrive.channelGain();
@@ -425,7 +433,7 @@ export class LightElementLab2 implements LabExpression {
 
   /** 光学系を組み直す。見え方の判断は `lightOpticsMapping.ts` の中だけで起きる。 */
   private rebuildRig(): void {
-    const rig = buildOpticalRig(this.group, this.drive(), {
+    const rig = buildOpticalRig(this.activeGroup(), this.drive(), {
       aspectRatio: this.aspectRatio,
     });
     // 膜の表示トグルは開発用の A/B なので、対応そのものではなくここで間引く。
@@ -471,6 +479,7 @@ export class LightElementLab2 implements LabExpression {
         uGrid: { value: new THREE.Vector2(1, 1) },
         uIntensity: { value: LAB2.defaults.intensity },
         uChannelGain: { value: new THREE.Vector3(1, 1, 1) },
+        uCoreWhiteMix: { value: 0 },
         uOffset: { value: LAB2.defaults.channelOffset },
         uOffsetMode: { value: 0 },
         uDecorrelation: { value: LAB2.defaults.decorrelation },
@@ -532,6 +541,7 @@ export class LightElementLab2 implements LabExpression {
         uniform vec2 uGrid;
         uniform float uIntensity;
         uniform vec3 uChannelGain;
+        uniform float uCoreWhiteMix;
         uniform float uOffset;
         uniform float uOffsetMode;
         uniform float uDecorrelation;
@@ -783,6 +793,11 @@ export class LightElementLab2 implements LabExpression {
             ),
             0.0
           ) * uChannelGain;
+          // AssemblyのRGB検証でも、白へ到達できるCore焦点だけは無彩色を保つ。
+          // 既存Lab2はuCoreWhiteMix=0なので従来描画と完全に同じ。
+          float isCore = 1.0 - step(0.5, vTone.z);
+          float corePeak = max(channels.r, max(channels.g, channels.b));
+          channels = mix(channels, vec3(corePeak), isCore * uCoreWhiteMix);
           if (channels.r + channels.g + channels.b <= 0.0) discard;
 
           // **グローバル波長 H。** 層は H に小さなオフセットと勾配を足すだけなので、
@@ -906,6 +921,7 @@ export class LightElementLab2 implements LabExpression {
       // つまみ 0 で手動のまま、1 で完全に帯域駆動、中間はブレンド。
       const tilt = this.channelTilt();
       (material.uniforms.uChannelGain!.value as THREE.Vector3).set(tilt[0], tilt[1], tilt[2]);
+      material.uniforms.uCoreWhiteMix!.value = this.assemblyCoreWhiteMix;
       material.uniforms.uOffset!.value = this.params.channelOffset;
       material.uniforms.uOffsetMode!.value = this.offsetMode === 'radial' ? 0 : 1;
       material.uniforms.uDecorrelation!.value = this.lookValue('decorrelation');
@@ -918,6 +934,27 @@ export class LightElementLab2 implements LabExpression {
 
   render(): void {
     this.pipeline?.render();
+  }
+
+  /** 旧Lab2の描画実装を、Light Unified 2のAssembly分解表示へ再利用する。 */
+  setAssemblyView(
+    group: OpticalGroup,
+    channelGain: readonly [number, number, number],
+    coreWhiteMix = 0.9,
+  ): void {
+    this.assemblyGroup = group;
+    const maximum = Math.max(channelGain[0], channelGain[1], channelGain[2], 1e-4);
+    this.assemblyChannelGain = [
+      clamp(channelGain[0] / maximum, 0, 1),
+      clamp(channelGain[1] / maximum, 0, 1),
+      clamp(channelGain[2] / maximum, 0, 1),
+    ];
+    this.assemblyCoreWhiteMix = clamp(coreWhiteMix, 0, 1);
+    this.rebuildRig();
+  }
+
+  private activeGroup(): OpticalGroup {
+    return this.assemblyGroup ?? this.group;
   }
 
   resize(width: number, height: number): void {
@@ -1035,13 +1072,13 @@ export class LightElementLab2 implements LabExpression {
       this.driveMode === 'audio'
         ? `audio src ${levels.source.toFixed(2)} → sk ${levels.skeleton.toFixed(2)} / cu ${levels.curtain.toFixed(2)} / ha ${levels.haze.toFixed(2)} / pulse ${levels.corePulse.toFixed(2)} ×${levels.pulseCount}/${levels.strikeCount} / shape ${levels.coreShape} / arms ${levels.armMask} / frag ${levels.visibleFragments}/${levels.liveFragments} (×${levels.fragmentBirths}) / fan ${levels.fanPower.toFixed(2)} ×${levels.fanCount} / tone ${levels.timbre.toFixed(2)} → H${levels.hueState} ×${levels.hueSwitches} / tick ${levels.tick}`
         : `manual pulse ${this.params.corePulse.toFixed(2)}`;
-    return `Optics: ${GROUP_LABELS[this.group]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
+    return `Optics: ${GROUP_LABELS[this.activeGroup()]} — H ${hue} / ${drive} / layers ${this.layers.length}`;
   }
 
   /** 開発・検証用。`window.__lab` と Inspector から読む。 */
   getOpticsState(): LightElementLab2State {
     return {
-      group: this.group,
+      group: this.activeGroup(),
       layers: this.layers.length,
       whiteAllowedLayers: this.layers.filter((entry) => entry.whiteAllowed).length,
       // **いま効いている H**（Manual はつまみ・Audio は音色が選んだ状態）。
