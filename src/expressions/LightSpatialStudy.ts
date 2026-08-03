@@ -647,6 +647,9 @@ const decayShape = (t: number): number => {
   return (Math.exp(-k * t) - floor) / (1 - floor);
 };
 
+/** Light Unified 2 の回収確認からだけ使う運転モード。通常の単体表示は null のまま。 */
+export type SpatialRecoveryMode = 'audio' | 'freeze';
+
 export class LightSpatialStudy implements LabExpression {
   readonly animated = true;
   readonly name = 'Light Traces — Spatial Study';
@@ -794,6 +797,10 @@ export class LightSpatialStudy implements LabExpression {
   private lastBurstLights = 0;
   /** この曲で起きたバーストの回数（単調増加。無音でリセット）。 */
   private burstCount = 0;
+
+  /** Recovery専用。nullなら旧Spatial単体の更新経路を一切変えない。 */
+  private recoveryMode: SpatialRecoveryMode | null = null;
+  private recoveryFreezeNeedsBuild = false;
 
   private previousElapsed = -1;
   private lastBand: BandName | null = null;
@@ -1216,6 +1223,7 @@ export class LightSpatialStudy implements LabExpression {
         );
       }
       this.mapping.setTextures(prism.tiles);
+      if (this.recoveryMode === 'freeze') this.recoveryFreezeNeedsBuild = true;
     });
 
     // ---- 内部 Bloom（参照デモの UnrealBloomPass と同じ構成）----
@@ -1956,10 +1964,68 @@ export class LightSpatialStudy implements LabExpression {
     this.normalAttribute!.needsUpdate = true;
   }
 
+  /**
+   * 旧Spatialの完成済みMappingを固定入力で一度だけ進め、同じBurstを静止させる。
+   * 新しい描画や簡略版のシェーダーは作らず、Audio時と同じ生成経路を通す。
+   */
+  private rebuildRecoveryFreeze(): void {
+    this.cores.length = 0;
+    this.macros.length = 0;
+    this.scheduled.length = 0;
+    this.scheduledMacros.length = 0;
+    this.mapping.reset();
+    this.lastSustain = 0.72;
+
+    const event: BandLightEvent = {
+      time: 0,
+      band: 'mid',
+      strength: 0.9,
+      rawFlux: 0.78,
+      spectralCentroid: 0.61,
+      audioSeed: 0.314159,
+      eventCores: 1,
+      eventIndex: 17,
+      siblingIndex: 0,
+      snapshot: {
+        volume: 0.82,
+        bass: 0.5,
+        mid: 0.84,
+        treble: 0.65,
+        bandFlux: { bass: 0.42, mid: 0.78, treble: 0.58 },
+        winningBand: 'mid',
+        spectralCentroid: 0.61,
+        onsetStrength: 0.9,
+        spectralFlatness: 0.36,
+        audioSeed: 0.314159,
+        novelty: 0.74,
+        eventIndex: 17,
+      },
+    };
+
+    this.syncOptics();
+    this.scheduleBurst(event, 0);
+    const step = 1 / 120;
+    const fixedTime = 0.16;
+    for (let time = step; time <= fixedTime + 1e-6; time += step) {
+      this.releaseScheduled(time);
+      this.advanceCores(step);
+      this.advanceMacros(step);
+    }
+    this.syncInstances();
+    this.syncMacroInstances();
+    this.recoveryFreezeNeedsBuild = false;
+  }
+
   // ---------------------------------------------------------------- update
 
   update(elapsed: number): void {
     if (!this.context || !this.material) return;
+    if (this.recoveryMode === 'freeze') {
+      if (this.recoveryFreezeNeedsBuild) this.rebuildRecoveryFreeze();
+      const frozenAudio = { active: 0, volume: 0 };
+      this.pipeline?.update(frozenAudio, 0.16);
+      return;
+    }
     const audio = this.context.audioEngine.getParameters();
     this.material.uniforms.uIntensity!.value = this.params.intensity;
     const active = audio.active === 1;
@@ -2005,6 +2071,21 @@ export class LightSpatialStudy implements LabExpression {
     this.mapping.reset();
   }
 
+  /** Recoveryからだけ呼ぶ。単体表示はこのAPIを使わないため従来動作のまま。 */
+  setRecoveryMode(mode: SpatialRecoveryMode | null): void {
+    if (mode === this.recoveryMode) return;
+    this.recoveryMode = mode;
+    this.cores.length = 0;
+    this.macros.length = 0;
+    this.scheduled.length = 0;
+    this.scheduledMacros.length = 0;
+    this.previousElapsed = -1;
+    this.resetDetection();
+    this.syncInstances();
+    this.syncMacroInstances();
+    this.recoveryFreezeNeedsBuild = mode === 'freeze';
+  }
+
   render(): void {
     if (this.bloomComposer && this.displayMaterial) {
       this.bloomComposer.render();
@@ -2027,6 +2108,7 @@ export class LightSpatialStudy implements LabExpression {
     this.bloomComposer?.setSize(w, h);
     this.bloomPass?.setSize(w, h);
     this.pipeline?.resize(width, height);
+    if (this.recoveryMode === 'freeze') this.recoveryFreezeNeedsBuild = true;
   }
 
   // ---------------------------------------------------------------- LabExpression
@@ -2095,6 +2177,7 @@ export class LightSpatialStudy implements LabExpression {
       this.camera.aspect = this.aspectRatio;
       this.camera.updateProjectionMatrix();
     }
+    if (this.recoveryMode === 'freeze') this.recoveryFreezeNeedsBuild = true;
   }
 
   setDebugView(): void {
@@ -2321,5 +2404,7 @@ export class LightSpatialStudy implements LabExpression {
     this.normalAttribute = null;
     this.camera = null;
     this.context = null;
+    this.recoveryMode = null;
+    this.recoveryFreezeNeedsBuild = false;
   }
 }
