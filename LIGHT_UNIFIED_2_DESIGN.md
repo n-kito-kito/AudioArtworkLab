@@ -45,6 +45,18 @@ Spatial / Reactive / Lab2 / Driftを固定された別Rendererとして選ぶこ
 Recoveryは過去表現そのものを表示する比較基準として維持し、Macro軸の影響を受けない。
 新しいPresetが崩れた場合に、ドナー本来の完成状態へいつでも戻って比較できるようにする。
 
+`Start point`のSpatial / Reactive / Lab2 / Driftは、別Rendererへの切り替えではなく、
+上記4軸を既知の座標へ戻すボタンとする。色、素材、個別レイヤー、Effectの値は変更しない。
+4軸を手動で動かして開始座標から離れた状態は`Custom`と表示する。
+
+- Spatial: 素材の重なりを中心に、3D空間へ広く分散する
+- Reactive: 素材と独立コアを混ぜ、イベントで発生して消える
+- Lab2: 独立コアを強くし、光学内容を短周期で更新する
+- Drift: 光を常在させ、3D空間を漂わせる
+
+開始地点は完成形の境界ではない。途中の座標へ動かすことで各性質の混成状態を作れる。
+過去表現との厳密比較は引き続き`Development / Recovery`だけが担当する。
+
 実装上の`Spatial Spread`は、イベントの起点に重なる状態を0、各Material Light Layerが
 画面内の位置と奥行きを持って分散する状態を1とする。位置と奥行きだけを連続制御し、
 Core Presence、光量、寿命、Bloomは変えない。旧`Anchor`の保存値は向きを反転して移行する。
@@ -304,7 +316,14 @@ CoreはCross Rayが無くても単独の光源として成立させる。Cross R
 
 ---
 
-## 6. 現在地: 過去資産を光全体へ回収する段階
+## 6. 現在地: 共通空間の開始地点を確定する段階
+
+2026-08-03時点で、過去資産のRecovery表示を保持したまま、共通描画構造へ
+Core Presence / Spatial Spread / Persistence / Renewalの4軸を実装済みである。
+現在フェーズでは、Spatial / Reactive / Lab2 / DriftをRenderer切り替えではなく、
+4軸上の開始地点として検証する。次フェーズは、共通パラメーターへのAudio Mapping接続である。
+
+### 回収・Studyの履歴
 
 2026-08-03時点で、以下のStudyが個別に表示できる状態まで実装済みである。
 

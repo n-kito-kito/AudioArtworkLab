@@ -398,6 +398,24 @@ type RecoveryPreview =
   | 'spatial-freeze'
   | `lab2-${Exclude<Lab2AssemblyPreview, 'off'>}`;
 
+type LightAnchorPreset = 'custom' | 'spatial' | 'reactive' | 'lab2' | 'drift';
+
+/**
+ * 完成表現を切り替えるプリセットではなく、同じ4軸空間へ戻るための開始座標。
+ * 個別レイヤーや色・素材の値は触らないので、ここから連続して混ぜられる。
+ */
+const LIGHT_ANCHOR_PRESETS: Record<Exclude<LightAnchorPreset, 'custom'>, {
+  corePresence: number;
+  spatialSpread: number;
+  persistence: number;
+  renewal: number;
+}> = {
+  spatial: { corePresence: 0, spatialSpread: 0.85, persistence: 0, renewal: 0 },
+  reactive: { corePresence: 0.5, spatialSpread: 0.55, persistence: 0, renewal: 0 },
+  lab2: { corePresence: 1, spatialSpread: 0.25, persistence: 0, renewal: 1 },
+  drift: { corePresence: 0.7, spatialSpread: 0.75, persistence: 1, renewal: 0 },
+};
+
 export class LightUnified2 implements LabExpression {
   readonly animated = true;
   readonly name = 'Light Unified 2';
@@ -2119,6 +2137,30 @@ export class LightUnified2 implements LabExpression {
     return 'off';
   }
 
+  /** 現在値が開始座標と一致するときだけ、その名前を表示する。 */
+  private activeAnchorPreset(): LightAnchorPreset {
+    const epsilon = 0.001;
+    for (const [name, coordinates] of Object.entries(LIGHT_ANCHOR_PRESETS)) {
+      if (
+        Math.abs(this.params.corePresence - coordinates.corePresence) <= epsilon
+        && Math.abs(this.params.spatialSpread - coordinates.spatialSpread) <= epsilon
+        && Math.abs(this.params.persistence - coordinates.persistence) <= epsilon
+        && Math.abs(this.params.renewal - coordinates.renewal) <= epsilon
+      ) return name as Exclude<LightAnchorPreset, 'custom'>;
+    }
+    return 'custom';
+  }
+
+  /** Recovery比較を閉じ、同じ描画構造の4軸だけを開始座標へ戻す。 */
+  private applyAnchorPreset(preset: Exclude<LightAnchorPreset, 'custom'>): void {
+    Object.assign(this.params, LIGHT_ANCHOR_PRESETS[preset]);
+    this.reactiveRecoveryPreview = 'off';
+    this.spatialRecoveryPreview = 'off';
+    this.spatialRecovery?.setRecoveryMode(null);
+    this.lab2AssemblyPreview = 'off';
+    this.syncLab2Assembly();
+  }
+
   /** Study中は既存レイヤーを描画せず、静止Coreだけを黒背景に表示する。 */
   private updateLab2CoreStudy(): void {
     const lab2FragmentActive = this.lab2FragmentStudyPreview !== 'off';
@@ -2348,6 +2390,21 @@ export class LightUnified2 implements LabExpression {
     const study = 'Study preview';
     const recovery = 'Development / Recovery';
     const params: ExpressionParam[] = [
+      {
+        key: 'anchorPreset',
+        label: 'Start point',
+        type: 'select',
+        presentation: 'buttons',
+        group: seamless,
+        options: [
+          { value: 'spatial', label: 'Spatial' },
+          { value: 'reactive', label: 'Reactive' },
+          { value: 'lab2', label: 'Lab2' },
+          { value: 'drift', label: 'Drift' },
+          { value: 'custom', label: 'Custom' },
+        ],
+        value: this.activeAnchorPreset(),
+      },
       {
         key: 'recoveryPreview',
         label: 'Recovery preset',
@@ -2580,6 +2637,15 @@ export class LightUnified2 implements LabExpression {
     // 旧Anchorは向きが逆だった。保存済みプリセットをSpatial Spreadへ移行する。
     if (key === 'anchor' && typeof value === 'number') {
       this.params.spatialSpread = 1 - clamp01(value);
+      return;
+    }
+    if (
+      key === 'anchorPreset'
+      && typeof value === 'string'
+      && value !== 'custom'
+      && value in LIGHT_ANCHOR_PRESETS
+    ) {
+      this.applyAnchorPreset(value as Exclude<LightAnchorPreset, 'custom'>);
       return;
     }
     if (key === 'recoveryPreview' && typeof value === 'string') {
