@@ -213,7 +213,7 @@ export class AudioInspector {
       if (!openGroup || openGroup.name !== parameter.group) {
         const box = document.createElement('details');
         box.className = 'axis-group';
-        box.open = true;
+        box.open = !parameter.group.startsWith('Development /');
         const head = document.createElement('summary');
         head.className = 'axis-group__summary';
         head.textContent = parameter.group;

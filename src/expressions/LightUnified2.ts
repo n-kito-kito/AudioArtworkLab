@@ -424,6 +424,14 @@ export class LightUnified2 implements LabExpression {
   /** 旧Lab2の完成済み光学系を、そのまま回収して確認するAssembly。 */
   private lab2AssemblyPreview: Lab2AssemblyPreview = 'off';
   private readonly lab2AssemblyRgb = new THREE.Vector3(0.82, 1, 0.82);
+  private readonly lab2AssemblyLevels = {
+    core: 1,
+    crossRay: 1,
+    fragment: 1,
+    fanSpill: 1,
+    hazeCurtain: 1,
+    globalIntensity: 1,
+  };
   private lab2Assembly: LightElementLab2 | null = null;
   private placeholder: THREE.DataTexture | null = null;
   private atlas: PrismAtlas | null = null;
@@ -1866,6 +1874,14 @@ export class LightUnified2 implements LabExpression {
   }
 
   private syncLab2Assembly(): void {
+    this.lab2Assembly?.setAssemblyControls({
+      coreLevel: this.lab2AssemblyLevels.core,
+      crossRayLevel: this.lab2AssemblyLevels.crossRay,
+      fragmentLevel: this.lab2AssemblyLevels.fragment,
+      fanSpillLevel: this.lab2AssemblyLevels.fanSpill,
+      hazeCurtainLevel: this.lab2AssemblyLevels.hazeCurtain,
+      globalIntensity: this.lab2AssemblyLevels.globalIntensity,
+    });
     this.lab2Assembly?.setAssemblyView(
       this.assemblyOpticalGroup(),
       [this.lab2AssemblyRgb.x, this.lab2AssemblyRgb.y, this.lab2AssemblyRgb.z],
@@ -2083,11 +2099,12 @@ export class LightUnified2 implements LabExpression {
     const core = 'コア（打撃で生まれる）';
     const common = '色と音';
     const study = 'Study preview';
+    const recovery = 'Development / Lab2 Recovery';
     return [
       {
         key: 'lab2AssemblyPreview',
         label: 'Lab2 Optical Assembly (reuse)',
-        group: study,
+        group: recovery,
         type: 'select',
         options: [
           { value: 'off', label: 'Off' },
@@ -2101,9 +2118,63 @@ export class LightUnified2 implements LabExpression {
         value: this.lab2AssemblyPreview,
       },
       {
+        key: 'lab2AssemblyCoreLevel',
+        label: 'Core Level',
+        group: recovery,
+        min: 0,
+        max: 2,
+        step: 0.01,
+        value: this.lab2AssemblyLevels.core,
+      },
+      {
+        key: 'lab2AssemblyCrossRayLevel',
+        label: 'Cross Ray Level',
+        group: recovery,
+        min: 0,
+        max: 2,
+        step: 0.01,
+        value: this.lab2AssemblyLevels.crossRay,
+      },
+      {
+        key: 'lab2AssemblyFragmentLevel',
+        label: 'Fragment Level',
+        group: recovery,
+        min: 0,
+        max: 2,
+        step: 0.01,
+        value: this.lab2AssemblyLevels.fragment,
+      },
+      {
+        key: 'lab2AssemblyFanSpillLevel',
+        label: 'Fan / Spill Level',
+        group: recovery,
+        min: 0,
+        max: 2,
+        step: 0.01,
+        value: this.lab2AssemblyLevels.fanSpill,
+      },
+      {
+        key: 'lab2AssemblyHazeCurtainLevel',
+        label: 'Haze / Curtain Level',
+        group: recovery,
+        min: 0,
+        max: 2,
+        step: 0.01,
+        value: this.lab2AssemblyLevels.hazeCurtain,
+      },
+      {
+        key: 'lab2AssemblyGlobalIntensity',
+        label: 'Global Intensity (Assembly)',
+        group: recovery,
+        min: 0,
+        max: 2,
+        step: 0.01,
+        value: this.lab2AssemblyLevels.globalIntensity,
+      },
+      {
         key: 'lab2AssemblyRed',
         label: 'Assembly R (static)',
-        group: study,
+        group: recovery,
         min: 0,
         max: 1,
         step: 0.01,
@@ -2112,7 +2183,7 @@ export class LightUnified2 implements LabExpression {
       {
         key: 'lab2AssemblyGreen',
         label: 'Assembly G (static)',
-        group: study,
+        group: recovery,
         min: 0,
         max: 1,
         step: 0.01,
@@ -2121,7 +2192,7 @@ export class LightUnified2 implements LabExpression {
       {
         key: 'lab2AssemblyBlue',
         label: 'Assembly B (static)',
-        group: study,
+        group: recovery,
         min: 0,
         max: 1,
         step: 0.01,
@@ -2269,6 +2340,22 @@ export class LightUnified2 implements LabExpression {
       this.lab2AssemblyPreview = value as Lab2AssemblyPreview;
       this.syncLab2Assembly();
       return;
+    }
+    if (typeof value === 'number') {
+      const assemblyLevelKey = {
+        lab2AssemblyCoreLevel: 'core',
+        lab2AssemblyCrossRayLevel: 'crossRay',
+        lab2AssemblyFragmentLevel: 'fragment',
+        lab2AssemblyFanSpillLevel: 'fanSpill',
+        lab2AssemblyHazeCurtainLevel: 'hazeCurtain',
+        lab2AssemblyGlobalIntensity: 'globalIntensity',
+      } as const;
+      const target = assemblyLevelKey[key as keyof typeof assemblyLevelKey];
+      if (target) {
+        this.lab2AssemblyLevels[target] = clamp(value, 0, 2);
+        this.syncLab2Assembly();
+        return;
+      }
     }
     if (
       (key === 'lab2AssemblyRed' || key === 'lab2AssemblyGreen' || key === 'lab2AssemblyBlue')

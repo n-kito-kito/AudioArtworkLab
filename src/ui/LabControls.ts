@@ -331,9 +331,30 @@ export class LabControls {
       const paramsTitle = document.createElement('h3');
       paramsTitle.className = 'control-subheading';
       paramsTitle.textContent = this.composition.name;
-      const paramRows = expressionParams.map((parameter) =>
-        this.expressionParamControl(parameter),
-      );
+      const paramRows: HTMLElement[] = [];
+      let currentGroup: { readonly name: string; readonly body: HTMLElement } | null = null;
+      for (const parameter of expressionParams) {
+        const control = this.expressionParamControl(parameter);
+        if (!parameter.group) {
+          paramRows.push(control);
+          currentGroup = null;
+          continue;
+        }
+        if (!currentGroup || currentGroup.name !== parameter.group) {
+          const box = document.createElement('details');
+          box.className = 'axis-group';
+          box.open = !parameter.group.startsWith('Development /');
+          const summary = document.createElement('summary');
+          summary.className = 'axis-group__summary';
+          summary.textContent = parameter.group;
+          const body = document.createElement('div');
+          body.className = 'axis-group__body';
+          box.append(summary, body);
+          paramRows.push(box);
+          currentGroup = { name: parameter.group, body };
+        }
+        currentGroup.body.append(control);
+      }
       this.compositionBody.append(paramsTitle, ...paramRows);
     }
 
