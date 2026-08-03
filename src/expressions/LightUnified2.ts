@@ -379,6 +379,8 @@ export class LightUnified2 implements LabExpression {
   private lab2CoreStudyMaterial: THREE.ShaderMaterial | null = null;
   private lab2CoreStudyMesh: THREE.Mesh | null = null;
   private lab2FragmentStudyPreview: 'off' | 'static' | 'with-core' = 'off';
+  private lab2FragmentSeed = 40;
+  private lab2FragmentPattern: 'cluster' | 'scatter' | 'radial' | 'asymmetric' = 'cluster';
   private lab2FragmentStudyGeometry: THREE.InstancedBufferGeometry | null = null;
   private lab2FragmentStudyMaterial: THREE.ShaderMaterial | null = null;
   private lab2FragmentStudyMesh: THREE.Mesh | null = null;
@@ -813,17 +815,53 @@ export class LightUnified2 implements LabExpression {
     add('aColor', colors, 3);
     add('aLevel', levels, 1);
 
-    const fragments = [
-      { x: -0.3, y: 0.2, z: -8.3, w: 0.48, h: 0.13, tile: 1, cx: 0.43, cy: 0.55, cropX: 0.15, cropY: 0.1, angle: -0.48, color: [0.82, 1.0, 0.86], level: 1.0 },
-      { x: 0.34, y: 0.14, z: -8.55, w: 0.43, h: 0.11, tile: 4, cx: 0.56, cy: 0.43, cropX: 0.13, cropY: 0.08, angle: 0.58, color: [0.76, 0.9, 1.0], level: 0.92 },
-      { x: -0.18, y: -0.32, z: -8.15, w: 0.16, h: 0.4, tile: 8, cx: 0.5, cy: 0.47, cropX: 0.08, cropY: 0.16, angle: 0.16, color: [0.9, 1.0, 0.84], level: 0.88 },
-      { x: 0.82, y: -0.72, z: -8.7, w: 0.58, h: 0.09, tile: 6, cx: 0.4, cy: 0.58, cropX: 0.14, cropY: 0.07, angle: -0.66, color: [0.8, 0.82, 1.0], level: 0.72 },
-      { x: -1.28, y: -0.28, z: -8.45, w: 0.38, h: 0.08, tile: 9, cx: 0.52, cy: 0.5, cropX: 0.12, cropY: 0.07, angle: 0.72, color: [0.88, 1.0, 0.9], level: 0.66 },
-      { x: 1.4, y: -0.16, z: -8.25, w: 0.44, h: 0.09, tile: 3, cx: 0.48, cy: 0.46, cropX: 0.12, cropY: 0.07, angle: -0.3, color: [0.7, 0.94, 1.0], level: 0.62 },
-      { x: -0.42, y: 1.22, z: -8.6, w: 0.32, h: 0.075, tile: 5, cx: 0.55, cy: 0.55, cropX: 0.1, cropY: 0.065, angle: 1.0, color: [0.78, 1.0, 0.82], level: 0.58 },
-      { x: 0.4, y: -1.28, z: -8.4, w: 0.72, h: 0.085, tile: 2, cx: 0.44, cy: 0.52, cropX: 0.11, cropY: 0.065, angle: 0.34, color: [0.9, 0.96, 1.0], level: 0.56 },
-      { x: 1.16, y: 0.94, z: -8.75, w: 0.28, h: 0.07, tile: 7, cx: 0.46, cy: 0.48, cropX: 0.09, cropY: 0.06, angle: -0.9, color: [0.76, 1.0, 0.86], level: 0.52 },
+    const fragmentShapes = [
+      { w: 0.48, h: 0.13, tile: 1, cx: 0.43, cy: 0.55, cropX: 0.15, cropY: 0.1, color: [0.82, 1.0, 0.86] },
+      { w: 0.43, h: 0.11, tile: 4, cx: 0.56, cy: 0.43, cropX: 0.13, cropY: 0.08, color: [0.76, 0.9, 1.0] },
+      { w: 0.16, h: 0.4, tile: 8, cx: 0.5, cy: 0.47, cropX: 0.08, cropY: 0.16, color: [0.9, 1.0, 0.84] },
+      { w: 0.58, h: 0.09, tile: 6, cx: 0.4, cy: 0.58, cropX: 0.14, cropY: 0.07, color: [0.8, 0.82, 1.0] },
+      { w: 0.38, h: 0.08, tile: 9, cx: 0.52, cy: 0.5, cropX: 0.12, cropY: 0.07, color: [0.88, 1.0, 0.9] },
+      { w: 0.44, h: 0.09, tile: 3, cx: 0.48, cy: 0.46, cropX: 0.12, cropY: 0.07, color: [0.7, 0.94, 1.0] },
+      { w: 0.32, h: 0.075, tile: 5, cx: 0.55, cy: 0.55, cropX: 0.1, cropY: 0.065, color: [0.78, 1.0, 0.82] },
+      { w: 0.72, h: 0.085, tile: 2, cx: 0.44, cy: 0.52, cropX: 0.11, cropY: 0.065, color: [0.9, 0.96, 1.0] },
+      { w: 0.28, h: 0.07, tile: 7, cx: 0.46, cy: 0.48, cropX: 0.09, cropY: 0.06, color: [0.76, 1.0, 0.86] },
     ] as const;
+    const seed = this.lab2FragmentSeed;
+    const fragments = fragmentShapes.map((shape, index) => {
+      const unitAngle = (index / study.count) * Math.PI * 2;
+      const randomAngle = hash01(seed, index, 101.3) * Math.PI * 2;
+      const jitter = (hash01(seed, index, 102.7) * 2 - 1) * 0.28;
+      let x: number;
+      let y: number;
+      let angle = randomAngle;
+      if (this.lab2FragmentPattern === 'cluster') {
+        const radius = mix(0.24, 0.78, hash01(seed, index, 103.9));
+        x = Math.cos(randomAngle) * radius;
+        y = Math.sin(randomAngle) * radius;
+      } else if (this.lab2FragmentPattern === 'scatter') {
+        x = mix(-1.5, 1.5, hash01(seed, index, 104.3));
+        y = mix(-1.35, 1.35, hash01(seed, index, 105.1));
+      } else if (this.lab2FragmentPattern === 'radial') {
+        const radialAngle = unitAngle + jitter;
+        const radius = mix(0.42, 1.42, hash01(seed, index, 106.7));
+        x = Math.cos(radialAngle) * radius;
+        y = Math.sin(radialAngle) * radius;
+        angle = radialAngle + Math.PI * 0.5;
+      } else {
+        const side = hash01(seed, index, 107.9) < 0.72 ? -1 : 1;
+        x = side * mix(0.3, 1.52, hash01(seed, index, 108.5));
+        y = mix(-1.18, 1.18, hash01(seed, index, 109.1));
+      }
+      const radius = Math.hypot(x, y);
+      return {
+        ...shape,
+        x,
+        y,
+        z: -mix(8.1, 8.75, hash01(seed, index, 110.3)),
+        angle,
+        level: mix(1.0, 0.44, clamp01(radius / 1.7)),
+      };
+    });
 
     fragments.forEach((fragment, index) => {
       offsets.set([fragment.x, fragment.y, fragment.z], index * 3);
@@ -902,6 +940,13 @@ export class LightUnified2 implements LabExpression {
         }
       `,
     });
+    if (this.atlas) {
+      material.uniforms.uAtlas!.value = this.atlas.texture;
+      (material.uniforms.uGrid!.value as THREE.Vector2).set(
+        this.atlas.columns,
+        this.atlas.rows,
+      );
+    }
 
     this.lab2FragmentStudyGeometry = geometry;
     this.lab2FragmentStudyMaterial = material;
@@ -909,6 +954,23 @@ export class LightUnified2 implements LabExpression {
     this.lab2FragmentStudyMesh.visible = false;
     this.lab2FragmentStudyMesh.frustumCulled = false;
     this.lab2FragmentStudyMesh.renderOrder = 2;
+  }
+
+  /** Seed / Pattern変更時だけ作り直す。時間更新では呼ばない。 */
+  private rebuildLab2FragmentStudyMesh(): void {
+    if (this.lab2FragmentStudyMesh && this.scene) {
+      this.scene.remove(this.lab2FragmentStudyMesh);
+    }
+    this.lab2FragmentStudyGeometry?.dispose();
+    this.lab2FragmentStudyMaterial?.dispose();
+    this.lab2FragmentStudyGeometry = null;
+    this.lab2FragmentStudyMaterial = null;
+    this.lab2FragmentStudyMesh = null;
+    this.buildLab2FragmentStudyMesh();
+    if (this.lab2FragmentStudyMesh && this.scene) {
+      this.scene.add(this.lab2FragmentStudyMesh);
+    }
+    this.updateLab2CoreStudy();
   }
 
   /** Spatial の原理確認。4枚の同種素材だけを変形・重畳し、独立Coreは描かない。 */
@@ -1835,6 +1897,28 @@ export class LightUnified2 implements LabExpression {
         value: this.lab2FragmentStudyPreview,
       },
       {
+        key: 'lab2FragmentPattern',
+        label: 'Lab2 Fragment Pattern',
+        group: study,
+        type: 'select',
+        options: [
+          { value: 'cluster', label: 'Core cluster' },
+          { value: 'scatter', label: 'Full scatter' },
+          { value: 'radial', label: 'Radial' },
+          { value: 'asymmetric', label: 'Asymmetric' },
+        ],
+        value: this.lab2FragmentPattern,
+      },
+      {
+        key: 'lab2FragmentSeed',
+        label: 'Lab2 Fragment Seed',
+        group: study,
+        min: 0,
+        max: 99,
+        step: 1,
+        value: this.lab2FragmentSeed,
+      },
+      {
         key: 'hazePreview',
         label: 'Haze (音なし静止確認)',
         group: study,
@@ -1901,6 +1985,21 @@ export class LightUnified2 implements LabExpression {
         this.lab2CoreStudyPreview = 'off';
       }
       this.updateLab2CoreStudy();
+      return;
+    }
+    if (
+      key === 'lab2FragmentPattern'
+      && (value === 'cluster' || value === 'scatter' || value === 'radial' || value === 'asymmetric')
+    ) {
+      this.lab2FragmentPattern = value;
+      this.rebuildLab2FragmentStudyMesh();
+      return;
+    }
+    if (key === 'lab2FragmentSeed' && typeof value === 'number') {
+      const nextSeed = Math.round(clamp(value, 0, 99));
+      if (nextSeed === this.lab2FragmentSeed) return;
+      this.lab2FragmentSeed = nextSeed;
+      this.rebuildLab2FragmentStudyMesh();
       return;
     }
     if (key === 'hazePreview' && (value === 'off' || value === 'static' || value === 'audio')) {
