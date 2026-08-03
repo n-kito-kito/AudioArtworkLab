@@ -85,10 +85,18 @@ Light Element Lab（V1）で、コードは温存してある。
 共通する光の素材から構成できる 1 つの光の楽器。**
 
 ただし、異なる光の寿命・更新方法までスライダーだけで補間しない。
-Presetは **Spatial / Reactive / Lab2 / Drift のStyle Preset**を選び、各Styleが
+すべての見え方は共通の3D空間上に存在し、位置・奥行き・前後関係を持つ。
+Spatialという名称は3Dを占有する意味ではなく、素材の空間的な広がりと重畳を表す。
+Style Presetの現時点の候補は **Spatial系 / Lab2 / Drift** とし、各Styleが
 Event / Refresh / Persistent Controllerと必要な描画構造を持つ。
+Reactiveは重要な参照表現として残すが、Spatial系と同じEvent構造で再現できるかを先に検証し、
+現時点では独立Style Presetと確定しない。
 位置・滲み・色・密度など、意味が共通する値はスライダーとして共有する。
 Preset切り替え時はクロスフェードし、操作は離散でも映像は滑らかに移行させる。
+
+Style Presetは、状態機械・光が成立する構造・最終的な見え方に本質的な差がある場合だけ増やす。
+パーツの有無やスライダー値の違いだけなら共通パラメーターまたはUser Presetとして扱う。
+Style Presetは少数に絞り、調整結果を保存するUser Presetは必要なだけ追加できる構造を目指す。
 
 ### リファレンスの優先順位
 
@@ -257,11 +265,14 @@ Spatial はその中間（手続きの transient + 素材の macro 膜の 2 段�
 | **決定論的な乱数** | **維持。** `Math.random()` / `Date.now()` は使わない。同じ音源・同じ設定で同じ絵になること |
 | **手続きで筋を描かない** | 筋は素材を細長い板に貼った副産物として出す（§3 の発見） |
 | **明るさの扱い** | 天井・ハロ・ブルーム・トーンマップを安易に足さない。加算合成と素材の輝度で成立させる |
-| **発光Controller** | Event（Spatial / Reactive）・Refresh（Lab2）・Persistent（常在浮遊）を分ける。状態管理まで1本のモードスライダーで補間しない |
-| **Style Preset** | Spatial / Reactive / Lab2 / Driftは、料理の系統のような大元の方向性。Controllerだけでなく基盤の組み立て方も選ぶが、完成工程を固定するレシピではない |
+| **3D空間** | Spatial / Reactive / Lab2 / Driftのすべてを共通の3D空間上に置く。Spatialだけを3D、それ以外を2Dにしない |
+| **発光Controller** | Event（Spatial系。Reactiveを含む）・Refresh（Lab2）・Persistent（常在浮遊）を分ける。状態管理まで1本のモードスライダーで補間しない |
+| **Style Preset** | 現時点の候補はSpatial系 / Lab2 / Drift。状態機械・成立構造・見え方に本質的な差がある場合だけ分ける |
+| **Reactive** | 参照表現として残すが、まずSpatial系の一バリエーションとして再現し、固有構造が必要と分かった場合だけ独立Styleへ昇格する |
+| **User Preset** | Style、Element、Controller、スライダー、Audio Mappingの調整結果。Styleを増やさずに必要なだけ保存できるようにする |
 | **Spatialの構造** | 独立Coreを必須にしない。Material Light Layerの変形・重なりから中心白熱が創発する状態を残す |
 | **共通スライダー** | 位置・広がり・滲み・色・明るさ・密度・サイズ・奥行き・寿命・速度など、Controller間で意味が保たれる値を共有する |
-| **Preset切り替え** | 大元のStyleをボタンで選び、映像は短いクロスフェードで移行する。選択後も別系統の調理法・味付けを混ぜられる |
+| **Preset切り替え** | 大元のStyleをボタンで選び、映像は短いクロスフェードで移行する。選択後もElement・Controller・Modifier・Effectを個別に調整できる |
 
 参照すべき PRD の決定（**メインリポジトリ側にあり、この worktree には反映されていない**）:
 **D28**（Simple Rules, Complex Behaviors）/ **D29**（分解して検証）/ **D30**（イベント時に特徴を確定）/

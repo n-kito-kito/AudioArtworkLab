@@ -11,24 +11,21 @@
 
 Light Unified 2 は、共通する光の素材を使いながら、次の見え方を横断できる「光の楽器」とする。
 
-- Spatial: 光が3D空間に発生し、奥行きを持って消える
+- すべての見え方は共通の3D空間上に存在し、位置・奥行き・前後関係を持つ
+- Spatial: Material Light Layerが空間内で変形・重畳し、白熱を生む
 - Reactive: 音の立ち上がりに対して複数の光が瞬発する
-- Lab2: 常設する光学層の内容が短い周期で更新される
-- Drift: コア・点・ガラス片のようなFragmentが常在し、浮遊・旋回しながら強さを変える
+- Lab2: 3D空間に常設する光学層の内容が短い周期で更新される
+- Drift: 3D空間内でコア・点・ガラス片のようなFragmentが常在し、浮遊・旋回しながら強さを変える
+
+Spatialという名称は「3Dであること」を占有する意味ではなく、素材の空間的な広がりと重畳を表す。
+Reactive / Lab2 / Driftを2D平面上だけの表現として設計しない。
 
 ただし、これらを1本のモードスライダーで無理に補間しない。
 共通化するのは素材・連続パラメーター・発光強度の入力モデルである。
 大元の表現方向はStyle Preset、存在方法はControllerとして分ける。
 
-用語の考え方は次のとおり。
-
-- Expression（Light / Cymatics）: それぞれ別の料理
-- Style Preset（Spatial / Reactive / Lab2 / Drift）: イタリアン・フレンチ・和食のような大元の方向性
-- Controller / Modifier: 煮る・焼く・流す・捩るなどの調理法
-- 共通スライダー / Effect: 味付け・火加減・仕上げ
-
-Style Presetは完成工程を固定するレシピではない。方向性を決めた後も、別系統の調理法や味付けを混ぜられる。
-それでも基盤となるStyle Presetの性格は維持する。
+Style Presetは完成工程を固定するものではない。構造・時間状態・素材の成立方法が本質的に異なる場合だけ分ける。
+パーツの有無やスライダー値の組み合わせだけでStyle Presetを増やさない。
 
 ### Origin Referenceと派生表現の関係
 
@@ -44,7 +41,7 @@ Light Unified 2の素材語彙
   Material Light Layer / Core / Cross Ray / Fragment / Haze / Ray
                     ↓
 Style Preset
-  Spatial / Reactive / Lab2 / Drift
+  Spatial系（Reactiveは暫定的にここへ含む） / Lab2 / Drift
 ```
 
 評価は「SpatialやLab2をそのまま再現できたか」だけではなく、Origin Referenceの光学的な
@@ -59,7 +56,7 @@ Style Preset
   Material Light Layer / Fragment / Ray
                     ↓
 Style Preset（ボタンで選択）
-  Spatial / Reactive / Lab2 / Drift
+  Spatial系 / Lab2 / Drift
                     ↓
 発光Controller
   Event / Refresh / Persistent
@@ -79,25 +76,51 @@ Fragment / Rayのように形状自体が違うものだけを独立Elementと�
 
 ### Style Presetの責務
 
-| Style Preset | 大元の方向性 | 主な組み立て | Controller |
-|---|---|---|---|
-| Spatial | 空間的・素材重畳 | Material Light Layerを変形・重畳し、重なりから白熱を創発させる。独立Coreは必須ではない | Event |
-| Reactive | 瞬発的・音因果 | 素材由来のcore / sheet / hazeと、必要最小限の白い芯を組み合わせる | Event |
-| Lab2 | 光学層・高速更新 | curtain / beam / veilなどの常設する手続き層を組み合わせる | Refresh |
-| Drift | 宇宙的・常在浮遊 | 常在する中心光とPoint / Fragment Fieldを空間内で浮遊させる | Persistent |
+| Style Preset | 大元の方向性 | 主な組み立て | Controller | 状態 |
+|---|---|---|---|---|
+| Spatial系 | 空間的・素材重畳 | 3D空間内でMaterial Light Layerを変形・重畳し、重なりから白熱を創発させる。独立Coreは必須ではない | Event | 候補 |
+| Lab2 | 光学層・高速更新 | 3D空間内にcurtain / beam / veilなどの光学層を常設する | Refresh | 候補 |
+| Drift | 宇宙的・常在浮遊 | 3D空間内で常在する中心光とPoint / Fragment Fieldを浮遊させる | Persistent | 候補 |
 
 Style PresetはControllerだけでなく、基盤となる組み立て方も選ぶ。
 異なるStyle Presetを無理に同じ描画構造へ押し込まない。
+
+#### Styleを分ける基準
+
+次のいずれかが本質的に異なり、共通パラメーターだけでは安全に行き来できない場合にだけ、
+別のStyle Presetとして追加する。
+
+1. 光の存在・更新を管理する状態機械（生成して消える / 層を更新する / 同じ個体が常在する）
+2. 光が成立する構造（素材の重畳 / 常設光学層 / 個体群の空間配置）
+3. 同じ素材と近いパラメーターを与えても、明確に異なる見え方になること
+
+CoreやFragmentを使うか、色・滲み・密度・寿命の値が違うだけなら、別Styleにしない。
+それらは共通パラメーター、Elementの有効化、またはUser Presetとして扱う。
+
+#### Reactiveの扱い
+
+ReactiveはAAL内の重要な参照表現として残すが、現時点では独立Style Presetと確定しない。
+Spatialと同じEvent Controllerを使い、見え方も連続しているため、まずはSpatial系の
+Material Light Layer構成と反応設定の一バリエーションとして再現する。
+今後、共通パラメーターでは再現できない固有の構造が確認できた場合だけ独立Styleへ昇格する。
+
+#### Style PresetとUser Preset
+
+- Style Preset: 数を絞った構造上の大分類。無闇に増やさない
+- User Preset: Style、Element、Controller、各スライダー、Audio Mappingの調整結果。必要なだけ保存できる
+
+表現の探索可能性は、Style Presetを無限に増やすのではなく、少数のStyleと多数のUser Preset、
+自由なAudio Mappingの組み合わせによって確保する。
 
 ### Controllerの責務
 
 | Controller | 対応する見え方 | 光の存在方法 |
 |---|---|---|
-| Event | Spatial / Reactive | 音の出来事ごとに生成し、Attack / Hold / Decayで消す |
+| Event | Spatial系（Reactiveを含む） | 音の出来事ごとに生成し、Attack / Hold / Decayで消す |
 | Refresh | Lab2 | 光学層は維持し、素材・構成・フレームを短い周期で更新する |
 | Persistent | Drift | 光を常在させ、漂流・旋回させながら強さを連続変化させる |
 
-Spatial と Reactive は同じ Event Controllerを共有できる可能性が高いが、描画構造まで同じとは限らない。
+SpatialとReactiveの差は、まず同じEvent ControllerとMaterial Light Layerの範囲で検証する。
 Lab2 と Drift は寿命・状態管理が異なるため、Eventへ無理に統合しない。
 
 ### 発光強度は共通化する
@@ -121,7 +144,7 @@ Controllerが異なっても、明るさの入力モデルは共通にできる�
 
 ### ボタン／Presetにするもの
 
-- Spatial / Reactive / Lab2 / Drift のStyle Preset
+- 構造差が検証されたStyle Preset（現時点の候補はSpatial系 / Lab2 / Drift）
 
 ボタンは映像を瞬時に差し替えるためではない。切り替え時は旧Styleと新Styleを短時間だけ
 併存させ、明るさの総量を制限しながらクロスフェードする。
@@ -149,7 +172,7 @@ Controllerが異なっても、明るさの入力モデルは共通にできる�
 |---|---|---|
 | Material Light Layer | 画像素材を形として描く共有プリミティブ | Spatialのmacro、Reactiveのsheet / haze / anchor |
 | Light Element | 固有の形状を持つ素材 | Fragment、通常Ray、手続きCore、Lab2 Cross Ray |
-| Style Preset | 表現の大元の方向性と基盤構成 | Spatial、Reactive、Lab2、Drift |
+| Style Preset | 表現の大元の方向性と基盤構成 | Spatial系、Lab2、Drift |
 | Controller | 存在時間と更新方法 | Event、Refresh、Persistent |
 | Modifier | 形や位置の変化 | Float、Orbit、Flow、Twist |
 | Effect | 最終的な質感 | Glow、Prism、Trail、Blur、Grain |
