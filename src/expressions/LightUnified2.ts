@@ -2100,7 +2100,7 @@ export class LightUnified2 implements LabExpression {
     const common = '色と音';
     const study = 'Study preview';
     const recovery = 'Development / Lab2 Recovery';
-    return [
+    const params: ExpressionParam[] = [
       {
         key: 'lab2AssemblyPreview',
         label: 'Lab2 Optical Assembly (reuse)',
@@ -2329,6 +2329,7 @@ export class LightUnified2 implements LabExpression {
       row('sensitivity', 'Sensitivity (発火の感度)', common),
       row('intensity', 'Intensity (全体の強度)', common),
     ];
+    return params.filter((param) => param.group !== study);
   }
 
   setExpressionParam(key: string, value: number | string): void {
