@@ -3,6 +3,9 @@ import type { CompositionContext, DesignLayerCanvases } from '../compositions/Co
 import type { Effect } from '../effects/Effect';
 import { EffectPipeline } from '../effects/EffectPipeline';
 import { BandLightEventDetector, type BandLightEvent } from '../engine/bandLightEvents';
+import { BindingResolver } from '../engine/binding/resolve';
+import { defaultTransformFor } from '../engine/binding/types';
+import { getSourceShelf, type AudioSourceShelf } from '../engine/binding/sources';
 import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
@@ -434,6 +437,9 @@ export class LightUnified2 implements LabExpression {
   private aspectRatio = 1;
 
   private readonly params: Record<Unified2ParamKey, number> = { ...UNIFIED2.defaults };
+  /** Commonの最初の結線。基準値を残したまま、音のEnergyだけを上乗せする。 */
+  private readonly commonResolver = new BindingResolver();
+  private sourceShelf: AudioSourceShelf | null = null;
 
   private context: CompositionContext | null = null;
   private scene: THREE.Scene | null = null;
@@ -564,6 +570,16 @@ export class LightUnified2 implements LabExpression {
     this.id = id;
     this.effects = effects;
     this.theme = theme ?? THEMES[0]!;
+    this.commonResolver.declare([
+      {
+        id: 'intensity',
+        label: 'Global Intensity',
+        min: PARAM_RANGES.intensity.min,
+        max: PARAM_RANGES.intensity.max,
+        default: UNIFIED2.defaults.intensity,
+        kind: 'continuous',
+      },
+    ]);
   }
 
   // ---------------------------------------------------------------- setup
@@ -571,6 +587,17 @@ export class LightUnified2 implements LabExpression {
   setup(context: CompositionContext): void {
     this.context = context;
     this.disposed = false;
+    this.sourceShelf = getSourceShelf(context.audioEngine);
+    this.commonResolver.setSources(this.sourceShelf.list());
+    this.commonResolver.reset();
+    const energy = this.sourceShelf.find('volume');
+    this.commonResolver.bind({
+      paramId: 'intensity',
+      sourceId: energy?.id ?? null,
+      // 0..3の全幅に対する0.25。最大入力でも +0.75 に留め、白飛びの余地を残す。
+      depth: 0.25,
+      transform: energy ? defaultTransformFor(energy.kind, 'continuous') : null,
+    });
 
     this.camera = new THREE.PerspectiveCamera(
       UNIFIED2.fieldOfView,
@@ -2115,7 +2142,7 @@ export class LightUnified2 implements LabExpression {
 
   /** 軸のうち、フラグメント側の数式へ直に効くもの。毎フレーム流し込む。 */
   private syncUniforms(): void {
-    const intensity = Math.max(this.params.intensity, 0);
+    const intensity = Math.max(this.commonResolver.valueOf('intensity'), 0);
     const material = this.material;
     if (material) {
       const softness = clamp01(this.params.softness);
@@ -2148,6 +2175,10 @@ export class LightUnified2 implements LabExpression {
         ? 0
         : clamp(elapsed - this.previousElapsed, 0, UNIFIED2.maximumDelta);
     this.previousElapsed = elapsed;
+
+    // 音の棚はengineごとに共有され、同一フレーム内では一度だけ更新される。
+    this.sourceShelf?.update(delta);
+    this.commonResolver.updateParam('intensity', delta);
 
     // **捨てるのが先。** 生まれた瞬間の光は age = 0 ＝ 振幅 0 なので、
     // 検出のあとに捨てると生まれたそばから消えてしまう。
@@ -2285,7 +2316,7 @@ export class LightUnified2 implements LabExpression {
       this.hazeLevel += (volume - this.hazeLevel) * follow;
     }
     this.hazeMaterial.uniforms.uIntensity!.value =
-      UNIFIED2.hazeStudy.intensity * this.hazeLevel * this.params.intensity;
+      UNIFIED2.hazeStudy.intensity * this.hazeLevel * this.commonResolver.valueOf('intensity');
   }
 
   /** Fragmentの第2段。形・位置・色を固定し、Volumeを明るさだけへ接続する。 */
@@ -2304,7 +2335,7 @@ export class LightUnified2 implements LabExpression {
       this.fragmentLevel += (volume - this.fragmentLevel) * follow;
     }
     this.fragmentMaterial.uniforms.uIntensity!.value =
-      UNIFIED2.fragmentStudy.intensity * this.fragmentLevel * this.params.intensity;
+      UNIFIED2.fragmentStudy.intensity * this.fragmentLevel * this.commonResolver.valueOf('intensity');
   }
 
   render(): void {
@@ -2455,13 +2486,31 @@ export class LightUnified2 implements LabExpression {
       key: Unified2ParamKey,
       label: string,
       group: string,
-    ): ExpressionParam => ({
-      key,
-      label,
-      group,
-      ...PARAM_RANGES[key],
-      value: this.params[key],
-    });
+    ): ExpressionParam => {
+      const parameter: ExpressionParam = {
+        key,
+        label,
+        group,
+        ...PARAM_RANGES[key],
+        value: this.params[key],
+      };
+      if (key !== 'intensity') return parameter;
+      const binding = this.commonResolver.getBinding('intensity');
+      return {
+        ...parameter,
+        bind: {
+          paramId: 'intensity',
+          sourceId: binding?.sourceId ?? null,
+          depth: binding?.depth ?? 0.25,
+          sources: (this.sourceShelf?.visible() ?? []).map((source) => ({
+            id: source.id,
+            label: source.label,
+            kind: source.kind,
+          })),
+          liveValue: this.commonResolver.valueOf('intensity'),
+        },
+      };
+    };
     const membrane = '膜（素材が形）';
     const seamless = 'Seamless / Structure';
     const elements = 'Elements / Advanced';
@@ -2709,6 +2758,33 @@ export class LightUnified2 implements LabExpression {
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    // Commonの最初の音接続。既存のIntensity行へ添え、UIの行数は増やさない。
+    if (key.startsWith('bind:intensity:')) {
+      const what = key.split(':')[2];
+      const current = this.commonResolver.getBinding('intensity');
+      if (what === 'source') {
+        const sourceId = String(value) === 'none' ? null : String(value);
+        const source = sourceId ? this.sourceShelf?.find(sourceId) ?? null : null;
+        this.commonResolver.bind({
+          paramId: 'intensity',
+          sourceId,
+          depth: current?.depth ?? 0.25,
+          transform: source ? defaultTransformFor(source.kind, 'continuous') : null,
+        });
+        return;
+      }
+      if (what === 'depth') {
+        const depth = typeof value === 'number' ? value : Number(value);
+        if (!Number.isFinite(depth)) return;
+        this.commonResolver.bind({
+          paramId: 'intensity',
+          sourceId: current?.sourceId ?? null,
+          depth: clamp(depth, -1, 1),
+          transform: current?.transform ?? null,
+        });
+        return;
+      }
+    }
     // 旧Core formは向きが逆だった。保存済みプリセットだけを新しい意味へ変換する。
     if (key === 'coreForm' && typeof value === 'number') {
       this.params.corePresence = 1 - clamp01(value);
@@ -2919,7 +2995,10 @@ export class LightUnified2 implements LabExpression {
     const range = PARAM_RANGES[typed];
     // どの軸も次のフレームの書き出しで効く。生きている光は作り直さない。
     this.params[typed] = clamp(value, range.min, range.max);
-    if (typed === 'intensity') this.syncCommonIntensity();
+    if (typed === 'intensity') {
+      this.commonResolver.setBase('intensity', this.params.intensity);
+      this.syncCommonIntensity();
+    }
   }
 
   dispose(): void {
@@ -3000,5 +3079,6 @@ export class LightUnified2 implements LabExpression {
     this.scene = null;
     this.camera = null;
     this.context = null;
+    this.sourceShelf = null;
   }
 }

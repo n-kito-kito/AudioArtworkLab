@@ -322,8 +322,10 @@ CoreはCross Rayが無くても単独の光源として成立させる。Cross R
 Core Presence / Spatial Spread / Persistence / Renewalの4軸を実装済みである。
 Spatial / Reactive / Lab2 / DriftをRenderer切り替えではなく、4軸上の開始地点として置く工程、
 Spatial / Lab2から回収した共通カラー構造、共通の光量と素材面積まで実装済みである。
-現在フェーズは光素材の基盤を確定する段階、次フェーズは共通パラメーターへの
-Audio Mapping接続である。旧Spatial固有のBloom / Exposureは素材へ焼き込まず、Effect側で扱う。
+光素材の基盤確認を終え、現在フェーズは共通パラメーターへのAudio Mapping接続である。
+第1接続は`Volume（全体のEnergy）→ Global Intensity`の1本だけとする。基準光量は残し、
+音は最大でも初期値1.45から2.20までの上乗せに留める。Recovery、色、形、位置、発生タイミングは
+この接続では変更しない。旧Spatial固有のBloom / Exposureは素材へ焼き込まず、Effect側で扱う。
 
 ### 共通の光量と素材面積
 
