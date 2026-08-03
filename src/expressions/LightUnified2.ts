@@ -142,6 +142,12 @@ const UNIFIED2 = {
     driftAmount: 0.08,
     driftSpeed: 0.055,
   },
+  renewal: {
+    /** 1でLab2に近い短周期更新。中間値は更新頻度だけを連続に変える。 */
+    maximumRate: 8,
+    rateCurve: 2,
+    epochStride: 1013,
+  },
 
   /** 検出の固定値。つまみに出すのは感度 1 本だけ（PRD D17）。 */
   detection: {
@@ -289,6 +295,7 @@ const UNIFIED2 = {
     carve: 0.35,
     spatialSpread: 0.68,
     persistence: 0,
+    renewal: 0,
     coreSize: 0.4,
     corePresence: 0.5,
     saturation: 0.55,
@@ -305,6 +312,7 @@ type Unified2ParamKey =
   | 'carve'
   | 'spatialSpread'
   | 'persistence'
+  | 'renewal'
   | 'coreSize'
   | 'corePresence'
   | 'saturation'
@@ -319,6 +327,7 @@ const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: n
   carve: { min: 0, max: 1, step: 0.01 },
   spatialSpread: { min: 0, max: 1, step: 0.01 },
   persistence: { min: 0, max: 1, step: 0.01 },
+  renewal: { min: 0, max: 1, step: 0.01 },
   coreSize: { min: 0, max: 1, step: 0.01 },
   corePresence: { min: 0, max: 1, step: 0.01 },
   saturation: { min: 0, max: 1, step: 0.01 },
@@ -1809,6 +1818,18 @@ export class LightUnified2 implements LabExpression {
     };
   }
 
+  /**
+   * Persistent個体の位置と寿命は変えず、素材の選択・切り取り・向きだけを更新する種。
+   * `Renewal = 0`では永久に同じ種、1では最大8回/秒で別の光学内容へ切り替わる。
+   */
+  private renewedAppearanceKey(light: LiveLight, elapsed: number, stableKey: number): number {
+    if (!light.persistent) return stableKey;
+    const renewal = clamp01(this.params.renewal);
+    const rate = UNIFIED2.renewal.maximumRate * Math.pow(renewal, UNIFIED2.renewal.rateCurve);
+    const epoch = Math.floor(Math.max(elapsed, 0) * rate);
+    return stableKey + epoch * UNIFIED2.renewal.epochStride;
+  }
+
   /** 寿命の切れた光を捨てる。**無音なら 0 個まで落ちる**（＝ 黒）。 */
   private cull(elapsed: number): void {
     const envelope = UNIFIED2.envelope;
@@ -1880,6 +1901,7 @@ export class LightUnified2 implements LabExpression {
       for (let index = 0; index < count; index++) {
         const light = lights[index]!;
         const key = light.seed * 16 + light.slot;
+        const appearanceKey = this.renewedAppearanceKey(light, elapsed, key);
         const scatteredDepth = mix(UNIFIED2.depthNear, UNIFIED2.depthFar, hash01(key, 11.3));
         const depth = mix(UNIFIED2.core.depth, scatteredDepth, spatialSpread);
         const halfHeight = this.halfHeightAt(depth);
@@ -1912,20 +1934,23 @@ export class LightUnified2 implements LabExpression {
         const radius = halfHeight * scale * jitter;
         this.sizes[index * 3 + 0] = radius * Math.sqrt(elongation);
         this.sizes[index * 3 + 1] = radius / Math.sqrt(elongation);
-        this.sizes[index * 3 + 2] = Math.floor(hash01(key, 13.7) * tileCount) % tileCount;
+        this.sizes[index * 3 + 2] =
+          Math.floor(hash01(appearanceKey, 13.7) * tileCount) % tileCount;
 
         // 切り取りの中心。半幅を差し引いた範囲に収めて、マスの外へは出さない。
         const room = Math.max(0.5 - cropHalf, 0);
-        this.crops[index * 4 + 0] = 0.5 + (hash01(key, 17.1) * 2 - 1) * room;
-        this.crops[index * 4 + 1] = 0.5 + (hash01(key, 19.3) * 2 - 1) * room;
+        this.crops[index * 4 + 0] =
+          0.5 + (hash01(appearanceKey, 17.1) * 2 - 1) * room;
+        this.crops[index * 4 + 1] =
+          0.5 + (hash01(appearanceKey, 19.3) * 2 - 1) * room;
         this.crops[index * 4 + 2] = cropHalf;
         this.crops[index * 4 + 3] = cropHalf;
 
-        const spin = hash01(key, 23.9) * Math.PI * 2;
+        const spin = hash01(appearanceKey, 23.9) * Math.PI * 2;
         this.orients[index * 4 + 0] = Math.cos(spin);
         this.orients[index * 4 + 1] = Math.sin(spin);
-        this.orients[index * 4 + 2] = hash01(key, 29.5) < 0.5 ? -1 : 1;
-        this.orients[index * 4 + 3] = hash01(key, 31.1) < 0.5 ? -1 : 1;
+        this.orients[index * 4 + 2] = hash01(appearanceKey, 29.5) < 0.5 ? -1 : 1;
+        this.orients[index * 4 + 3] = hash01(appearanceKey, 31.1) < 0.5 ? -1 : 1;
 
         const eventLevel = envelopeLevel(
             elapsed - light.bornAt,
@@ -1954,6 +1979,7 @@ export class LightUnified2 implements LabExpression {
       for (let index = 0; index < count; index++) {
         const light = lights[index]!;
         const seed = light.seed;
+        const appearanceSeed = this.renewedAppearanceKey(light, elapsed, seed);
         const halfHeight = this.halfHeightAt(core.depth);
         const halfWidth = halfHeight * Math.max(this.aspectRatio, 0.01);
         const drift = this.persistentDrift(light, elapsed, halfWidth, halfHeight);
@@ -1965,15 +1991,19 @@ export class LightUnified2 implements LabExpression {
         const jitter = 1 + (hash01(seed, core.seedSalt + 5.3) * 2 - 1) * core.sizeJitter;
         this.coreSizes[index * 2 + 0] = baseRadius * jitter;
         this.coreSizes[index * 2 + 1] =
-          Math.floor(hash01(seed, core.seedSalt) * tileCount) % tileCount;
+          Math.floor(hash01(appearanceSeed, core.seedSalt) * tileCount) % tileCount;
 
-        const spin = hash01(seed, core.seedSalt + 2.7) * Math.PI * 2;
-        this.coreCells[index * 4 + 0] = 0.5 + (hash01(seed, core.seedSalt + 1.3) * 2 - 1) * room;
-        this.coreCells[index * 4 + 1] = 0.5 + (hash01(seed, core.seedSalt + 1.9) * 2 - 1) * room;
+        const spin = hash01(appearanceSeed, core.seedSalt + 2.7) * Math.PI * 2;
+        this.coreCells[index * 4 + 0] =
+          0.5 + (hash01(appearanceSeed, core.seedSalt + 1.3) * 2 - 1) * room;
+        this.coreCells[index * 4 + 1] =
+          0.5 + (hash01(appearanceSeed, core.seedSalt + 1.9) * 2 - 1) * room;
         this.coreCells[index * 4 + 2] = Math.cos(spin);
         this.coreCells[index * 4 + 3] = Math.sin(spin);
-        this.coreFlips[index * 2 + 0] = hash01(seed, core.seedSalt + 3.1) < 0.5 ? -1 : 1;
-        this.coreFlips[index * 2 + 1] = hash01(seed, core.seedSalt + 3.7) < 0.5 ? -1 : 1;
+        this.coreFlips[index * 2 + 0] =
+          hash01(appearanceSeed, core.seedSalt + 3.1) < 0.5 ? -1 : 1;
+        this.coreFlips[index * 2 + 1] =
+          hash01(appearanceSeed, core.seedSalt + 3.7) < 0.5 ? -1 : 1;
 
         const eventLevel = envelopeLevel(
             elapsed - light.bornAt,
@@ -2532,6 +2562,7 @@ export class LightUnified2 implements LabExpression {
       row('corePresence', 'Core Presence (素材白熱 ⇄ 独立コア)', seamless),
       row('spatialSpread', 'Spatial Spread (起点へ集中 ⇄ 3D空間へ分散)', seamless),
       row('persistence', 'Persistence (発生して消える ⇄ 常在して漂う)', seamless),
+      row('renewal', 'Renewal (同じ素材を維持 ⇄ 光学内容を短周期更新)', seamless),
       row('coreSize', 'Core Layer Size (0 = 層全体を消す ⇄ 大)', elements),
       row('intensity', 'Global Intensity', common),
       row('saturation', 'Saturation (0 = 白 ⇄ 1 = 色が濃い)', unifiedSpecific),
