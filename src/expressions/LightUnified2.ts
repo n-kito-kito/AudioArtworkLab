@@ -6,6 +6,8 @@ import { BandLightEventDetector, type BandLightEvent } from '../engine/bandLight
 import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
+import { LightElementLab2 } from './LightElementLab2';
+import type { OpticalGroup } from './lightOpticsMapping';
 import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
 
 /**
@@ -353,6 +355,15 @@ interface LiveLight {
   readonly slot: number;
 }
 
+type Lab2AssemblyPreview =
+  | 'off'
+  | 'core'
+  | 'cross-ray'
+  | 'refraction-veil'
+  | 'fan-spill'
+  | 'haze-curtain'
+  | 'all';
+
 export class LightUnified2 implements LabExpression {
   readonly animated = true;
   readonly name = 'Light Unified 2';
@@ -410,6 +421,10 @@ export class LightUnified2 implements LabExpression {
   private spatialFragmentStudyGeometry: THREE.InstancedBufferGeometry | null = null;
   private spatialFragmentStudyMaterial: THREE.ShaderMaterial | null = null;
   private spatialFragmentStudyMesh: THREE.Mesh | null = null;
+  /** 旧Lab2の完成済み光学系を、そのまま回収して確認するAssembly。 */
+  private lab2AssemblyPreview: Lab2AssemblyPreview = 'off';
+  private readonly lab2AssemblyRgb = new THREE.Vector3(0.82, 1, 0.82);
+  private lab2Assembly: LightElementLab2 | null = null;
   private placeholder: THREE.DataTexture | null = null;
   private atlas: PrismAtlas | null = null;
   private pipeline: EffectPipeline | null = null;
@@ -494,6 +509,13 @@ export class LightUnified2 implements LabExpression {
     this.buildLab2FragmentStudyMesh();
     this.buildSpatialMaterialAnchorStudyMesh();
     this.buildSpatialFragmentStudyMesh();
+
+    // 新しい同等シェーダーを描かず、旧Lab2の描画器とprismAtlas処理を丸ごと再利用する。
+    this.lab2Assembly = new LightElementLab2('light-element2-all-v1', 'all', [], this.theme);
+    this.lab2Assembly.setup(context);
+    this.lab2Assembly.setAspect(this.aspectId, this.aspectRatio);
+    this.lab2Assembly.setZoom(this.zoom);
+    this.syncLab2Assembly();
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
@@ -1830,7 +1852,24 @@ export class LightUnified2 implements LabExpression {
     this.updateHazeStudy(clamp01(audio.volume ?? 0), delta);
     this.updateFragmentStudy(clamp01(audio.volume ?? 0), delta);
     this.updateLab2CoreStudy();
+    if (this.lab2AssemblyPreview !== 'off') this.lab2Assembly?.update(elapsed);
     this.pipeline?.update(audio, elapsed);
+  }
+
+  private assemblyOpticalGroup(): OpticalGroup {
+    if (this.lab2AssemblyPreview === 'core') return 'core';
+    if (this.lab2AssemblyPreview === 'cross-ray') return 'skeleton';
+    if (this.lab2AssemblyPreview === 'refraction-veil') return 'fragment';
+    if (this.lab2AssemblyPreview === 'fan-spill') return 'fan';
+    if (this.lab2AssemblyPreview === 'haze-curtain') return 'atmosphere';
+    return 'all';
+  }
+
+  private syncLab2Assembly(): void {
+    this.lab2Assembly?.setAssemblyView(
+      this.assemblyOpticalGroup(),
+      [this.lab2AssemblyRgb.x, this.lab2AssemblyRgb.y, this.lab2AssemblyRgb.z],
+    );
   }
 
   /** Study中は既存レイヤーを描画せず、静止Coreだけを黒背景に表示する。 */
@@ -1900,6 +1939,10 @@ export class LightUnified2 implements LabExpression {
   }
 
   render(): void {
+    if (this.lab2AssemblyPreview !== 'off') {
+      this.lab2Assembly?.render();
+      return;
+    }
     this.pipeline?.render();
   }
 
@@ -1910,12 +1953,14 @@ export class LightUnified2 implements LabExpression {
       this.camera.updateProjectionMatrix();
     }
     this.pipeline?.resize(width, height);
+    this.lab2Assembly?.resize(width, height);
   }
 
   // ---------------------------------------------------------------- UI の面
 
   setGeneratorsVisible(visible: boolean): void {
     if (this.scene) this.scene.visible = visible;
+    this.lab2Assembly?.setGeneratorsVisible(visible);
   }
 
   setDesignLayerCanvases(canvases: DesignLayerCanvases): void {
@@ -1961,6 +2006,7 @@ export class LightUnified2 implements LabExpression {
       this.camera.zoom = this.zoom;
       this.camera.updateProjectionMatrix();
     }
+    this.lab2Assembly?.setZoom(this.zoom);
   }
 
   getResponse(): { bass: number; mid: number; treble: number } {
@@ -1991,6 +2037,7 @@ export class LightUnified2 implements LabExpression {
       this.camera.aspect = ratio;
       this.camera.updateProjectionMatrix();
     }
+    this.lab2Assembly?.setAspect(id, ratio);
   }
 
   setDebugView(view: number): void {
@@ -2037,6 +2084,49 @@ export class LightUnified2 implements LabExpression {
     const common = '色と音';
     const study = 'Study preview';
     return [
+      {
+        key: 'lab2AssemblyPreview',
+        label: 'Lab2 Optical Assembly (reuse)',
+        group: study,
+        type: 'select',
+        options: [
+          { value: 'off', label: 'Off' },
+          { value: 'core', label: 'Core' },
+          { value: 'cross-ray', label: 'Cross Ray' },
+          { value: 'refraction-veil', label: 'Refraction / Veil' },
+          { value: 'fan-spill', label: 'Fan / Spill' },
+          { value: 'haze-curtain', label: 'Haze / Curtain' },
+          { value: 'all', label: 'All layers' },
+        ],
+        value: this.lab2AssemblyPreview,
+      },
+      {
+        key: 'lab2AssemblyRed',
+        label: 'Assembly R (static)',
+        group: study,
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: this.lab2AssemblyRgb.x,
+      },
+      {
+        key: 'lab2AssemblyGreen',
+        label: 'Assembly G (static)',
+        group: study,
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: this.lab2AssemblyRgb.y,
+      },
+      {
+        key: 'lab2AssemblyBlue',
+        label: 'Assembly B (static)',
+        group: study,
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: this.lab2AssemblyRgb.z,
+      },
       {
         key: 'spatialMaterialAnchorPreview',
         label: 'Spatial Material Anchor Study',
@@ -2172,6 +2262,24 @@ export class LightUnified2 implements LabExpression {
 
   setExpressionParam(key: string, value: number | string): void {
     if (
+      key === 'lab2AssemblyPreview'
+      && typeof value === 'string'
+      && ['off', 'core', 'cross-ray', 'refraction-veil', 'fan-spill', 'haze-curtain', 'all'].includes(value)
+    ) {
+      this.lab2AssemblyPreview = value as Lab2AssemblyPreview;
+      this.syncLab2Assembly();
+      return;
+    }
+    if (
+      (key === 'lab2AssemblyRed' || key === 'lab2AssemblyGreen' || key === 'lab2AssemblyBlue')
+      && typeof value === 'number'
+    ) {
+      const channel = key === 'lab2AssemblyRed' ? 'x' : key === 'lab2AssemblyGreen' ? 'y' : 'z';
+      this.lab2AssemblyRgb[channel] = clamp01(value);
+      this.syncLab2Assembly();
+      return;
+    }
+    if (
       (key === 'lab2CoreRed' || key === 'lab2CoreGreen' || key === 'lab2CoreBlue')
       && typeof value === 'number'
     ) {
@@ -2266,6 +2374,7 @@ export class LightUnified2 implements LabExpression {
 
   dispose(): void {
     this.disposed = true;
+    this.lab2Assembly?.dispose();
     this.pipeline?.dispose();
     this.geometry?.dispose();
     this.material?.dispose();
@@ -2328,6 +2437,7 @@ export class LightUnified2 implements LabExpression {
     this.fragmentMesh = null;
     this.placeholder = null;
     this.atlas = null;
+    this.lab2Assembly = null;
     this.mesh = null;
     this.scene = null;
     this.camera = null;
