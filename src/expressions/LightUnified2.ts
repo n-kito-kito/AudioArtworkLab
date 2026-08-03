@@ -75,6 +75,9 @@ const UNIFIED2 = {
   maximumLiveMembranes: 30,
   /** 同時に生かすコアの上限。 */
   maximumLiveCores: 10,
+  /** Persistent Controllerが維持する固定個体。Eventの上限とは別枠で描画する。 */
+  persistentMembranes: 6,
+  persistentCores: 1,
   nearPlane: 0.1,
   farPlane: 80,
   fieldOfView: 45,
@@ -126,6 +129,18 @@ const UNIFIED2 = {
     membraneDecaySeconds: 0.95,
     /** これを下回った光は捨てる。無音で厳密に 0 個へ落とすための敷居。 */
     cullLevel: 0.004,
+  },
+  persistent: {
+    /** 再生中の静かな隙間でも残る最低光量。 */
+    baseLevel: 0.18,
+    /** 音量が上がったときの追従と、停止後に黒へ戻る時間。 */
+    attackSeconds: 0.3,
+    releaseSeconds: 2.4,
+    /** 短いブレイクは保持し、これを超える無音は停止と同じく黒へ戻す。 */
+    silenceHoldSeconds: 1.4,
+    /** 同じ個体が宇宙空間を漂う移動量。可視半径に対する割合。 */
+    driftAmount: 0.08,
+    driftSpeed: 0.055,
   },
 
   /** 検出の固定値。つまみに出すのは感度 1 本だけ（PRD D17）。 */
@@ -273,6 +288,7 @@ const UNIFIED2 = {
     softness: 0.5,
     carve: 0.35,
     spatialSpread: 0.68,
+    persistence: 0,
     coreSize: 0.4,
     corePresence: 0.5,
     saturation: 0.55,
@@ -288,6 +304,7 @@ type Unified2ParamKey =
   | 'softness'
   | 'carve'
   | 'spatialSpread'
+  | 'persistence'
   | 'coreSize'
   | 'corePresence'
   | 'saturation'
@@ -301,6 +318,7 @@ const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: n
   softness: { min: 0, max: 1, step: 0.01 },
   carve: { min: 0, max: 1, step: 0.01 },
   spatialSpread: { min: 0, max: 1, step: 0.01 },
+  persistence: { min: 0, max: 1, step: 0.01 },
   coreSize: { min: 0, max: 1, step: 0.01 },
   corePresence: { min: 0, max: 1, step: 0.01 },
   saturation: { min: 0, max: 1, step: 0.01 },
@@ -349,6 +367,8 @@ interface LiveLight {
   readonly originY: number;
   /** 膜だけが持つ、1 イベントの中の通し番号。コアは 0。 */
   readonly slot: number;
+  /** Eventではなく、同じ個体を維持するPersistent Controllerの光か。 */
+  readonly persistent?: boolean;
 }
 
 type Lab2AssemblyPreview =
@@ -459,28 +479,53 @@ export class LightUnified2 implements LabExpression {
 
   private readonly cores: LiveLight[] = [];
   private readonly membranes: LiveLight[] = [];
+  private readonly persistentCores: LiveLight[] = [];
+  private readonly persistentMembranes: LiveLight[] = [];
+  /** 再生中は音の隙間に床を持ち、停止後はゆっくり0へ戻る。 */
+  private persistentLevel = 0;
+  private persistentSilenceSeconds = 0;
 
   // ---- 膜のインスタンス属性 ----
-  private readonly offsets = new Float32Array(UNIFIED2.maximumLiveMembranes * 3);
+  private readonly offsets = new Float32Array(
+    (UNIFIED2.maximumLiveMembranes + UNIFIED2.persistentMembranes) * 3,
+  );
   /** 半幅 / 半高 / 素材番号。 */
-  private readonly sizes = new Float32Array(UNIFIED2.maximumLiveMembranes * 3);
+  private readonly sizes = new Float32Array(
+    (UNIFIED2.maximumLiveMembranes + UNIFIED2.persistentMembranes) * 3,
+  );
   /** 切り取りの中心 UV と半幅。 */
-  private readonly crops = new Float32Array(UNIFIED2.maximumLiveMembranes * 4);
+  private readonly crops = new Float32Array(
+    (UNIFIED2.maximumLiveMembranes + UNIFIED2.persistentMembranes) * 4,
+  );
   /** 面内回転の cos / sin と UV の反転。 */
-  private readonly orients = new Float32Array(UNIFIED2.maximumLiveMembranes * 4);
+  private readonly orients = new Float32Array(
+    (UNIFIED2.maximumLiveMembranes + UNIFIED2.persistentMembranes) * 4,
+  );
   /** 振幅（エンベロープ × 打撃の強さ）。 */
-  private readonly levels = new Float32Array(UNIFIED2.maximumLiveMembranes);
+  private readonly levels = new Float32Array(
+    UNIFIED2.maximumLiveMembranes + UNIFIED2.persistentMembranes,
+  );
   private readonly attributes: Record<string, THREE.InstancedBufferAttribute> = {};
 
   // ---- コアのインスタンス属性 ----
-  private readonly coreOffsets = new Float32Array(UNIFIED2.maximumLiveCores * 3);
+  private readonly coreOffsets = new Float32Array(
+    (UNIFIED2.maximumLiveCores + UNIFIED2.persistentCores) * 3,
+  );
   /** 半径 / 素材番号（コアは正方形）。 */
-  private readonly coreSizes = new Float32Array(UNIFIED2.maximumLiveCores * 2);
+  private readonly coreSizes = new Float32Array(
+    (UNIFIED2.maximumLiveCores + UNIFIED2.persistentCores) * 2,
+  );
   /** 切り取りの中心 UV と面内回転の cos / sin。 */
-  private readonly coreCells = new Float32Array(UNIFIED2.maximumLiveCores * 4);
+  private readonly coreCells = new Float32Array(
+    (UNIFIED2.maximumLiveCores + UNIFIED2.persistentCores) * 4,
+  );
   /** UV の反転。 */
-  private readonly coreFlips = new Float32Array(UNIFIED2.maximumLiveCores * 2);
-  private readonly coreLevels = new Float32Array(UNIFIED2.maximumLiveCores);
+  private readonly coreFlips = new Float32Array(
+    (UNIFIED2.maximumLiveCores + UNIFIED2.persistentCores) * 2,
+  );
+  private readonly coreLevels = new Float32Array(
+    UNIFIED2.maximumLiveCores + UNIFIED2.persistentCores,
+  );
   private readonly coreAttributes: Record<string, THREE.InstancedBufferAttribute> = {};
 
   constructor(id: ExpressionId, effects: Effect[] = [], theme?: Theme) {
@@ -519,6 +564,10 @@ export class LightUnified2 implements LabExpression {
     this.fragmentLevel = 0;
     this.cores.length = 0;
     this.membranes.length = 0;
+    this.persistentCores.length = 0;
+    this.persistentMembranes.length = 0;
+    this.persistentLevel = 0;
+    this.persistentSilenceSeconds = 0;
 
     this.buildMembraneMesh();
     this.buildCoreMesh();
@@ -1686,6 +1735,80 @@ export class LightUnified2 implements LabExpression {
     }
   }
 
+  /**
+   * Persistent Controllerの個体を一度だけ用意する。
+   * Event個体とは配列を分け、Persistenceを戻しても既存Eventの寿命を変更しない。
+   */
+  private ensurePersistentLights(elapsed: number): void {
+    if (this.persistentCores.length > 0) return;
+
+    const seed = -1001;
+    const halfHeight = this.halfHeightAt(UNIFIED2.core.depth);
+    const halfWidth = halfHeight * Math.max(this.aspectRatio, 0.01);
+    const originX = (hash01(seed, 1.7) * 2 - 1) * halfWidth * UNIFIED2.positionSpread * 0.35;
+    const originY = (hash01(seed, 3.1) * 2 - 1) * halfHeight * UNIFIED2.positionSpread * 0.35;
+    this.persistentCores.push({
+      bornAt: elapsed,
+      seed,
+      strength: 1,
+      originX,
+      originY,
+      slot: 0,
+      persistent: true,
+    });
+    for (let slot = 0; slot < UNIFIED2.persistentMembranes; slot++) {
+      this.persistentMembranes.push({
+        bornAt: elapsed,
+        seed,
+        strength: 0.72 + hash01(seed, slot + 41) * 0.28,
+        originX,
+        originY,
+        slot,
+        persistent: true,
+      });
+    }
+  }
+
+  /** 再生中は光の床を維持し、停止・長い無音ではゆっくり黒へ戻す。 */
+  private updatePersistence(delta: number): void {
+    const audio = this.context?.audioEngine.getParameters() ?? {};
+    const active = audio.active === 1;
+    const volume = clamp01(audio.volume ?? 0);
+    const persistent = UNIFIED2.persistent;
+    this.persistentSilenceSeconds = active && volume <= 0.012
+      ? this.persistentSilenceSeconds + Math.max(delta, 0)
+      : 0;
+    const withinMusicalGap = this.persistentSilenceSeconds <= persistent.silenceHoldSeconds;
+    const target = active && withinMusicalGap
+      ? persistent.baseLevel + (1 - persistent.baseLevel) * Math.pow(volume, 0.72)
+      : 0;
+    const seconds = target > this.persistentLevel
+      ? persistent.attackSeconds
+      : persistent.releaseSeconds;
+    const follow = 1 - Math.exp(-Math.max(delta, 0) / Math.max(seconds, 1e-4));
+    this.persistentLevel += (target - this.persistentLevel) * follow;
+
+    if (active && this.params.persistence > 0.001) this.ensurePersistentLights(this.previousElapsed);
+  }
+
+  /** Persistent個体だけに与える、seedで決まるゆっくりした漂い。 */
+  private persistentDrift(
+    light: LiveLight,
+    elapsed: number,
+    halfWidth: number,
+    halfHeight: number,
+  ): { readonly x: number; readonly y: number } {
+    if (!light.persistent) return { x: 0, y: 0 };
+    const amount = UNIFIED2.persistent.driftAmount * clamp01(this.params.persistence);
+    const phase = hash01(light.seed, light.slot + 71) * Math.PI * 2;
+    const phaseY = hash01(light.seed, light.slot + 83) * Math.PI * 2;
+    const speed = UNIFIED2.persistent.driftSpeed * (0.75 + hash01(light.seed, light.slot + 97) * 0.5);
+    return {
+      x: Math.sin(elapsed * speed * Math.PI * 2 + phase) * halfWidth * amount,
+      y: Math.cos(elapsed * speed * Math.PI * 1.46 + phaseY) * halfHeight * amount,
+    };
+  }
+
   /** 寿命の切れた光を捨てる。**無音なら 0 個まで落ちる**（＝ 黒）。 */
   private cull(elapsed: number): void {
     const envelope = UNIFIED2.envelope;
@@ -1740,6 +1863,8 @@ export class LightUnified2 implements LabExpression {
    */
   private writeLights(elapsed: number): void {
     const envelope = UNIFIED2.envelope;
+    const persistence = clamp01(this.params.persistence);
+    const eventWeight = 1 - persistence;
 
     // ---- 膜 ----
     if (this.geometry) {
@@ -1748,11 +1873,12 @@ export class LightUnified2 implements LabExpression {
       // **Spatial Spread。** 0 = 起点へ集中 ⇄ 1 = 3D空間へ分散・重畳。
       // 位置と奥行きを同じ意味で動かし、Core Presenceなど他の見え方は変えない。
       const spatialSpread = clamp01(this.params.spatialSpread);
-      const count = this.atlas ? this.membranes.length : 0;
+      const lights = [...this.persistentMembranes, ...this.membranes];
+      const count = this.atlas ? lights.length : 0;
       const tileCount = Math.max(this.atlas?.tiles.length ?? 1, 1);
 
       for (let index = 0; index < count; index++) {
-        const light = this.membranes[index]!;
+        const light = lights[index]!;
         const key = light.seed * 16 + light.slot;
         const scatteredDepth = mix(UNIFIED2.depthNear, UNIFIED2.depthFar, hash01(key, 11.3));
         const depth = mix(UNIFIED2.core.depth, scatteredDepth, spatialSpread);
@@ -1763,16 +1889,17 @@ export class LightUnified2 implements LabExpression {
         const scatterX = (hash01(key, 1.7) * 2 - 1) * halfWidth * UNIFIED2.positionSpread;
         const scatterY = (hash01(key, 3.1) * 2 - 1) * halfHeight * UNIFIED2.positionSpread;
         const projection = depth / UNIFIED2.core.depth;
+        const drift = this.persistentDrift(light, elapsed, halfWidth, halfHeight);
         this.offsets[index * 3 + 0] = mix(
           light.originX * projection,
           scatterX,
           spatialSpread,
-        );
+        ) + drift.x;
         this.offsets[index * 3 + 1] = mix(
           light.originY * projection,
           scatterY,
           spatialSpread,
-        );
+        ) + drift.y;
         this.offsets[index * 3 + 2] = -depth;
 
         // 板の縦横比。**細長い板が素材の線を異方的に引き伸ばす**（筋はこの副産物）。
@@ -1800,12 +1927,14 @@ export class LightUnified2 implements LabExpression {
         this.orients[index * 4 + 2] = hash01(key, 29.5) < 0.5 ? -1 : 1;
         this.orients[index * 4 + 3] = hash01(key, 31.1) < 0.5 ? -1 : 1;
 
-        this.levels[index] =
-          envelopeLevel(
+        const eventLevel = envelopeLevel(
             elapsed - light.bornAt,
             envelope.membraneAttackSeconds,
             envelope.membraneDecaySeconds,
           ) * light.strength;
+        this.levels[index] = light.persistent
+          ? this.persistentLevel * persistence * light.strength
+          : eventLevel * eventWeight;
       }
       this.geometry.instanceCount = count;
       for (const attribute of Object.values(this.attributes)) attribute.needsUpdate = true;
@@ -1817,15 +1946,19 @@ export class LightUnified2 implements LabExpression {
       const baseRadius =
         this.halfHeightAt(core.depth) *
         mix(core.sizeSmall, core.sizeLarge, clamp01(this.params.coreSize));
-      const count = this.atlas ? this.cores.length : 0;
+      const lights = [...this.persistentCores, ...this.cores];
+      const count = this.atlas ? lights.length : 0;
       const tileCount = Math.max(this.atlas?.tiles.length ?? 1, 1);
       const room = Math.max(0.5 - core.cropHalf, 0);
 
       for (let index = 0; index < count; index++) {
-        const light = this.cores[index]!;
+        const light = lights[index]!;
         const seed = light.seed;
-        this.coreOffsets[index * 3 + 0] = light.originX;
-        this.coreOffsets[index * 3 + 1] = light.originY;
+        const halfHeight = this.halfHeightAt(core.depth);
+        const halfWidth = halfHeight * Math.max(this.aspectRatio, 0.01);
+        const drift = this.persistentDrift(light, elapsed, halfWidth, halfHeight);
+        this.coreOffsets[index * 3 + 0] = light.originX + drift.x;
+        this.coreOffsets[index * 3 + 1] = light.originY + drift.y;
         this.coreOffsets[index * 3 + 2] = -core.depth;
 
         // **Core size = 0 なら半径 0 ＝ 板が潰れて 1 画素も描かれない。**
@@ -1842,12 +1975,14 @@ export class LightUnified2 implements LabExpression {
         this.coreFlips[index * 2 + 0] = hash01(seed, core.seedSalt + 3.1) < 0.5 ? -1 : 1;
         this.coreFlips[index * 2 + 1] = hash01(seed, core.seedSalt + 3.7) < 0.5 ? -1 : 1;
 
-        this.coreLevels[index] =
-          envelopeLevel(
+        const eventLevel = envelopeLevel(
             elapsed - light.bornAt,
             envelope.coreAttackSeconds,
             envelope.coreDecaySeconds,
           ) * light.strength;
+        this.coreLevels[index] = light.persistent
+          ? this.persistentLevel * persistence
+          : eventLevel * eventWeight;
       }
       this.coreGeometry.instanceCount = count;
       for (const attribute of Object.values(this.coreAttributes)) attribute.needsUpdate = true;
@@ -1888,6 +2023,7 @@ export class LightUnified2 implements LabExpression {
 
     // **捨てるのが先。** 生まれた瞬間の光は age = 0 ＝ 振幅 0 なので、
     // 検出のあとに捨てると生まれたそばから消えてしまう。
+    this.updatePersistence(delta);
     this.cull(elapsed);
     this.detectEvents(elapsed, delta);
     this.resolveTint(delta);
@@ -2395,6 +2531,7 @@ export class LightUnified2 implements LabExpression {
       row('membranes', 'Membranes (1 打撃で生む枚数)', membrane),
       row('corePresence', 'Core Presence (素材白熱 ⇄ 独立コア)', seamless),
       row('spatialSpread', 'Spatial Spread (起点へ集中 ⇄ 3D空間へ分散)', seamless),
+      row('persistence', 'Persistence (発生して消える ⇄ 常在して漂う)', seamless),
       row('coreSize', 'Core Layer Size (0 = 層全体を消す ⇄ 大)', elements),
       row('intensity', 'Global Intensity', common),
       row('saturation', 'Saturation (0 = 白 ⇄ 1 = 色が濃い)', unifiedSpecific),
@@ -2648,6 +2785,10 @@ export class LightUnified2 implements LabExpression {
     }
     this.cores.length = 0;
     this.membranes.length = 0;
+    this.persistentCores.length = 0;
+    this.persistentMembranes.length = 0;
+    this.persistentLevel = 0;
+    this.persistentSilenceSeconds = 0;
     this.pipeline = null;
     this.geometry = null;
     this.material = null;
