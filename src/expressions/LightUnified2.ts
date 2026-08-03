@@ -33,10 +33,10 @@ import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
  *
  * ## コア（第 2 歩）
  *
- * `Core form` は形の混合ではなく**手続きの芯の寄与量**で、
- * **0 = 芯が満額（Lab2）⇄ 中間 = 素材の上に芯が加算（Reactive）⇄ 1 = 芯なし（Spatial）**。
+ * `Core Presence` は**独立した手続きコアの寄与量**で、
+ * **0 = 素材の重なりだけ（Spatial）⇄ 中間 = 素材 + 白い芯（Reactive）⇄ 1 = 明確な芯（Lab2）**。
  * 詳しくは `buildCoreMesh()` の注釈。
- * **コアの有無は `Core size`（0 で板が潰れて消える）が決め、`Core form` は質だけを担う。**
+ * **コア層全体の有無は `Core Layer Size`、独立した白い芯の量は `Core Presence` が担う。**
  *
  * ## 音（第 3 歩）
  *
@@ -185,7 +185,7 @@ const UNIFIED2 = {
      * **素材側の高さを手続き側と揃えるための補正利得。**
      *
      * 手続きの楕円は中心で 1.0（＝白）へ届くが、素材の輝度は実測で 0.017〜0.3 しかない。
-     * これが無いと `Core form` は「形が変わる軸」ではなく「消える軸」になってしまう。
+     * これが無いと `Core Presence` は構造の軸ではなく、単なる明滅になってしまう。
      * **膜には掛けない**（膜は今までどおり素材の輝度をそのまま出す）。
      */
     materialGain: 3.3,
@@ -280,7 +280,7 @@ const UNIFIED2 = {
     carve: 0.35,
     anchor: 0.35,
     coreSize: 0.4,
-    coreForm: 0.5,
+    corePresence: 0.5,
     saturation: 0.55,
     sensitivity: 0.5,
     intensity: 1,
@@ -295,7 +295,7 @@ type Unified2ParamKey =
   | 'carve'
   | 'anchor'
   | 'coreSize'
-  | 'coreForm'
+  | 'corePresence'
   | 'saturation'
   | 'sensitivity'
   | 'intensity';
@@ -308,7 +308,7 @@ const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: n
   carve: { min: 0, max: 1, step: 0.01 },
   anchor: { min: 0, max: 1, step: 0.01 },
   coreSize: { min: 0, max: 1, step: 0.01 },
-  coreForm: { min: 0, max: 1, step: 0.01 },
+  corePresence: { min: 0, max: 1, step: 0.01 },
   saturation: { min: 0, max: 1, step: 0.01 },
   sensitivity: { min: 0, max: 1, step: 0.01 },
   intensity: { min: 0, max: 2, step: 0.01 },
@@ -1473,25 +1473,25 @@ export class LightUnified2 implements LabExpression {
    * **コア。打撃ごとに 1 個生まれる中心の白熱。**
    *
    * ---
-   * ## `Core form` は「混合」ではなく「**手続きの芯の寄与量**」
+   * ## `Core Presence` は「**独立した手続きコアの寄与量**」
    *
    * 3 表現を見直すと、Spatial に独立したコア部品は無く、中心にあったのは
    * **素材が形の膜が強く光っていたもの**（Prismatic Anchor）だった。
    * Lab2 は**手続きの楕円 + 素材を加算**、Reactive は**素材が形 + 白い芯を加算**。
    * つまり 3 表現は「**手続きの芯がどれだけ乗るか**」の 1 本の軸に並ぶ。
    *
-   *     mask = 素材の輝度 + 手続きの楕円 × (1 − Core form)
+   *     mask = 素材の輝度 + 手続きの楕円 × Core Presence
    *
-   * - `Core form = 0`: 芯が満額で乗る（楕円が主役 ＝ Lab2）
+   * - `Core Presence = 0`: 芯は無く、素材の重なりだけ（＝ Spatial）
    * - 中間: 素材が形の上に芯が加算で乗る（＝ Reactive）
-   * - `Core form = 1`: **芯の寄与が厳密に 0**。素材だけが光る（＝ Spatial）
+   * - `Core Presence = 1`: 芯が満額で乗る（＝ Lab2）
    *
    * 素材側は軸のどこでも常に居る。変わるのは芯の質だけで、分岐は無く連続。
    *
    * ## 有無と質は別のつまみ
    *
-   * **コアを消したいときは `Core size` を 0 にする。** 板のスケールが 0 になって
-   * 1 画素も描かれない。`Core form` は質の軸であって、明るさで消す役割は持たない。
+   * **素材を含むコア層全体を消したいときは `Core size` を 0 にする。**
+   * `Core Presence` が0でも素材由来の白熱は残り、Spatial側の端点として成立する。
    */
   private buildCoreMesh(): void {
     // 板の中を −1..1 で持つ。膜と同じ座標系にして、式の読み比べができるようにする。
@@ -1523,7 +1523,7 @@ export class LightUnified2 implements LabExpression {
         // 手続きの芯の寄与量 / 楕円の落ち方 / 素材側の補正利得 / 円窓の始まり。
         uCore: {
           value: new THREE.Vector4(
-            1 - UNIFIED2.defaults.coreForm,
+            UNIFIED2.defaults.corePresence,
             core.falloff,
             core.materialGain,
             core.edgeFadeStart,
@@ -1583,7 +1583,7 @@ export class LightUnified2 implements LabExpression {
           float radius2 = dot(p, p);
 
           // ① 手続きの芯（楕円）。r = 1 で厳密に 0 なので、板の四角はこの側では出ない。
-          //    寄与量 uCore.x は Core form 1 で厳密に 0 になり、芯は完全に消える。
+          //    寄与量 uCore.x は Core Presence 0 で厳密に0になり、素材だけが残る。
           float ellipse = pow(clamp(1.0 - radius2, 0.0, 1.0), uCore.y) * max(uCore.x, 0.0);
 
           // ② 素材が形。膜とまったく同じ読み方（敷居も 0 を 0 のまま通す）。
@@ -1869,9 +1869,9 @@ export class LightUnified2 implements LabExpression {
 
     const core = this.coreMaterial;
     if (core) {
-      // 質の軸。軸 1 で手続きの芯が抜け、素材の形だけが残る。
+      // 構造の軸。0で素材だけ、1で独立した手続きの芯が満額で加わる。
       // **コアの有無はここでは決めない**（大きさが決める）。
-      (core.uniforms.uCore!.value as THREE.Vector4).x = 1 - clamp01(this.params.coreForm);
+      (core.uniforms.uCore!.value as THREE.Vector4).x = clamp01(this.params.corePresence);
       core.uniforms.uIntensity!.value = intensity;
     }
   }
@@ -2172,7 +2172,8 @@ export class LightUnified2 implements LabExpression {
       value: this.params[key],
     });
     const membrane = '膜（素材が形）';
-    const core = 'コア（打撃で生まれる）';
+    const seamless = 'Seamless / Structure';
+    const elements = 'Elements / Advanced';
     const common = 'Common';
     const unifiedSpecific = 'Light Unified 2 / Color & Trigger';
     const study = 'Study preview';
@@ -2390,8 +2391,8 @@ export class LightUnified2 implements LabExpression {
       row('carve', 'Carve (緩いビネット＝素材が形 ⇄ 硬い円窓＝外形で切る)', membrane),
       row('anchor', 'Anchor (画面内に散る ⇄ 起点から生まれる)', membrane),
       row('membranes', 'Membranes (1 打撃で生む枚数)', membrane),
-      row('coreForm', 'Core form (手続きの芯 ⇄ 素材が形)', core),
-      row('coreSize', 'Core size (0 = コアを消す ⇄ 大)', core),
+      row('corePresence', 'Core Presence (素材白熱 ⇄ 独立コア)', seamless),
+      row('coreSize', 'Core Layer Size (0 = 層全体を消す ⇄ 大)', elements),
       row('intensity', 'Global Intensity', common),
       row('saturation', 'Saturation (0 = 白 ⇄ 1 = 色が濃い)', unifiedSpecific),
       row('sensitivity', 'Sensitivity (発火の感度)', unifiedSpecific),
@@ -2400,6 +2401,11 @@ export class LightUnified2 implements LabExpression {
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    // 旧Core formは向きが逆だった。保存済みプリセットだけを新しい意味へ変換する。
+    if (key === 'coreForm' && typeof value === 'number') {
+      this.params.corePresence = 1 - clamp01(value);
+      return;
+    }
     if (key === 'recoveryPreview' && typeof value === 'string') {
       const allowed: readonly RecoveryPreview[] = [
         'off',

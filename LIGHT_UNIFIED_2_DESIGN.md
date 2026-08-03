@@ -27,6 +27,24 @@ Reactive / Lab2 / Driftを2D平面上だけの表現として設計しない。
 Style Presetは完成工程を固定するものではない。構造・時間状態・素材の成立方法が本質的に異なる場合だけ分ける。
 パーツの有無やスライダー値の組み合わせだけでStyle Presetを増やさない。
 
+### Seamless方針（2026-08-03更新）
+
+Spatial / Reactive / Lab2 / Driftを固定された別Rendererとして選ぶことを最終形にしない。
+完成度の高い各状態はPresetとして残すが、Presetは共通構造上の開始値・復帰点として扱う。
+その間は少数の意味あるMacro軸で連続的に移動できるようにする。
+
+- Core Presence: 素材の重なりによる白熱 ⇄ 明確な独立コア
+- Spatial Spread: 中心への集中 ⇄ 3D空間への分散・重畳
+- Persistence: イベントで現れて消える ⇄ 常在して漂う
+- Renewal: 同じ光を維持 ⇄ 光学層を短い周期で更新
+
+旧表現を丸ごと1本のMode値で変形しない。各Macro軸は1つの視覚的意味だけを持ち、
+0・中間・1を順番に検証する。内部のEvent / Refresh / Persistent Controllerは分離したまま、
+共通素材への寄与を連続制御する。
+
+Recoveryは過去表現そのものを表示する比較基準として維持し、Macro軸の影響を受けない。
+新しいPresetが崩れた場合に、ドナー本来の完成状態へいつでも戻って比較できるようにする。
+
 ### Origin Referenceと派生表現の関係
 
 Light Unified 2の最上位リファレンスは、開発初期に共有されたKLSRの光表現動画群である。
