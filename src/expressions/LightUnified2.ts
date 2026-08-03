@@ -231,6 +231,8 @@ const UNIFIED2 = {
     halfWidth: 2.4,
     halfHeight: 1.35,
     intensity: 1.08,
+    /** 音接続前の確認用。将来は各成分を別の音特徴量で上書きする。 */
+    rgb: { r: 0.55, g: 0.85, b: 1 },
   },
 
   /** Lab2 Coreの周囲に置く、素材由来の静止プリズム片。 */
@@ -386,6 +388,11 @@ export class LightUnified2 implements LabExpression {
   private fragmentPreview: 'off' | 'static' | 'audio' = 'off';
   private fragmentLevel = 0;
   private lab2CoreStudyPreview: 'off' | 'static' = 'off';
+  private readonly lab2CoreRgb = new THREE.Vector3(
+    UNIFIED2.lab2CoreStudy.rgb.r,
+    UNIFIED2.lab2CoreStudy.rgb.g,
+    UNIFIED2.lab2CoreStudy.rgb.b,
+  );
   private lab2CoreStudyGeometry: THREE.PlaneGeometry | null = null;
   private lab2CoreStudyMaterial: THREE.ShaderMaterial | null = null;
   private lab2CoreStudyMesh: THREE.Mesh | null = null;
@@ -709,12 +716,15 @@ export class LightUnified2 implements LabExpression {
     this.fragmentMesh.renderOrder = 2;
   }
 
-  /** Lab2 の白い中心・細い十字光・微かなプリズム色だけを確認する静止 Study。 */
+  /** Lab2 の白い焦点と、その内部の屈折殻・色収差だけを確認する静止 Study。 */
   private buildLab2CoreStudyMesh(): void {
     const study = UNIFIED2.lab2CoreStudy;
     const geometry = new THREE.PlaneGeometry(2, 2);
     const material = new THREE.ShaderMaterial({
-      uniforms: { uIntensity: { value: study.intensity } },
+      uniforms: {
+        uIntensity: { value: study.intensity },
+        uRgb: { value: this.lab2CoreRgb.clone() },
+      },
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
@@ -735,6 +745,7 @@ export class LightUnified2 implements LabExpression {
       fragmentShader: /* glsl */ `
         precision highp float;
         uniform float uIntensity;
+        uniform vec3 uRgb;
         varying vec2 vLocal;
 
         float focus(vec2 point, vec2 radius, float falloff) {
@@ -742,33 +753,70 @@ export class LightUnified2 implements LabExpression {
           return exp(-dot(q, q) * falloff);
         }
 
+        vec2 rotatePoint(vec2 point, float angle) {
+          float c = cos(angle);
+          float s = sin(angle);
+          return vec2(point.x * c - point.y * s, point.x * s + point.y * c);
+        }
+
+        float refractionShard(
+          vec2 point,
+          vec2 offset,
+          float angle,
+          vec2 radius,
+          float skew
+        ) {
+          vec2 q = rotatePoint(point - offset, angle);
+          q.x += q.y * skew;
+          vec2 n = q / radius;
+          float irregular = abs(n.x) + abs(n.y) * 0.72;
+          irregular += sin(n.x * 3.1 + n.y * 2.3) * 0.055;
+          return 1.0 - smoothstep(0.54, 1.0, irregular);
+        }
+
+        float refractionShell(vec2 point) {
+          float shell = 0.0;
+          shell += refractionShard(point, vec2(-0.067, 0.041), -0.46, vec2(0.112, 0.047), 0.28);
+          shell += refractionShard(point, vec2(0.083, -0.025), 0.59, vec2(0.118, 0.041), -0.34);
+          shell += refractionShard(point, vec2(0.012, 0.086), 1.03, vec2(0.082, 0.029), 0.18);
+          shell += refractionShard(point, vec2(-0.029, -0.078), 0.17, vec2(0.086, 0.027), -0.22);
+          shell += refractionShard(point, vec2(0.112, 0.052), -0.18, vec2(0.066, 0.021), 0.31);
+          return clamp(shell, 0.0, 1.0);
+        }
+
         void main() {
           vec2 p = vLocal;
           float edge = smoothstep(0.0, 0.16, 1.0 - max(abs(p.x), abs(p.y)));
 
-          float whiteBody = focus(p, vec2(0.12, 0.214), 2.7);
-          float whiteFocus = focus(p - vec2(0.002, 0.001), vec2(0.055, 0.098), 3.3);
+          // White Focus: RGB比率に左右されない鋭い白色の焦点。
+          float whiteBody = focus(p, vec2(0.096, 0.168), 2.85);
+          float whiteFocus = focus(p - vec2(0.002, 0.001), vec2(0.037, 0.066), 3.45);
 
-          float greenFringe = focus(
-            p - vec2(-0.056, 0.008),
-            vec2(0.082, 0.138),
-            3.1
-          );
-          float cyanFringe = focus(
-            p - vec2(0.052, -0.007),
-            vec2(0.076, 0.132),
-            3.2
-          );
-          float yellowFringe = focus(
-            p - vec2(0.0, 0.048),
-            vec2(0.064, 0.112),
-            3.4
-          );
+          // Refraction Shell: Core直近に閉じた、左右非対称な屈折片の集合。
+          float shell = refractionShell(p);
+          float shellInner = refractionShell(p * 1.09 + vec2(0.004, -0.003));
+          float shellEdge = clamp(shell - shellInner * 0.58, 0.0, 1.0);
 
-          vec3 color = vec3(whiteBody * 0.78 + whiteFocus * 0.72);
-          color += vec3(0.12, 0.9, 0.34) * greenFringe * 0.12;
-          color += vec3(0.08, 0.48, 1.0) * cyanFringe * 0.1;
-          color += vec3(0.92, 1.0, 0.18) * yellowFringe * 0.07;
+          // Color Fringe: 同じShellを僅かにずらしてRGB各成分へ渡す。
+          // RGBが均等なら重なりが白へ寄り、比率差があると連続的に発色が変わる。
+          vec3 rgbRatio = max(uRgb, vec3(0.0));
+          rgbRatio /= max(max(rgbRatio.r, rgbRatio.g), max(rgbRatio.b, 0.0001));
+          vec2 aberration = vec2(0.006, -0.0035);
+          vec3 fringeField = vec3(
+            refractionShell(p + aberration),
+            shell,
+            refractionShell(p - aberration)
+          );
+          fringeField = clamp(fringeField - vec3(shellInner * 0.62), 0.0, 1.0);
+
+          // Local Spill: Shellと同じ屈折片を広げ、焦点直近にだけ淡く漏らす。
+          float spill = refractionShell(p * 0.72 + vec2(-0.012, 0.006));
+          spill *= 1.0 - smoothstep(0.12, 0.29, length(p));
+
+          vec3 color = vec3(whiteBody * 0.72 + whiteFocus * 1.12);
+          color += vec3(shell * 0.24 + shellEdge * 0.17);
+          color += fringeField * rgbRatio * 0.31;
+          color += mix(vec3(1.0), rgbRatio, 0.42) * spill * 0.085;
           color *= edge * uIntensity;
 
           float peak = max(color.r, max(color.g, color.b));
@@ -1795,6 +1843,9 @@ export class LightUnified2 implements LabExpression {
       || this.spatialFragmentStudyPreview === 'with-anchor';
     const isolated = lab2Active || lab2FragmentActive || spatialActive || spatialFragmentActive;
     if (this.lab2CoreStudyMesh) this.lab2CoreStudyMesh.visible = lab2Active;
+    if (this.lab2CoreStudyMaterial) {
+      (this.lab2CoreStudyMaterial.uniforms.uRgb!.value as THREE.Vector3).copy(this.lab2CoreRgb);
+    }
     if (this.lab2FragmentStudyMesh) {
       this.lab2FragmentStudyMesh.visible = lab2FragmentActive;
     }
@@ -2021,6 +2072,33 @@ export class LightUnified2 implements LabExpression {
         value: this.lab2CoreStudyPreview,
       },
       {
+        key: 'lab2CoreRed',
+        label: 'Lab2 Core R (static)',
+        group: study,
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: this.lab2CoreRgb.x,
+      },
+      {
+        key: 'lab2CoreGreen',
+        label: 'Lab2 Core G (static)',
+        group: study,
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: this.lab2CoreRgb.y,
+      },
+      {
+        key: 'lab2CoreBlue',
+        label: 'Lab2 Core B (static)',
+        group: study,
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: this.lab2CoreRgb.z,
+      },
+      {
         key: 'lab2FragmentStudyPreview',
         label: 'Lab2 Fragment Study (静止確認)',
         group: study,
@@ -2093,6 +2171,15 @@ export class LightUnified2 implements LabExpression {
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    if (
+      (key === 'lab2CoreRed' || key === 'lab2CoreGreen' || key === 'lab2CoreBlue')
+      && typeof value === 'number'
+    ) {
+      const channel = key === 'lab2CoreRed' ? 'x' : key === 'lab2CoreGreen' ? 'y' : 'z';
+      this.lab2CoreRgb[channel] = clamp01(value);
+      this.updateLab2CoreStudy();
+      return;
+    }
     if (key === 'spatialMaterialAnchorPreview' && (value === 'off' || value === 'static')) {
       this.spatialMaterialAnchorPreview = value;
       if (value === 'static') {
