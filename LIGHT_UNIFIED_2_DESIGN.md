@@ -41,7 +41,7 @@ Origin Light References
   線 / 膜 / 帯 / ガラス片 / 屈折 / プリズム / 黒い余白
                     ↓
 Light Unified 2の素材語彙
-  Material Light Layer / Core / Fragment / Haze / Ray
+  Material Light Layer / Core / Cross Ray / Fragment / Haze / Ray
                     ↓
 Style Preset
   Spatial / Reactive / Lab2 / Drift
@@ -148,7 +148,7 @@ Controllerが異なっても、明るさの入力モデルは共通にできる�
 | 層 | 担当 | 例 |
 |---|---|---|
 | Material Light Layer | 画像素材を形として描く共有プリミティブ | Spatialのmacro、Reactiveのsheet / haze / anchor |
-| Light Element | 固有の形状を持つ素材 | Fragment、Ray、手続きCore |
+| Light Element | 固有の形状を持つ素材 | Fragment、通常Ray、手続きCore、Lab2 Cross Ray |
 | Style Preset | 表現の大元の方向性と基盤構成 | Spatial、Reactive、Lab2、Drift |
 | Controller | 存在時間と更新方法 | Event、Refresh、Persistent |
 | Modifier | 形や位置の変化 | Float、Orbit、Flow、Twist |
@@ -180,6 +180,19 @@ Controllerの抽象化は、EventとPersistentの両方が単独で成立して�
 パーツ分解は見た目と責務を理解するためのStudyであり、全Style Presetを同じパーツ構成に固定するためではない。
 特にSpatialは、独立Coreを使わずMaterial Light Layerの重なりだけで白熱が成立する状態を必ず残す。
 
+### Lab2 CoreとCross Rayの責務
+
+Lab2の中心に見える白い焦点と、そこから水平・垂直へ伸びる十字光は、別Elementとして扱う。
+
+| Element | 責務 | 単独で調整する値 |
+|---|---|---|
+| Lab2 Core | 中心の強い白い焦点と、その直近のごく小さなプリズム色 | サイズ、焦点の硬さ、輝度、色収差 |
+| Lab2 Cross Ray | Coreに付随して見える水平・垂直の細い光 | 水平長、垂直長、太さ、輝度、減衰 |
+
+CoreはCross Rayが無くても単独の光源として成立させる。Cross RayはCoreの形状へ焼き込まず、
+表示・強度・伸びを独立して制御できる状態にする。これにより、Coreだけを残す、Cross Rayだけを
+音へ接続する、Style PresetによってCross Rayを使わない、といった組み替えを可能にする。
+
 ---
 
 ## 6. 現在地: 静止素材の構造確認
@@ -189,6 +202,7 @@ Controllerの抽象化は、EventとPersistentの両方が単独で成立して�
 - Haze Study
 - Drift候補のFragment Study（Volumeで明るさだけを動かす段階を含む）
 - Lab2 Core Study
+- Lab2 Cross Ray Study（Coreから分離して検証する対象）
 - Lab2 Fragment Study
 - Spatial Material Anchor Study
 - Spatial Fragment Study
@@ -205,7 +219,8 @@ Controllerの抽象化は、EventとPersistentの両方が単独で成立して�
 
 | 素材 | 実装 | 構造 | 見た目 |
 |---|---|---|---|
-| Lab2 Core | Implemented | 独立Coreとして概ね妥当 | 白い焦点、水平・垂直光、画角別サイズを要調整 |
+| Lab2 Core | Implemented | 独立Coreとして概ね妥当 | 十字光を含めず、白い焦点と画角別サイズを要調整 |
+| Lab2 Cross Ray | Core内の描画から分離が必要 | Coreに付随する独立Element | 水平・垂直光を単独で調整・承認する |
 | Lab2 Fragment | Implemented | prismAtlas由来で妥当 | Core調整後に合成を再評価 |
 | Spatial Material Anchor | Implemented | 独立Coreなしで素材の重なりから白熱しており妥当 | 中央へ集中しており、空間的な広がりを要調整 |
 | Spatial Fragment | Implemented | Anchorと同じ素材を使用しており妥当 | Anchor調整後に合成を再評価 |
@@ -221,22 +236,29 @@ Lab2とSpatialのFragmentも万能の1種類へ統合せず、役割別に分け
 
 1. Lab2 Coreだけを静止状態で再調整する
    - 明確な白い焦点
-   - 細い水平・垂直光
-   - 周辺のプリズム色
+   - 焦点の直近にだけ残る小さなプリズム色
    - 1:1 / 16:9 / 9:16で存在感が崩れないサイズ
-2. Lab2 Core承認後、Lab2 Fragmentとの合成を再確認する
-3. Spatial Anchor / Fragmentの空間的な広がりだけを再調整する
-4. Lab2 / Spatialの静止素材が承認された後、重複するMaterial Light Layer描画を見た目を変えずに整理する
-5. その後にDriftの静止素材を確定する
-6. 各素材の承認後、1部品ずつ最小の動き、Audio Mappingの順で接続する
+   - 水平・垂直の十字光はCoreから除外する
+2. Lab2 Core承認後、Lab2 Cross Rayを独立Elementとして静止状態で実装・調整する
+   - 水平長、垂直長、太さ、輝度、減衰を独立して扱う
+   - Coreの形状や輝度を変更しない
+3. CoreとCross Rayの合成を確認する
+4. 合成承認後、Lab2 Fragmentとの合成を再確認する
+5. Spatial Anchor / Fragmentの空間的な広がりだけを再調整する
+6. Lab2 / Spatialの静止素材が承認された後、重複するMaterial Light Layer描画を見た目を変えずに整理する
+7. その後にDriftの静止素材を確定する
+8. 各素材の承認後、1部品ずつ最小の動き、Audio Mappingの順で接続する
 
-現時点ではFloat / Orbit / Style Preset / Controller / クロスフェード / Ray / Twist / Bloomの
-本格調整へ進まない。Lab2とSpatialを同時に調整しない。
+現時点ではFloat / Orbit / Style Preset / Controller / クロスフェード / 通常Ray / Twist / Bloomの
+本格調整へ進まない。Lab2 Cross Rayは通常Rayとは別のLab2固有Elementとして段階的に扱う。
+Lab2とSpatialを同時に調整しない。
 
 ---
 
 ## 8. 直近の実装指示
 
 次はLab2 Core Studyだけを対象にする。既存のLab2 Fragment、Spatial、Haze、Drift候補、
-音反応には触れず、静止Coreの白い焦点・水平垂直光・画角別サイズだけをReferenceと比較する。
+音反応には触れず、静止Coreの白い焦点・焦点直近のプリズム色・画角別サイズだけをReferenceと比較する。
+水平・垂直の十字光はCoreの完成条件に含めず、Coreから分離する。Cross Rayの見た目調整は
+Core承認後の別コミットで行う。
 変更前後を同じ画角で提示し、1コミットで停止する。

@@ -306,6 +306,7 @@ Spatial はその中間（手続きの transient + 素材の macro 膜の 2 段�
 | Haze | Study実装済み。最終的な役割は未承認 |
 | Drift候補Fragment | 静止とVolume強度反応を実装済み。素材・構造は未承認 |
 | Lab2 Core | 静止Study実装済み。見た目は要調整 |
+| Lab2 Cross Ray | 現状はCore側の描画に含まれる。独立Elementへ分離してから調整する |
 | Lab2 Fragment | prismAtlas由来の静止Study実装済み。Core調整後に再確認 |
 | Spatial Anchor | 独立Coreなしの素材重畳Study実装済み。広がりを要調整 |
 | Spatial Fragment | Anchorと同じ素材の静止Study実装済み。Anchor調整後に再確認 |
@@ -313,36 +314,49 @@ Spatial はその中間（手続きの transient + 素材の macro 膜の 2 段�
 ### 1. Lab2 Coreを静止状態で再調整する
 
 - 白い焦点を明確にする
-- 水平・垂直方向の細い光をReferenceに合わせる
+- 水平・垂直方向の十字光はCoreから除外する
+- 焦点直近の小さなプリズム色だけをCoreに残す
 - プリズム片がCoreの存在感を奪わないようにする
 - 1:1 / 16:9 / 9:16でサイズを確認する
 - Lab2 Fragmentや他Studyは変更しない
 
-### 2. Lab2 Fragmentとの合成を再確認する
+### 2. Lab2 Cross Rayを独立Elementとして実装・調整する
 
 - Core承認後にだけ進む
+- 水平長、垂直長、太さ、輝度、減衰を独立して扱う
+- Coreの形状や輝度を変更しない
+
+### 3. Lab2 CoreとCross Rayの合成を確認する
+
+- 単独で承認したCoreとCross Rayを重ねるだけにする
+- 合成時の補正を各Elementへ焼き込まない
+
+### 4. Lab2 Fragmentとの合成を再確認する
+
+- CoreとCross Rayの合成承認後にだけ進む
 - CoreとFragmentが同じ光の屈折・分解に見えるか確認する
 
-### 3. Spatialの広がりを再調整する
+### 5. Spatialの広がりを再調整する
 
 - 独立Coreなしの構造は維持する
 - 中央の小さな塊だけでなく、帯・膜・断片が画面内へ展開するようにする
 - AnchorとFragmentを同時に別方向へ作り替えず、変更を1要素に限定する
 
-### 4. 共通Material Light Layer描画を整理する
+### 6. 共通Material Light Layer描画を整理する
 
 - Lab2 / Spatialの静止見た目承認後に行う
 - 重複するprismAtlas描画を、見た目を変えずに共通化する
 - 構造整理と見た目調整を同じコミットに混ぜない
 
-### 5. Drift素材へ進む
+### 7. Drift素材へ進む
 
 - Lab2 / Spatialの静止素材が承認されるまで、新しい動きやControllerを追加しない
 - Driftも静止素材の確定から始める
 
 **やらないこと（今回のスコープ外）**:
-Float / Orbit / Style Preset / Controller / クロスフェード / Ray / Twist / Bloomの本格調整 /
+Float / Orbit / Style Preset / Controller / クロスフェード / 通常Ray / Twist / Bloomの本格調整 /
 カメラ移動 / 汎用ノードエディター / 他表現への展開 / mainへのpush / 本番デプロイ。
+Lab2 Cross Rayの分離と静止調整だけは、Core承認後の次工程としてスコープ内に含む。
 
 ---
 
