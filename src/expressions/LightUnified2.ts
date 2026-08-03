@@ -327,6 +327,17 @@ type Unified2ParamKey =
   | 'sensitivity'
   | 'intensity';
 
+type CommonAudioParamKey = 'intensity' | 'scale';
+
+const COMMON_AUDIO_DEFAULTS: Record<CommonAudioParamKey, {
+  readonly sourceId: string;
+  readonly depth: number;
+}> = {
+  intensity: { sourceId: 'volume', depth: 0.25 },
+  // 低音最大時もScaleは0.62→0.80。画面を覆い切らず、素材の形を判別できる幅に留める。
+  scale: { sourceId: 'bass', depth: 0.18 },
+};
+
 const PARAM_RANGES: Record<Unified2ParamKey, { min: number; max: number; step: number }> = {
   membranes: { min: 3, max: UNIFIED2.maximumMembranesPerEvent, step: 1 },
   scale: { min: 0, max: 1, step: 0.01 },
@@ -579,6 +590,14 @@ export class LightUnified2 implements LabExpression {
         default: UNIFIED2.defaults.intensity,
         kind: 'continuous',
       },
+      {
+        id: 'scale',
+        label: 'Scale',
+        min: PARAM_RANGES.scale.min,
+        max: PARAM_RANGES.scale.max,
+        default: UNIFIED2.defaults.scale,
+        kind: 'continuous',
+      },
     ]);
   }
 
@@ -590,14 +609,15 @@ export class LightUnified2 implements LabExpression {
     this.sourceShelf = getSourceShelf(context.audioEngine);
     this.commonResolver.setSources(this.sourceShelf.list());
     this.commonResolver.reset();
-    const energy = this.sourceShelf.find('volume');
-    this.commonResolver.bind({
-      paramId: 'intensity',
-      sourceId: energy?.id ?? null,
-      // 0..3の全幅に対する0.25。最大入力でも +0.75 に留め、白飛びの余地を残す。
-      depth: 0.25,
-      transform: energy ? defaultTransformFor(energy.kind, 'continuous') : null,
-    });
+    for (const [paramId, defaults] of Object.entries(COMMON_AUDIO_DEFAULTS)) {
+      const source = this.sourceShelf.find(defaults.sourceId);
+      this.commonResolver.bind({
+        paramId,
+        sourceId: source?.id ?? null,
+        depth: defaults.depth,
+        transform: source ? defaultTransformFor(source.kind, 'continuous') : null,
+      });
+    }
 
     this.camera = new THREE.PerspectiveCamera(
       UNIFIED2.fieldOfView,
@@ -2011,7 +2031,11 @@ export class LightUnified2 implements LabExpression {
     // ---- 膜 ----
     if (this.geometry) {
       const cropHalf = mix(UNIFIED2.cropNarrow, UNIFIED2.cropWide, clamp01(this.params.crop));
-      const scale = mix(UNIFIED2.scaleSmall, UNIFIED2.scaleLarge, clamp01(this.params.scale));
+      const scale = mix(
+        UNIFIED2.scaleSmall,
+        UNIFIED2.scaleLarge,
+        clamp01(this.commonResolver.valueOf('scale')),
+      );
       // **Spatial Spread。** 0 = 起点へ集中 ⇄ 1 = 3D空間へ分散・重畳。
       // 位置と奥行きを同じ意味で動かし、Core Presenceなど他の見え方は変えない。
       const spatialSpread = clamp01(this.params.spatialSpread);
@@ -2179,6 +2203,7 @@ export class LightUnified2 implements LabExpression {
     // 音の棚はengineごとに共有され、同一フレーム内では一度だけ更新される。
     this.sourceShelf?.update(delta);
     this.commonResolver.updateParam('intensity', delta);
+    this.commonResolver.updateParam('scale', delta);
 
     // **捨てるのが先。** 生まれた瞬間の光は age = 0 ＝ 振幅 0 なので、
     // 検出のあとに捨てると生まれたそばから消えてしまう。
@@ -2494,20 +2519,21 @@ export class LightUnified2 implements LabExpression {
         ...PARAM_RANGES[key],
         value: this.params[key],
       };
-      if (key !== 'intensity') return parameter;
-      const binding = this.commonResolver.getBinding('intensity');
+      if (key !== 'intensity' && key !== 'scale') return parameter;
+      const binding = this.commonResolver.getBinding(key);
+      const defaults = COMMON_AUDIO_DEFAULTS[key];
       return {
         ...parameter,
         bind: {
-          paramId: 'intensity',
+          paramId: key,
           sourceId: binding?.sourceId ?? null,
-          depth: binding?.depth ?? 0.25,
+          depth: binding?.depth ?? defaults.depth,
           sources: (this.sourceShelf?.visible() ?? []).map((source) => ({
             id: source.id,
             label: source.label,
             kind: source.kind,
           })),
-          liveValue: this.commonResolver.valueOf('intensity'),
+          liveValue: this.commonResolver.valueOf(key),
         },
       };
     };
@@ -2759,16 +2785,19 @@ export class LightUnified2 implements LabExpression {
 
   setExpressionParam(key: string, value: number | string): void {
     // Commonの最初の音接続。既存のIntensity行へ添え、UIの行数は増やさない。
-    if (key.startsWith('bind:intensity:')) {
-      const what = key.split(':')[2];
-      const current = this.commonResolver.getBinding('intensity');
+    if (key.startsWith('bind:')) {
+      const [, rawParamId, what] = key.split(':');
+      if (rawParamId !== 'intensity' && rawParamId !== 'scale') return;
+      const paramId: CommonAudioParamKey = rawParamId;
+      const current = this.commonResolver.getBinding(paramId);
+      const defaults = COMMON_AUDIO_DEFAULTS[paramId];
       if (what === 'source') {
         const sourceId = String(value) === 'none' ? null : String(value);
         const source = sourceId ? this.sourceShelf?.find(sourceId) ?? null : null;
         this.commonResolver.bind({
-          paramId: 'intensity',
+          paramId,
           sourceId,
-          depth: current?.depth ?? 0.25,
+          depth: current?.depth ?? defaults.depth,
           transform: source ? defaultTransformFor(source.kind, 'continuous') : null,
         });
         return;
@@ -2777,7 +2806,7 @@ export class LightUnified2 implements LabExpression {
         const depth = typeof value === 'number' ? value : Number(value);
         if (!Number.isFinite(depth)) return;
         this.commonResolver.bind({
-          paramId: 'intensity',
+          paramId,
           sourceId: current?.sourceId ?? null,
           depth: clamp(depth, -1, 1),
           transform: current?.transform ?? null,
@@ -2995,9 +3024,9 @@ export class LightUnified2 implements LabExpression {
     const range = PARAM_RANGES[typed];
     // どの軸も次のフレームの書き出しで効く。生きている光は作り直さない。
     this.params[typed] = clamp(value, range.min, range.max);
-    if (typed === 'intensity') {
-      this.commonResolver.setBase('intensity', this.params.intensity);
-      this.syncCommonIntensity();
+    if (typed === 'intensity' || typed === 'scale') {
+      this.commonResolver.setBase(typed, this.params[typed]);
+      if (typed === 'intensity') this.syncCommonIntensity();
     }
   }
 
