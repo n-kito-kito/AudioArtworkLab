@@ -188,16 +188,38 @@ Cymaticsと組み合わせる場合は、単純な重ね合わせだけでなく
 
 ## 5. 安全な実装手順
 
-各素材・Element・Style Presetは必ず次の順番で進める。
+### Reuse First — 過去の完成度を失わない
 
-1. 音なしの静止状態で、単体の形を確認する
-2. 手動値で安全範囲の最小・中央・最大を確認する
-3. 最小限の動きだけを接続する（瞬発・持続・漂流のいずれか1つ）
-4. Audio Mappingを1つだけ接続する
-5. 実音のピーク、無音、別画角を確認する
-6. スクリーンショットまたは短い動画をユーザーへ提示し、承認後に次へ進む
+Spatial / Reactive / Lab2 / Light Tracesは、完成形としてそのまま復活させるPreset候補ではなく、
+Light Unified 2へ素材・光学処理・動き・音反応を回収するための**ドナー**である。
+既存コードで成立している光を同等の新規シェーダーで描き直さない。
 
-一度に複数のLight Element、Style Preset、Controller、Modifierを追加しない。
+回収では次の順を守る。
+
+1. 過去表現の見た目と動きを比較基準として固定する
+2. 既存の描画・素材選択・RGB分離・配置・時間処理を、見た目を変えずに再利用する
+3. 新構造上で合成結果を再現する
+4. 合成結果を常に確認できる状態を残したまま、責務ごとにElement / Controller / Modifierへ分離する
+5. 複数のドナーで実際に重複した処理だけを共通化する
+6. 既存資産で実現できない部分だけを新規実装する
+
+コードの書き換えは許容するが、書き換え前より表現の完成度を下げた状態を新しい基準にしない。
+Study単体の完成を積み上げることより、**全体の合成結果を失わずに責務を分けること**を優先する。
+
+### 回収後の検証順
+
+再利用した素材・Element・Style候補は次の順番で検証する。
+
+1. 音なしの静止合成で、ドナーの特徴と光量を取り戻せているか確認する
+2. Element表示を1つずつ切り、各責務だけが消えることを確認する
+3. 手動値で安全範囲の最小・中央・最大を確認する
+4. ドナーから回収した既存の動きを接続する
+5. 既存のAudio Mappingを接続し、必要な部分だけ調整する
+6. 実音のピーク、無音、別画角を確認する
+7. スクリーンショットまたは短い動画を提示し、視覚的承認を得る
+
+実装は戻せる単位でコミットする。ただし確認単位はCoreなどの孤立した部品だけでなく、
+必要に応じて「Lab2由来の光学系を回収する」のような視覚的マイルストーンにまとめる。
 Controllerの抽象化は、EventとPersistentの両方が単独で成立してから行う。
 
 パーツ分解は見た目と責務を理解するためのStudyであり、全Style Presetを同じパーツ構成に固定するためではない。
@@ -218,7 +240,7 @@ CoreはCross Rayが無くても単独の光源として成立させる。Cross R
 
 ---
 
-## 6. 現在地: 静止素材の構造確認
+## 6. 現在地: 過去資産を光全体へ回収する段階
 
 2026-08-03時点で、以下のStudyが個別に表示できる状態まで実装済みである。
 
@@ -230,7 +252,8 @@ CoreはCross Rayが無くても単独の光源として成立させる。Cross R
 - Spatial Material Anchor Study
 - Spatial Fragment Study
 
-ただし、コードが存在することを素材の完成とは扱わない。今後は次の3状態を明確に区別する。
+ただし、コードが存在することを素材の完成とは扱わない。現在のStudyは新しい完成基準ではなく、
+既存資産との比較・分離に使う開発用表示として扱う。今後は次の3状態を明確に区別する。
 
 | 状態 | 意味 |
 |---|---|
@@ -242,7 +265,7 @@ CoreはCross Rayが無くても単独の光源として成立させる。Cross R
 
 | 素材 | 実装 | 構造 | 見た目 |
 |---|---|---|---|
-| Lab2 Core | Implemented | 独立Coreとして概ね妥当 | 十字光を含めず、白い焦点と画角別サイズを要調整 |
+| Lab2 Core | Implemented | 独立Coreとして概ね妥当 | 現行の新規Coreを磨き続けず、旧Lab2の光学処理から回収して再評価する |
 | Lab2 Cross Ray | Core内の描画から分離が必要 | Coreに付随する独立Element | 水平・垂直光を単独で調整・承認する |
 | Lab2 Fragment | Implemented | prismAtlas由来で妥当 | Core調整後に合成を再評価 |
 | Spatial Material Anchor | Implemented | 独立Coreなしで素材の重なりから白熱しており妥当 | 中央へ集中しており、空間的な広がりを要調整 |
@@ -257,31 +280,33 @@ Lab2とSpatialのFragmentも万能の1種類へ統合せず、役割別に分け
 
 ## 7. 次の実装順序
 
-1. Lab2 Coreだけを静止状態で再調整する
-   - 明確な白い焦点
-   - 焦点の直近にだけ残る小さなプリズム色
-   - 1:1 / 16:9 / 9:16で存在感が崩れないサイズ
-   - 水平・垂直の十字光はCoreから除外する
-2. Lab2 Core承認後、Lab2 Cross Rayを独立Elementとして静止状態で実装・調整する
-   - 水平長、垂直長、太さ、輝度、減衰を独立して扱う
-   - Coreの形状や輝度を変更しない
-3. CoreとCross Rayの合成を確認する
-4. 合成承認後、Lab2 Fragmentとの合成を再確認する
-5. Spatial Anchor / Fragmentの空間的な広がりだけを再調整する
-6. Lab2 / Spatialの静止素材が承認された後、重複するMaterial Light Layer描画を見た目を変えずに整理する
-7. その後にDriftの静止素材を確定する
-8. 各素材の承認後、1部品ずつ最小の動き、Audio Mappingの順で接続する
+1. Origin ReferenceとSpatial / Reactive / Lab2 / Light Tracesを、光全体のドナー一覧として固定する
+2. 旧Lab2の既存`lightOpticsMapping`と描画処理を使い、新構造上で旧Lab2相当の静止合成を取り戻す
+3. 合成を保ったままCore / Cross Ray / Refraction・Veil / Fan・Spill / Haze・Curtainを表示分離する
+4. 旧Spatialの素材重畳・3D配置・Burst・軌跡を同じ方法で回収する
+5. ReactiveはSpatial系と比較し、共通パラメーターで再現できない処理だけを回収する
+6. Light TracesからTrail / Feedbackの再利用可能部分を回収する
+7. Driftは回収済みのCore / FragmentとPersistent Controllerを組み合わせ、不足する浮遊処理だけを新規実装する
+8. 複数のドナーで重複が確認できた描画だけをMaterial Light Layer / Light Elementへ共通化する
+9. 最後に、構造と状態機械が明確に異なる方向だけをStyle Presetとして確定する
+10. 共通スライダーとAudio Mappingを接続し、User Presetで組み替えを保存できるようにする
 
-現時点ではFloat / Orbit / Style Preset / Controller / クロスフェード / 通常Ray / Twist / Bloomの
-本格調整へ進まない。Lab2 Cross Rayは通常Rayとは別のLab2固有Elementとして段階的に扱う。
-Lab2とSpatialを同時に調整しない。
+Lab2は最初の回収対象であって、最終目的やPreset設計の中心ではない。
+各ドナー名をそのままStyle Preset名にすることも前提にしない。
+SpatialとReactiveのように構造が近いものは統合し、見た目や値が違うだけのPresetを増やさない。
 
 ---
 
 ## 8. 直近の実装指示
 
-次はLab2 Core Studyだけを対象にする。既存のLab2 Fragment、Spatial、Haze、Drift候補、
-音反応には触れず、静止Coreの白い焦点・焦点直近のプリズム色・画角別サイズだけをReferenceと比較する。
-水平・垂直の十字光はCoreの完成条件に含めず、Coreから分離する。Cross Rayの見た目調整は
-Core承認後の別コミットで行う。
-変更前後を同じ画角で提示し、1コミットで停止する。
+次は現行のLab2 Core Studyの微調整を停止し、旧Lab2の光学系を最初のドナーとして回収する。
+旧`LightElementLab2`と`lightOpticsMapping`を完成基準にし、既存のプリズム素材、レイヤー生成、
+RGB分離、3D配置、加算合成を再利用して、Light Unified 2内で旧Lab2相当の静止合成を表示する。
+
+この段階では新しいCoreシェーダーを描き直さず、まず全体の光量・画面占有率・屈折感を取り戻す。
+同時に、Core / Cross Ray / Refraction・Veil / Fan・Spill / Haze・Curtainを個別に表示切替できる
+開発用のAssembly表示を用意する。CoreとCross Rayは別Elementのまま維持する。
+
+既存のSpatial / Reactive / Drift候補、音反応、公開中の旧Lab2は変更しない。
+1:1 / 16:9 / 9:16でAssembly全体と各Elementの確認画像を残し、旧Lab2との比較結果を報告する。
+見た目の回収が確認できるまでは、Style Preset、Controllerの共通化、新しい動きの追加へ進まない。
