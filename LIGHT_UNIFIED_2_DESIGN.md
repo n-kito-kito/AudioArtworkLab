@@ -30,6 +30,26 @@ Light Unified 2 は、共通する光の素材を使いながら、次の見え�
 Style Presetは完成工程を固定するレシピではない。方向性を決めた後も、別系統の調理法や味付けを混ぜられる。
 それでも基盤となるStyle Presetの性格は維持する。
 
+### Origin Referenceと派生表現の関係
+
+Light Unified 2の最上位リファレンスは、開発初期に共有されたKLSRの光表現動画群である。
+Spatial / Reactive / Lab2は最上位の完成見本ではなく、Origin Referenceに含まれる性質を
+AAL上で分解・探索する過程で生まれた派生表現として扱う。
+
+```text
+Origin Light References
+  線 / 膜 / 帯 / ガラス片 / 屈折 / プリズム / 黒い余白
+                    ↓
+Light Unified 2の素材語彙
+  Material Light Layer / Core / Fragment / Haze / Ray
+                    ↓
+Style Preset
+  Spatial / Reactive / Lab2 / Drift
+```
+
+評価は「SpatialやLab2をそのまま再現できたか」だけではなく、Origin Referenceの光学的な
+素材感を保ちながら、異なるStyleへ展開できるかで行う。
+
 ---
 
 ## 2. 確定した構造
@@ -162,60 +182,61 @@ Controllerの抽象化は、EventとPersistentの両方が単独で成立して�
 
 ---
 
-## 6. 現在地: Haze Study
+## 6. 現在地: 静止素材の構造確認
 
-`src/expressions/LightUnified2.ts` に、未コミットのHaze Studyが追加されている。
+2026-08-03時点で、以下のStudyが個別に表示できる状態まで実装済みである。
 
-- `Static`: 音なしで形を見る
-- `Audio volume`: 形・位置・色を固定し、Volumeで強度だけを追従させる
-- `Off`: Hazeを除外する
+- Haze Study
+- Drift候補のFragment Study（Volumeで明るさだけを動かす段階を含む）
+- Lab2 Core Study
+- Lab2 Fragment Study
+- Spatial Material Anchor Study
+- Spatial Fragment Study
 
-これは正しい段階的検証である。ただし製品のController選択でも、全Style Preset共通の必須パーツでもなく、
-D29の要素分離確認用UIである。
-現時点でHazeへ漂流、色変化、Onset、Fragment、Bloomを追加してはいけない。
+ただし、コードが存在することを素材の完成とは扱わない。今後は次の3状態を明確に区別する。
 
-### Hazeの完了条件
+| 状態 | 意味 |
+|---|---|
+| Implemented | コードとして存在し、単独表示できる |
+| Structurally Valid | Styleの構造原則と責務に合っている |
+| Visually Approved | Referenceと比較し、ユーザーが見た目を承認した |
 
-- Staticで、膜・コアから独立した靄の形が確認できる
-- Audio volumeで、靄の形を変えずに強度だけが追従する
-- Offで既存の膜・コアが変化しない
-- 再生停止後に黒へ戻る
-- 実音ピークで白飛びせず、黒い余白を維持する
-- ユーザーがStatic / Audio / Offの比較を目で確認する
+### 素材ごとの評価
+
+| 素材 | 実装 | 構造 | 見た目 |
+|---|---|---|---|
+| Lab2 Core | Implemented | 独立Coreとして概ね妥当 | 白い焦点、水平・垂直光、画角別サイズを要調整 |
+| Lab2 Fragment | Implemented | prismAtlas由来で妥当 | Core調整後に合成を再評価 |
+| Spatial Material Anchor | Implemented | 独立Coreなしで素材の重なりから白熱しており妥当 | 中央へ集中しており、空間的な広がりを要調整 |
+| Spatial Fragment | Implemented | Anchorと同じ素材を使用しており妥当 | Anchor調整後に合成を再評価 |
+| Drift Fragment | Study実装済み | Drift候補 | 素材・構造ともに未確定 |
+| Haze | Study実装済み | 独立要素として確認可能 | 最終的なStyle内の役割は未確定 |
+
+Spatialは独立Coreを持たず、Material Light Layerの重なりだけで白熱する構造を維持できている。
+Lab2とSpatialのFragmentも万能の1種類へ統合せず、役割別に分けられている。
 
 ---
 
-## 7. Haze承認後の順序
+## 7. 次の実装順序
 
-1. Spatial構造の確認として、独立Coreを消し、Material Light Layerの重なりだけで白熱が成立するか検証する
-2. この検証でHaze / Membraneを固定部品ではなくMaterial Light Layerの役割違いとして扱えるか判断する
-3. Fragment / ParticleをDrift用の**静止部品だけ**として追加する
-4. Fragmentへ**低速のFloat / Orbitだけ**を追加し、音にはまだ接続しない
-5. VolumeまたはSustainを強度へ1本だけ接続し、Persistent Controllerの最小形を確認する
-6. Spatial / DriftのStyle Presetをボタンで切り替える
-7. 切り替えが安定してからクロスフェードを追加する
-8. その後にReactive / Refresh / Ray / Twist / Cymatics連携へ進む
+1. Lab2 Coreだけを静止状態で再調整する
+   - 明確な白い焦点
+   - 細い水平・垂直光
+   - 周辺のプリズム色
+   - 1:1 / 16:9 / 9:16で存在感が崩れないサイズ
+2. Lab2 Core承認後、Lab2 Fragmentとの合成を再確認する
+3. Spatial Anchor / Fragmentの空間的な広がりだけを再調整する
+4. Lab2 / Spatialの静止素材が承認された後、重複するMaterial Light Layer描画を見た目を変えずに整理する
+5. その後にDriftの静止素材を確定する
+6. 各素材の承認後、1部品ずつ最小の動き、Audio Mappingの順で接続する
 
-「すべての部品を完成してから動きを付ける」のではなく、1部品ごとに静止→最小の動き→音の順で完結させる。
+現時点ではFloat / Orbit / Style Preset / Controller / クロスフェード / Ray / Twist / Bloomの
+本格調整へ進まない。Lab2とSpatialを同時に調整しない。
 
 ---
 
 ## 8. 直近の実装指示
 
-```text
-Light Unified 2の未コミットHaze Studyから継続してください。
-
-今回はHazeの検証だけを行い、新しい部品やControllerは追加しないでください。
-
-1. Haze = Staticで音を止め、Haze単体の形が分かるスクリーンショットを撮る。
-2. Haze = Audio volumeでpublic/audio/reference.wavを再生し、最も明るい場面のスクリーンショットを撮る。
-3. Haze = Offで、既存のCoreとMembraneが変更前と同じであることを確認する。
-4. 再生停止後に完全な黒へ戻ることを確認する。
-5. lint / build、コンソールエラー、白飛び、黒割合を確認する。
-
-見た目を独断で調整せず、Static / Audio volume / Offの比較と数値を報告して停止してください。
-ユーザーの承認前にFragment、Ray、漂流、色変化、Bloom、Controller抽象化へ進まないでください。
-
-既存の未コミット変更を保持し、LightUnified2.ts以外の無関係な変更を含めないでください。
-public/dev-ref*.gifやユーザー音源はコミットしないでください。
-```
+次はLab2 Core Studyだけを対象にする。既存のLab2 Fragment、Spatial、Haze、Drift候補、
+音反応には触れず、静止Coreの白い焦点・水平垂直光・画角別サイズだけをReferenceと比較する。
+変更前後を同じ画角で提示し、1コミットで停止する。

@@ -41,7 +41,7 @@
 |---|---|
 | ブランチ | `agent/light-reactive-lab` |
 | 最新コミット | `git log -1 --oneline` で確認する（文書内に固定しない） |
-| 未コミット変更 | **Haze Studyを実装中**。`src/expressions/LightUnified2.ts` の変更を保持すること |
+| 未コミット変更 | `git status --short`で確認する。2026-08-03の文書更新前はclean |
 | 確認すべき Expression | **Light Unified 2** |
 
 起動:
@@ -51,9 +51,9 @@ cd /Users/nakaekito/Documents/Appli/AudioArtworkLab-reactive && npx vite --port 
 ```
 
 `http://localhost:5174` → Expression セレクトで `Light Unified 2` →
-左パネル下の開発ブロック（`Audio Analysis (dev)`）に 11 本の軸が出る。
+左パネル下の開発ブロック（`Audio Analysis (dev)`）にStudyと調整軸が出る。
 
-主要ファイルは **`src/expressions/LightUnified2.ts` の 1 枚だけ**（約 1,140 行）。
+主要ファイルは **`src/expressions/LightUnified2.ts` の 1 枚だけ**（2026-08-03時点で約2,270行）。
 既存表現とはコードを共有していない（検出器 `src/engine/bandLightEvents.ts` のみ再利用）。
 
 ### セレクトに出ている表現
@@ -90,11 +90,16 @@ Event / Refresh / Persistent Controllerと必要な描画構造を持つ。
 位置・滲み・色・密度など、意味が共通する値はスライダーとして共有する。
 Preset切り替え時はクロスフェードし、操作は離散でも映像は滑らかに移行させる。
 
-### 最重要のリファレンス
+### リファレンスの優先順位
 
-- `public/dev-ref-light-*.gif`（未追跡・コミット禁止・読み取りのみ）
-- 実装としての参照は **`LightSpatialStudy.ts` + `spatialMapping.ts`**
-  （素材が形を作る `macro layer` の式がここにある）
+1. **Origin Light References**: 開発初期に共有されたKLSRの光表現動画群
+2. **AAL内の派生表現**: Spatial Study / Reactive Lab / Element Lab 2
+3. **実装原理の参照**: `LightSpatialStudy.ts` + `spatialMapping.ts` のmacro layer
+4. `public/dev-ref-light-*.gif`（未追跡・コミット禁止・読み取りのみ）
+
+Spatial / Reactive / Lab2はOriginの性質を分解して試した派生表現であり、Originより上位の
+完成見本として扱わない。Origin動画の原本は現状Downloads / Desktopにあるため、将来は
+Reference ID、代表フレーム、観察・計測値を持つ正式なReference Catalogへ移す。
 
 ### 再現しようとしている特徴
 
@@ -294,44 +299,50 @@ Spatial はその中間（手続きの transient + 素材の macro 膜の 2 段�
 
 各項目は**独立して実装し、1 つ終わるごとに止めてユーザーに見てもらう**（§0 の規約）。
 
-### 1. Haze Studyを検証してユーザー承認を得る
+### 現在のStudy状態
 
-- Static / Audio volume / Offを比較する
-- 形・位置・色を同時に動かさず、Volumeで強度だけを追従させる
-- 無音 = 黒、白飛び、黒割合、既存Core / Membraneの回帰を確認する
-- **承認前に次の部品へ進まない**
+| 素材 | 状態 |
+|---|---|
+| Haze | Study実装済み。最終的な役割は未承認 |
+| Drift候補Fragment | 静止とVolume強度反応を実装済み。素材・構造は未承認 |
+| Lab2 Core | 静止Study実装済み。見た目は要調整 |
+| Lab2 Fragment | prismAtlas由来の静止Study実装済み。Core調整後に再確認 |
+| Spatial Anchor | 独立Coreなしの素材重畳Study実装済み。広がりを要調整 |
+| Spatial Fragment | Anchorと同じ素材の静止Study実装済み。Anchor調整後に再確認 |
 
-### 2. SpatialのMaterial Light Layer構造を確認する
+### 1. Lab2 Coreを静止状態で再調整する
 
-- 独立Coreを消した状態で、素材レイヤーの変形・重なりだけから白熱が成立するか確認する
-- Haze / Membraneを全Style Preset必須の固定パーツにしない
-- 新しい見た目を足す変更ではなく、間違った構造へ進まないための確認とする
+- 白い焦点を明確にする
+- 水平・垂直方向の細い光をReferenceに合わせる
+- プリズム片がCoreの存在感を奪わないようにする
+- 1:1 / 16:9 / 9:16でサイズを確認する
+- Lab2 Fragmentや他Studyは変更しない
 
-### 3. Fragment / ParticleをDrift用の静止部品として足す
+### 2. Lab2 Fragmentとの合成を再確認する
 
-- 点とガラス片のような形を担当する
-- まず音・時間・漂流を接続せず、形・密度・奥行きの安全範囲だけを確認する
-- 羽毛・barbsを手続きで描かない
+- Core承認後にだけ進む
+- CoreとFragmentが同じ光の屈折・分解に見えるか確認する
 
-### 4. Fragmentへ低速のFloat / Orbitを足す
+### 3. Spatialの広がりを再調整する
 
-- 1回の変更では動きだけを追加する
-- 音にはまだ接続せず、長時間で破綻・偏り・画面外消失がないか確認する
+- 独立Coreなしの構造は維持する
+- 中央の小さな塊だけでなく、帯・膜・断片が画面内へ展開するようにする
+- AnchorとFragmentを同時に別方向へ作り替えず、変更を1要素に限定する
 
-### 5. Persistent Controllerの最小形を確認する
+### 4. 共通Material Light Layer描画を整理する
 
-- VolumeまたはSustainを強度へ1本だけ接続する
-- Fragmentは常在し、強さだけが呼吸する
-- 停止・無音が続けば緩やかに黒へ戻す
+- Lab2 / Spatialの静止見た目承認後に行う
+- 重複するprismAtlas描画を、見た目を変えずに共通化する
+- 構造整理と見た目調整を同じコミットに混ぜない
 
-### 6. Spatial / DriftのStyle Preset切り替えを追加する
+### 5. Drift素材へ進む
 
-- まずボタンで安全に切り替え、両方の単独状態を確認する
-- クロスフェードは切り替えが安定した後の別変更とする
-- Refresh Controller、Ray、Twist、Cymatics連携はその後に進める
+- Lab2 / Spatialの静止素材が承認されるまで、新しい動きやControllerを追加しない
+- Driftも静止素材の確定から始める
 
 **やらないこと（今回のスコープ外）**:
-カメラ移動 / 汎用ノードエディター / 他表現への展開 / main への push / 本番デプロイ / Controllerの先行抽象化。
+Float / Orbit / Style Preset / Controller / クロスフェード / Ray / Twist / Bloomの本格調整 /
+カメラ移動 / 汎用ノードエディター / 他表現への展開 / mainへのpush / 本番デプロイ。
 
 ---
 
