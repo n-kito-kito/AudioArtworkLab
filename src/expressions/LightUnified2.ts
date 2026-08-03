@@ -204,7 +204,7 @@ const UNIFIED2 = {
     floor: 0.008,
     floorWidth: 0.045,
     gamma: 0.62,
-    intensity: 0.72,
+    intensity: 1.45,
     edgeFadeStart: 0.08,
     attackSeconds: 0.08,
     releaseSeconds: 0.5,
@@ -231,6 +231,17 @@ const UNIFIED2 = {
     halfWidth: 2.4,
     halfHeight: 1.35,
     intensity: 0.92,
+  },
+
+  /** Lab2 Coreの周囲に置く、素材由来の静止プリズム片。 */
+  lab2FragmentStudy: {
+    maximumCount: 9,
+    count: 9,
+    floor: 0.014,
+    floorWidth: 0.04,
+    gamma: 0.68,
+    intensity: 0.72,
+    edgeFadeStart: 0.18,
   },
 
   /** Spatial の素材重畳だけを音なしで確認する独立 Study。 */
@@ -367,6 +378,10 @@ export class LightUnified2 implements LabExpression {
   private lab2CoreStudyGeometry: THREE.PlaneGeometry | null = null;
   private lab2CoreStudyMaterial: THREE.ShaderMaterial | null = null;
   private lab2CoreStudyMesh: THREE.Mesh | null = null;
+  private lab2FragmentStudyPreview: 'off' | 'static' | 'with-core' = 'off';
+  private lab2FragmentStudyGeometry: THREE.InstancedBufferGeometry | null = null;
+  private lab2FragmentStudyMaterial: THREE.ShaderMaterial | null = null;
+  private lab2FragmentStudyMesh: THREE.Mesh | null = null;
   private spatialMaterialAnchorPreview: 'off' | 'static' = 'off';
   private spatialMaterialAnchorGeometry: THREE.InstancedBufferGeometry | null = null;
   private spatialMaterialAnchorMaterial: THREE.ShaderMaterial | null = null;
@@ -452,6 +467,7 @@ export class LightUnified2 implements LabExpression {
     this.buildHazeStudyMesh();
     this.buildFragmentStudyMesh();
     this.buildLab2CoreStudyMesh();
+    this.buildLab2FragmentStudyMesh();
     this.buildSpatialMaterialAnchorStudyMesh();
 
     this.scene = new THREE.Scene();
@@ -461,6 +477,7 @@ export class LightUnified2 implements LabExpression {
     if (this.hazeMesh) this.scene.add(this.hazeMesh);
     if (this.fragmentMesh) this.scene.add(this.fragmentMesh);
     if (this.lab2CoreStudyMesh) this.scene.add(this.lab2CoreStudyMesh);
+    if (this.lab2FragmentStudyMesh) this.scene.add(this.lab2FragmentStudyMesh);
     if (this.spatialMaterialAnchorMesh) this.scene.add(this.spatialMaterialAnchorMesh);
 
     this.pipeline = new EffectPipeline(context.renderer, this.scene, this.camera, this.effects);
@@ -477,6 +494,7 @@ export class LightUnified2 implements LabExpression {
         this.material,
         this.coreMaterial,
         this.hazeMaterial,
+        this.lab2FragmentStudyMaterial,
         this.spatialMaterialAnchorMaterial,
       ]) {
         if (!material) continue;
@@ -767,6 +785,130 @@ export class LightUnified2 implements LabExpression {
     this.lab2CoreStudyMesh.visible = false;
     this.lab2CoreStudyMesh.frustumCulled = false;
     this.lab2CoreStudyMesh.renderOrder = 3;
+  }
+
+  /** Lab2専用。prismAtlasの切片だけで、Core周囲の静止Fragmentを作る。 */
+  private buildLab2FragmentStudyMesh(): void {
+    const study = UNIFIED2.lab2FragmentStudy;
+    const plane = new THREE.PlaneGeometry(2, 2);
+    const geometry = new THREE.InstancedBufferGeometry();
+    geometry.index = plane.index;
+    geometry.setAttribute('position', plane.getAttribute('position'));
+    geometry.setAttribute('uv', plane.getAttribute('uv'));
+    plane.dispose();
+
+    const offsets = new Float32Array(study.maximumCount * 3);
+    const sizes = new Float32Array(study.maximumCount * 3);
+    const crops = new Float32Array(study.maximumCount * 4);
+    const rotations = new Float32Array(study.maximumCount * 2);
+    const colors = new Float32Array(study.maximumCount * 3);
+    const levels = new Float32Array(study.maximumCount);
+    const add = (name: string, data: Float32Array, size: number): void => {
+      geometry.setAttribute(name, new THREE.InstancedBufferAttribute(data, size));
+    };
+    add('aOffset', offsets, 3);
+    add('aSize', sizes, 3);
+    add('aCrop', crops, 4);
+    add('aRotation', rotations, 2);
+    add('aColor', colors, 3);
+    add('aLevel', levels, 1);
+
+    const fragments = [
+      { x: -0.3, y: 0.2, z: -8.3, w: 0.48, h: 0.13, tile: 1, cx: 0.43, cy: 0.55, cropX: 0.15, cropY: 0.1, angle: -0.48, color: [0.82, 1.0, 0.86], level: 1.0 },
+      { x: 0.34, y: 0.14, z: -8.55, w: 0.43, h: 0.11, tile: 4, cx: 0.56, cy: 0.43, cropX: 0.13, cropY: 0.08, angle: 0.58, color: [0.76, 0.9, 1.0], level: 0.92 },
+      { x: -0.18, y: -0.32, z: -8.15, w: 0.16, h: 0.4, tile: 8, cx: 0.5, cy: 0.47, cropX: 0.08, cropY: 0.16, angle: 0.16, color: [0.9, 1.0, 0.84], level: 0.88 },
+      { x: 0.82, y: -0.72, z: -8.7, w: 0.58, h: 0.09, tile: 6, cx: 0.4, cy: 0.58, cropX: 0.14, cropY: 0.07, angle: -0.66, color: [0.8, 0.82, 1.0], level: 0.72 },
+      { x: -1.28, y: -0.28, z: -8.45, w: 0.38, h: 0.08, tile: 9, cx: 0.52, cy: 0.5, cropX: 0.12, cropY: 0.07, angle: 0.72, color: [0.88, 1.0, 0.9], level: 0.66 },
+      { x: 1.4, y: -0.16, z: -8.25, w: 0.44, h: 0.09, tile: 3, cx: 0.48, cy: 0.46, cropX: 0.12, cropY: 0.07, angle: -0.3, color: [0.7, 0.94, 1.0], level: 0.62 },
+      { x: -0.42, y: 1.22, z: -8.6, w: 0.32, h: 0.075, tile: 5, cx: 0.55, cy: 0.55, cropX: 0.1, cropY: 0.065, angle: 1.0, color: [0.78, 1.0, 0.82], level: 0.58 },
+      { x: 0.4, y: -1.28, z: -8.4, w: 0.72, h: 0.085, tile: 2, cx: 0.44, cy: 0.52, cropX: 0.11, cropY: 0.065, angle: 0.34, color: [0.9, 0.96, 1.0], level: 0.56 },
+      { x: 1.16, y: 0.94, z: -8.75, w: 0.28, h: 0.07, tile: 7, cx: 0.46, cy: 0.48, cropX: 0.09, cropY: 0.06, angle: -0.9, color: [0.76, 1.0, 0.86], level: 0.52 },
+    ] as const;
+
+    fragments.forEach((fragment, index) => {
+      offsets.set([fragment.x, fragment.y, fragment.z], index * 3);
+      sizes.set([fragment.w, fragment.h, fragment.tile], index * 3);
+      crops.set([fragment.cx, fragment.cy, fragment.cropX, fragment.cropY], index * 4);
+      rotations.set([Math.cos(fragment.angle), Math.sin(fragment.angle)], index * 2);
+      colors.set(fragment.color, index * 3);
+      levels[index] = fragment.level;
+    });
+    geometry.instanceCount = study.count;
+
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uAtlas: { value: this.placeholder },
+        uGrid: { value: new THREE.Vector2(1, 1) },
+        uShape: { value: new THREE.Vector4(study.floor, study.floorWidth, study.gamma, study.edgeFadeStart) },
+        uIntensity: { value: study.intensity },
+        uInset: { value: UNIFIED2.cellInset },
+      },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+      vertexShader: /* glsl */ `
+        attribute vec3 aOffset;
+        attribute vec3 aSize;
+        attribute vec4 aCrop;
+        attribute vec2 aRotation;
+        attribute vec3 aColor;
+        attribute float aLevel;
+        varying vec2 vLocal;
+        varying float vTile;
+        varying vec4 vCrop;
+        varying vec3 vColor;
+        varying float vLevel;
+        void main() {
+          vLocal = position.xy;
+          vTile = aSize.z;
+          vCrop = aCrop;
+          vColor = aColor;
+          vLevel = aLevel;
+          vec2 local = position.xy * aSize.xy;
+          local = vec2(local.x * aRotation.x - local.y * aRotation.y,
+            local.x * aRotation.y + local.y * aRotation.x);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(aOffset + vec3(local, 0.0), 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D uAtlas;
+        uniform vec2 uGrid;
+        uniform vec4 uShape;
+        uniform float uIntensity;
+        uniform float uInset;
+        varying vec2 vLocal;
+        varying float vTile;
+        varying vec4 vCrop;
+        varying vec3 vColor;
+        varying float vLevel;
+        void main() {
+          vec2 edgeDistance = 1.0 - abs(vLocal);
+          float window = smoothstep(0.0, uShape.w, edgeDistance.x)
+            * smoothstep(0.0, uShape.w, edgeDistance.y);
+          if (window <= 0.0) discard;
+          vec2 cell = clamp(vCrop.xy + vLocal * vCrop.zw, uInset, 1.0 - uInset);
+          float column = mod(vTile, uGrid.x);
+          float row = floor(vTile / uGrid.x);
+          vec3 source = texture2D(uAtlas, (vec2(column, row) + cell) / uGrid).rgb;
+          float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
+          luminance *= smoothstep(uShape.x, uShape.x + uShape.y, luminance);
+          luminance = pow(max(luminance, 0.0), uShape.z);
+          vec3 color = vColor * luminance * window * vLevel * uIntensity;
+          if (max(color.r, max(color.g, color.b)) < 0.002) discard;
+          gl_FragColor = vec4(color, 1.0);
+        }
+      `,
+    });
+
+    this.lab2FragmentStudyGeometry = geometry;
+    this.lab2FragmentStudyMaterial = material;
+    this.lab2FragmentStudyMesh = new THREE.Mesh(geometry, material);
+    this.lab2FragmentStudyMesh.visible = false;
+    this.lab2FragmentStudyMesh.frustumCulled = false;
+    this.lab2FragmentStudyMesh.renderOrder = 2;
   }
 
   /** Spatial の原理確認。4枚の同種素材だけを変形・重畳し、独立Coreは描かない。 */
@@ -1464,10 +1606,15 @@ export class LightUnified2 implements LabExpression {
 
   /** Study中は既存レイヤーを描画せず、静止Coreだけを黒背景に表示する。 */
   private updateLab2CoreStudy(): void {
-    const lab2Active = this.lab2CoreStudyPreview === 'static';
+    const lab2FragmentActive = this.lab2FragmentStudyPreview !== 'off';
+    const lab2Active = this.lab2CoreStudyPreview === 'static'
+      || this.lab2FragmentStudyPreview === 'with-core';
     const spatialActive = this.spatialMaterialAnchorPreview === 'static';
-    const isolated = lab2Active || spatialActive;
+    const isolated = lab2Active || lab2FragmentActive || spatialActive;
     if (this.lab2CoreStudyMesh) this.lab2CoreStudyMesh.visible = lab2Active;
+    if (this.lab2FragmentStudyMesh) {
+      this.lab2FragmentStudyMesh.visible = lab2FragmentActive;
+    }
     if (this.spatialMaterialAnchorMesh) this.spatialMaterialAnchorMesh.visible = spatialActive;
     if (this.mesh) this.mesh.visible = !isolated;
     if (this.coreMesh) this.coreMesh.visible = !isolated;
@@ -1676,6 +1823,18 @@ export class LightUnified2 implements LabExpression {
         value: this.lab2CoreStudyPreview,
       },
       {
+        key: 'lab2FragmentStudyPreview',
+        label: 'Lab2 Fragment Study (静止確認)',
+        group: study,
+        type: 'select',
+        options: [
+          { value: 'off', label: 'Off' },
+          { value: 'static', label: 'Fragment only' },
+          { value: 'with-core', label: 'With Lab2 Core' },
+        ],
+        value: this.lab2FragmentStudyPreview,
+      },
+      {
         key: 'hazePreview',
         label: 'Haze (音なし静止確認)',
         group: study,
@@ -1716,13 +1875,31 @@ export class LightUnified2 implements LabExpression {
   setExpressionParam(key: string, value: number | string): void {
     if (key === 'spatialMaterialAnchorPreview' && (value === 'off' || value === 'static')) {
       this.spatialMaterialAnchorPreview = value;
-      if (value === 'static') this.lab2CoreStudyPreview = 'off';
+      if (value === 'static') {
+        this.lab2CoreStudyPreview = 'off';
+        this.lab2FragmentStudyPreview = 'off';
+      }
       this.updateLab2CoreStudy();
       return;
     }
     if (key === 'lab2CoreStudyPreview' && (value === 'off' || value === 'static')) {
       this.lab2CoreStudyPreview = value;
-      if (value === 'static') this.spatialMaterialAnchorPreview = 'off';
+      if (value === 'static') {
+        this.spatialMaterialAnchorPreview = 'off';
+        this.lab2FragmentStudyPreview = 'off';
+      }
+      this.updateLab2CoreStudy();
+      return;
+    }
+    if (
+      key === 'lab2FragmentStudyPreview'
+      && (value === 'off' || value === 'static' || value === 'with-core')
+    ) {
+      this.lab2FragmentStudyPreview = value;
+      if (value !== 'off') {
+        this.spatialMaterialAnchorPreview = 'off';
+        this.lab2CoreStudyPreview = 'off';
+      }
       this.updateLab2CoreStudy();
       return;
     }
@@ -1762,6 +1939,8 @@ export class LightUnified2 implements LabExpression {
     this.fragmentMaterial?.dispose();
     this.lab2CoreStudyGeometry?.dispose();
     this.lab2CoreStudyMaterial?.dispose();
+    this.lab2FragmentStudyGeometry?.dispose();
+    this.lab2FragmentStudyMaterial?.dispose();
     this.spatialMaterialAnchorGeometry?.dispose();
     this.spatialMaterialAnchorMaterial?.dispose();
     this.placeholder?.dispose();
@@ -1771,6 +1950,9 @@ export class LightUnified2 implements LabExpression {
     if (this.hazeMesh && this.scene) this.scene.remove(this.hazeMesh);
     if (this.fragmentMesh && this.scene) this.scene.remove(this.fragmentMesh);
     if (this.lab2CoreStudyMesh && this.scene) this.scene.remove(this.lab2CoreStudyMesh);
+    if (this.lab2FragmentStudyMesh && this.scene) {
+      this.scene.remove(this.lab2FragmentStudyMesh);
+    }
     if (this.spatialMaterialAnchorMesh && this.scene) {
       this.scene.remove(this.spatialMaterialAnchorMesh);
     }
@@ -1791,6 +1973,9 @@ export class LightUnified2 implements LabExpression {
     this.lab2CoreStudyGeometry = null;
     this.lab2CoreStudyMaterial = null;
     this.lab2CoreStudyMesh = null;
+    this.lab2FragmentStudyGeometry = null;
+    this.lab2FragmentStudyMaterial = null;
+    this.lab2FragmentStudyMesh = null;
     this.spatialMaterialAnchorGeometry = null;
     this.spatialMaterialAnchorMaterial = null;
     this.spatialMaterialAnchorMesh = null;
