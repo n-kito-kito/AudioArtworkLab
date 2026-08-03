@@ -7,6 +7,7 @@ import { THEMES, type Theme } from '../engine/themes';
 import type { ExpressionId } from './catalog';
 import type { ExpressionParam, LabExpression } from './Expression';
 import { LightElementLab2 } from './LightElementLab2';
+import { LightReactiveLab } from './LightReactiveLab';
 import { LightSpatialStudy, type SpatialRecoveryMode } from './LightSpatialStudy';
 import type { OpticalGroup } from './lightOpticsMapping';
 import { loadPrismAtlas, type PrismAtlas } from './prismAtlas';
@@ -366,6 +367,13 @@ type Lab2AssemblyPreview =
   | 'all';
 
 type SpatialRecoveryPreview = 'off' | SpatialRecoveryMode;
+type ReactiveRecoveryPreview = 'off' | 'audio';
+type RecoveryPreview =
+  | 'off'
+  | 'reactive-audio'
+  | 'spatial-audio'
+  | 'spatial-freeze'
+  | `lab2-${Exclude<Lab2AssemblyPreview, 'off'>}`;
 
 export class LightUnified2 implements LabExpression {
   readonly animated = true;
@@ -439,6 +447,9 @@ export class LightUnified2 implements LabExpression {
   /** 旧Spatialの完成済み描画器を再利用するRecovery。新しい同等シェーダーは持たない。 */
   private spatialRecoveryPreview: SpatialRecoveryPreview = 'off';
   private spatialRecovery: LightSpatialStudy | null = null;
+  /** 旧Reactive Compositeを比較するRecovery。正式なStyle Presetではない。 */
+  private reactiveRecoveryPreview: ReactiveRecoveryPreview = 'off';
+  private reactiveRecovery: LightReactiveLab | null = null;
   private placeholder: THREE.DataTexture | null = null;
   private atlas: PrismAtlas | null = null;
   private pipeline: EffectPipeline | null = null;
@@ -536,6 +547,17 @@ export class LightUnified2 implements LabExpression {
     this.spatialRecovery.setAspect(this.aspectId, this.aspectRatio);
     this.spatialRecovery.setZoom(this.zoom);
     this.spatialRecovery.setRecoveryMode(null);
+
+    // Reactive固有のBurst Plannerと4層構成を描き直さず、完成済みCompositeを再利用する。
+    this.reactiveRecovery = new LightReactiveLab(
+      'light-reactive-composite-v1',
+      'composite',
+      [],
+      this.theme,
+    );
+    this.reactiveRecovery.setup(context);
+    this.reactiveRecovery.setAspect(this.aspectId, this.aspectRatio);
+    this.reactiveRecovery.setZoom(this.zoom);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
@@ -1874,6 +1896,7 @@ export class LightUnified2 implements LabExpression {
     this.updateLab2CoreStudy();
     if (this.lab2AssemblyPreview !== 'off') this.lab2Assembly?.update(elapsed);
     if (this.spatialRecoveryPreview !== 'off') this.spatialRecovery?.update(elapsed);
+    if (this.reactiveRecoveryPreview !== 'off') this.reactiveRecovery?.update(elapsed);
     this.pipeline?.update(audio, elapsed);
   }
 
@@ -1899,6 +1922,15 @@ export class LightUnified2 implements LabExpression {
       this.assemblyOpticalGroup(),
       [this.lab2AssemblyRgb.x, this.lab2AssemblyRgb.y, this.lab2AssemblyRgb.z],
     );
+  }
+
+  /** Recoveryは比較用の一時表示なので、UI上も常に1つだけを選ぶ。 */
+  private activeRecoveryPreview(): RecoveryPreview {
+    if (this.reactiveRecoveryPreview !== 'off') return 'reactive-audio';
+    if (this.spatialRecoveryPreview === 'audio') return 'spatial-audio';
+    if (this.spatialRecoveryPreview === 'freeze') return 'spatial-freeze';
+    if (this.lab2AssemblyPreview !== 'off') return `lab2-${this.lab2AssemblyPreview}`;
+    return 'off';
   }
 
   /** Study中は既存レイヤーを描画せず、静止Coreだけを黒背景に表示する。 */
@@ -1968,6 +2000,10 @@ export class LightUnified2 implements LabExpression {
   }
 
   render(): void {
+    if (this.reactiveRecoveryPreview !== 'off') {
+      this.reactiveRecovery?.render();
+      return;
+    }
     if (this.spatialRecoveryPreview !== 'off') {
       this.spatialRecovery?.render();
       return;
@@ -1988,6 +2024,7 @@ export class LightUnified2 implements LabExpression {
     this.pipeline?.resize(width, height);
     this.lab2Assembly?.resize(width, height);
     this.spatialRecovery?.resize(width, height);
+    this.reactiveRecovery?.resize(width, height);
   }
 
   // ---------------------------------------------------------------- UI の面
@@ -2042,6 +2079,7 @@ export class LightUnified2 implements LabExpression {
     }
     this.lab2Assembly?.setZoom(this.zoom);
     this.spatialRecovery?.setZoom(this.zoom);
+    this.reactiveRecovery?.setZoom(this.zoom);
   }
 
   getResponse(): { bass: number; mid: number; treble: number } {
@@ -2074,6 +2112,7 @@ export class LightUnified2 implements LabExpression {
     }
     this.lab2Assembly?.setAspect(id, ratio);
     this.spatialRecovery?.setAspect(id, ratio);
+    this.reactiveRecovery?.setAspect(id, ratio);
   }
 
   setDebugView(view: number): void {
@@ -2119,36 +2158,26 @@ export class LightUnified2 implements LabExpression {
     const core = 'コア（打撃で生まれる）';
     const common = '色と音';
     const study = 'Study preview';
-    const recovery = 'Development / Lab2 Recovery';
-    const spatialRecovery = 'Development / Spatial Recovery';
+    const recovery = 'Development / Recovery';
     const params: ExpressionParam[] = [
       {
-        key: 'spatialRecoveryPreview',
-        label: 'Spatial Recovery (reuse)',
-        group: spatialRecovery,
+        key: 'recoveryPreview',
+        label: 'Donor preview (reuse)',
         type: 'select',
-        options: [
-          { value: 'off', label: 'Off' },
-          { value: 'audio', label: 'Audio (legacy behavior)' },
-          { value: 'freeze', label: 'Freeze (fixed seed / time)' },
-        ],
-        value: this.spatialRecoveryPreview,
-      },
-      {
-        key: 'lab2AssemblyPreview',
-        label: 'Lab2 Optical Assembly (reuse)',
         group: recovery,
-        type: 'select',
         options: [
           { value: 'off', label: 'Off' },
-          { value: 'core', label: 'Core' },
-          { value: 'cross-ray', label: 'Cross Ray' },
-          { value: 'refraction-veil', label: 'Refraction / Veil' },
-          { value: 'fan-spill', label: 'Fan / Spill' },
-          { value: 'haze-curtain', label: 'Haze / Curtain' },
-          { value: 'all', label: 'All layers' },
+          { value: 'reactive-audio', label: 'Reactive — Audio Composite' },
+          { value: 'spatial-audio', label: 'Spatial — Audio legacy' },
+          { value: 'spatial-freeze', label: 'Spatial — Freeze reference' },
+          { value: 'lab2-core', label: 'Lab2 — Core' },
+          { value: 'lab2-cross-ray', label: 'Lab2 — Cross Ray' },
+          { value: 'lab2-refraction-veil', label: 'Lab2 — Refraction / Veil' },
+          { value: 'lab2-fan-spill', label: 'Lab2 — Fan / Spill' },
+          { value: 'lab2-haze-curtain', label: 'Lab2 — Haze / Curtain' },
+          { value: 'lab2-all', label: 'Lab2 — All layers' },
         ],
-        value: this.lab2AssemblyPreview,
+        value: this.activeRecoveryPreview(),
       },
       {
         key: 'lab2AssemblyCoreLevel',
@@ -2366,6 +2395,50 @@ export class LightUnified2 implements LabExpression {
   }
 
   setExpressionParam(key: string, value: number | string): void {
+    if (key === 'recoveryPreview' && typeof value === 'string') {
+      const allowed: readonly RecoveryPreview[] = [
+        'off',
+        'reactive-audio',
+        'spatial-audio',
+        'spatial-freeze',
+        'lab2-core',
+        'lab2-cross-ray',
+        'lab2-refraction-veil',
+        'lab2-fan-spill',
+        'lab2-haze-curtain',
+        'lab2-all',
+      ];
+      if (!allowed.includes(value as RecoveryPreview)) return;
+
+      this.reactiveRecoveryPreview = value === 'reactive-audio' ? 'audio' : 'off';
+      this.spatialRecoveryPreview = value === 'spatial-audio'
+        ? 'audio'
+        : value === 'spatial-freeze'
+          ? 'freeze'
+          : 'off';
+      this.spatialRecovery?.setRecoveryMode(
+        this.spatialRecoveryPreview === 'off' ? null : this.spatialRecoveryPreview,
+      );
+      this.lab2AssemblyPreview = value.startsWith('lab2-')
+        ? value.slice('lab2-'.length) as Exclude<Lab2AssemblyPreview, 'off'>
+        : 'off';
+      this.syncLab2Assembly();
+      return;
+    }
+    if (
+      key === 'reactiveRecoveryPreview'
+      && typeof value === 'string'
+      && ['off', 'audio'].includes(value)
+    ) {
+      this.reactiveRecoveryPreview = value as ReactiveRecoveryPreview;
+      if (value !== 'off') {
+        this.spatialRecoveryPreview = 'off';
+        this.spatialRecovery?.setRecoveryMode(null);
+        this.lab2AssemblyPreview = 'off';
+        this.syncLab2Assembly();
+      }
+      return;
+    }
     if (
       key === 'spatialRecoveryPreview'
       && typeof value === 'string'
@@ -2374,6 +2447,7 @@ export class LightUnified2 implements LabExpression {
       this.spatialRecoveryPreview = value as SpatialRecoveryPreview;
       this.spatialRecovery?.setRecoveryMode(value === 'off' ? null : value as SpatialRecoveryMode);
       if (value !== 'off') {
+        this.reactiveRecoveryPreview = 'off';
         this.lab2AssemblyPreview = 'off';
         this.syncLab2Assembly();
       }
@@ -2386,6 +2460,7 @@ export class LightUnified2 implements LabExpression {
     ) {
       this.lab2AssemblyPreview = value as Lab2AssemblyPreview;
       if (value !== 'off') {
+        this.reactiveRecoveryPreview = 'off';
         this.spatialRecoveryPreview = 'off';
         this.spatialRecovery?.setRecoveryMode(null);
       }
@@ -2514,6 +2589,7 @@ export class LightUnified2 implements LabExpression {
     this.disposed = true;
     this.lab2Assembly?.dispose();
     this.spatialRecovery?.dispose();
+    this.reactiveRecovery?.dispose();
     this.pipeline?.dispose();
     this.geometry?.dispose();
     this.material?.dispose();
@@ -2578,6 +2654,7 @@ export class LightUnified2 implements LabExpression {
     this.atlas = null;
     this.lab2Assembly = null;
     this.spatialRecovery = null;
+    this.reactiveRecovery = null;
     this.mesh = null;
     this.scene = null;
     this.camera = null;

@@ -104,6 +104,12 @@ Spatialと同じEvent Controllerを使い、見え方も連続しているため
 Material Light Layer構成と反応設定の一バリエーションとして再現する。
 今後、共通パラメーターでは再現できない固有の構造が確認できた場合だけ独立Styleへ昇格する。
 
+2026-08-03のドナー比較では、SpatialとReactiveはいずれもEvent Controllerに属する一方、
+Reactiveには`PrismaticBurstPlanner`がCore / Sheet / Haze / Rayをイベントごとに構成する固有処理が
+確認された。これは独立Styleの確定理由にはせず、まずSpatial系で再現可能かを比較する対象とする。
+Light Unified 2には旧Reactive Compositeを描き直さずRecoveryとして接続し、Spatial / Lab2と
+排他的に見比べられる状態を残す。Recoveryの選択肢は開発用の比較機能であり、Style Presetではない。
+
 #### Style PresetとUser Preset
 
 - Style Preset: 数を絞った構造上の大分類。無闇に増やさない
