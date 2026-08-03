@@ -166,6 +166,25 @@ export interface LightElementLab2State {
   readonly levels: OpticsDriveLevels;
 }
 
+/** Light Unified 2から旧Lab2リグへ渡す、静止Assembly専用のAdapter値。 */
+export interface Lab2AssemblyControls {
+  readonly coreLevel: number;
+  readonly crossRayLevel: number;
+  readonly fragmentLevel: number;
+  readonly fanSpillLevel: number;
+  readonly hazeCurtainLevel: number;
+  readonly globalIntensity: number;
+}
+
+const DEFAULT_ASSEMBLY_CONTROLS: Lab2AssemblyControls = {
+  coreLevel: 1,
+  crossRayLevel: 1,
+  fragmentLevel: 1,
+  fanSpillLevel: 1,
+  hazeCurtainLevel: 1,
+  globalIntensity: 1,
+};
+
 export class LightElementLab2 implements LabExpression {
   readonly animated = true;
   readonly name: string;
@@ -177,6 +196,7 @@ export class LightElementLab2 implements LabExpression {
   private assemblyChannelGain: readonly [number, number, number] | null = null;
   /** Coreの焦点だけを白へ戻す量。旧Lab2では0のまま。 */
   private assemblyCoreWhiteMix = 0;
+  private assemblyControls: Lab2AssemblyControls = DEFAULT_ASSEMBLY_CONTROLS;
 
   private readonly effects: Effect[];
   private theme: Theme;
@@ -367,7 +387,9 @@ export class LightElementLab2 implements LabExpression {
       curtainLevel: this.params.skeletonLevel,
       hazeLevel: this.params.skeletonLevel,
       corePulse: this.params.corePulse,
-      fragmentEnergy: this.params.fragmentEnergy,
+      fragmentEnergy: this.assemblyGroup
+        ? clamp(this.assemblyControls.fragmentLevel, 0, 1)
+        : this.params.fragmentEnergy,
       // 静止画スタディは spawn を持たない（つまみの energy と seed から作る）。
       fragments: [],
       fanGate: this.fanGateOpen ? 1 : 0,
@@ -433,9 +455,15 @@ export class LightElementLab2 implements LabExpression {
 
   /** 光学系を組み直す。見え方の判断は `lightOpticsMapping.ts` の中だけで起きる。 */
   private rebuildRig(): void {
-    const rig = buildOpticalRig(this.activeGroup(), this.drive(), {
+    let rig = buildOpticalRig(this.activeGroup(), this.drive(), {
       aspectRatio: this.aspectRatio,
     });
+    if (this.assemblyGroup) {
+      rig = rig.map((entry) => ({
+        ...entry,
+        intensity: entry.intensity * this.assemblyLevelFor(entry.kind),
+      }));
+    }
     // 膜の表示トグルは開発用の A/B なので、対応そのものではなくここで間引く。
     const visible = this.hazeVisible ? rig : rig.filter((entry) => entry.kind !== 'haze');
     this.layers = visible.slice(0, LAB2.maximumLayers);
@@ -916,7 +944,9 @@ export class LightElementLab2 implements LabExpression {
 
     const material = this.material;
     if (material) {
-      material.uniforms.uIntensity!.value = this.lookValue('intensity');
+      material.uniforms.uIntensity!.value =
+        this.lookValue('intensity')
+        * (this.assemblyGroup ? this.assemblyControls.globalIntensity : 1);
       // **チャンネル利得。** Audio では帯域バランスが色調を傾ける（Bass=R / Mid=G / Treble=B）。
       // つまみ 0 で手動のまま、1 で完全に帯域駆動、中間はブレンド。
       const tilt = this.channelTilt();
@@ -951,6 +981,27 @@ export class LightElementLab2 implements LabExpression {
     ];
     this.assemblyCoreWhiteMix = clamp(coreWhiteMix, 0, 1);
     this.rebuildRig();
+  }
+
+  /** Assemblyの責務別Level。旧Lab2単独表示では参照されない。 */
+  setAssemblyControls(controls: Lab2AssemblyControls): void {
+    this.assemblyControls = {
+      coreLevel: clamp(controls.coreLevel, 0, 2),
+      crossRayLevel: clamp(controls.crossRayLevel, 0, 2),
+      fragmentLevel: clamp(controls.fragmentLevel, 0, 2),
+      fanSpillLevel: clamp(controls.fanSpillLevel, 0, 2),
+      hazeCurtainLevel: clamp(controls.hazeCurtainLevel, 0, 2),
+      globalIntensity: clamp(controls.globalIntensity, 0, 2),
+    };
+    this.rebuildRig();
+  }
+
+  private assemblyLevelFor(kind: OpticalLayerTraits['kind']): number {
+    if (kind === 'core') return this.assemblyControls.coreLevel;
+    if (kind === 'beam' || kind === 'arm') return this.assemblyControls.crossRayLevel;
+    if (kind === 'veil') return this.assemblyControls.fragmentLevel;
+    if (kind === 'fan') return this.assemblyControls.fanSpillLevel;
+    return this.assemblyControls.hazeCurtainLevel;
   }
 
   private activeGroup(): OpticalGroup {
